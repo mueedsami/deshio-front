@@ -193,16 +193,16 @@ export default function POSPage() {
         id: Date.now(),
         productId: defectItem.productId,
         productName: `${defectItem.productName} [DEFECTIVE]`,
-        batchId: defectItem.batchId, // ✅ Critical for inventory
+        batchId: defectItem.batchId,
         batchNumber: `DEFECT-${defectItem.id}`,
         qty: 1,
         price: defectItem.sellingPrice,
         discount: 0,
         amount: defectItem.sellingPrice,
-        availableQty: 1, // Only 1 defect item available
+        availableQty: 1,
         barcode: defectItem.barcode,
-        isDefective: true, // ✅ Flag as defective
-        defectId: defectItem.id, // ✅ Store defect ID
+        isDefective: true,
+        defectId: defectItem.id,
       };
       
       setCart([newItem]);
@@ -325,6 +325,25 @@ export default function POSPage() {
     }));
   };
 
+  /**
+   * ✅ NEW: Update item discount in cart
+   */
+  const updateCartItemDiscount = (id: number, discountValue: number) => {
+    setCart(prev => prev.map(item => {
+      if (item.id === id) {
+        const baseAmount = item.price * item.qty;
+        const newDiscount = Math.min(discountValue, baseAmount); // Can't discount more than total
+        
+        return {
+          ...item,
+          discount: newDiscount,
+          amount: baseAmount - newDiscount,
+        };
+      }
+      return item;
+    }));
+  };
+
   // ============ PRODUCT SELECTION (Manual Mode) ============
   
   const handleProductSelect = (productName: string) => {
@@ -352,274 +371,331 @@ export default function POSPage() {
   const vat = (subtotal * vatRate) / 100;
   const total = subtotal + vat + transportCost;
   const totalPaid = cashPaid + cardPaid + bkashPaid + nagadPaid;
+  
+  // ✅ FIXED: Calculate due and change correctly
   const due = total - totalPaid;
-  const change = due < 0 ? Math.abs(due) : 0;
+  const change = totalPaid > total ? totalPaid - total : 0;
 
   // ============ ORDER SUBMISSION ============
   
-// ============ COMPLETE handleSell FUNCTION - PASTE THIS INTO YOUR POS PAGE ============
-
-const handleSell = async () => {
-  // Validation
-  if (!selectedOutlet) {
-    showToast('Please select an outlet', 'error');
-    return;
-  }
-  if (cart.length === 0) {
-    showToast('Please add products to cart', 'error');
-    return;
-  }
-  if (!selectedEmployee) {
-    showToast('Please select an employee', 'error');
-    return;
-  }
-  if (due > 0 && !confirm(`Outstanding amount: ৳${due.toFixed(2)}. Continue?`)) {
-    return;
-  }
-
-  setIsProcessing(true);
-
-  try {
-    console.log('═══════════════════════════════════');
-    console.log('📦 PREPARING ORDER');
-    console.log('Cart items:', cart.length);
-    console.log('Defective items:', cart.filter(i => i.isDefective).length);
-    console.log('═══════════════════════════════════');
-
-    // ✅ Validate all cart items have required fields
-    for (const item of cart) {
-      if (!item.productId) {
-        throw new Error(`Missing product_id for ${item.productName}`);
-      }
-      if (!item.batchId) {
-        throw new Error(`Missing batch_id for ${item.productName}`);
-      }
-      if (!item.qty || item.qty <= 0) {
-        throw new Error(`Invalid quantity for ${item.productName}`);
-      }
-      if (item.price === undefined || item.price < 0) {
-        throw new Error(`Invalid price for ${item.productName}`);
-      }
+  const handleSell = async () => {
+    // Validation
+    if (!selectedOutlet) {
+      showToast('Please select an outlet', 'error');
+      return;
+    }
+    if (cart.length === 0) {
+      showToast('Please add products to cart', 'error');
+      return;
+    }
+    if (!selectedEmployee) {
+      showToast('Please select an employee', 'error');
+      return;
+    }
+    
+    // ✅ FIXED: Only warn if there's actual unpaid balance (not overpayment)
+    if (due > 0 && !confirm(`Outstanding amount: ৳${due.toFixed(2)}. Continue?`)) {
+      return;
     }
 
-    // Create order payload
-    const orderPayload = {
-      order_type: 'counter' as const,
-      store_id: parseInt(selectedOutlet),
-      salesman_id: parseInt(selectedEmployee),
-      
-      // ✅ Only add customer if data is provided
-      ...(customerName || mobileNo ? {
-        customer: {
-          name: customerName || 'Walk-in Customer',
-          phone: mobileNo || '01XXXXXXXXX',
-          ...(address ? { address } : {}),
-        }
-      } : {}),
-      
-      // ✅ Map cart items with proper type conversion
-      items: cart.map(item => {
-        // Ensure all values are the correct type
-        const productId = parseInt(String(item.productId));
-        const batchId = parseInt(String(item.batchId));
-        const quantity = parseInt(String(item.qty));
-        const unitPrice = parseFloat(String(item.price));
-        const discountAmount = parseFloat(String(item.discount || 0));
+    setIsProcessing(true);
 
-        // Validate after conversion
-        if (isNaN(productId)) {
-          throw new Error(`Invalid product_id for ${item.productName}`);
+    try {
+      console.log('═══════════════════════════════════');
+      console.log('📦 PREPARING ORDER');
+      console.log('Cart items:', cart.length);
+      console.log('Defective items:', cart.filter(i => i.isDefective).length);
+      console.log('Total (product cost):', total.toFixed(2));
+      console.log('Total paid:', totalPaid.toFixed(2));
+      console.log('Change to return:', change.toFixed(2));
+      console.log('═══════════════════════════════════');
+
+      // ✅ Validate all cart items have required fields
+      for (const item of cart) {
+        if (!item.productId) {
+          throw new Error(`Missing product_id for ${item.productName}`);
         }
-        if (isNaN(batchId)) {
-          throw new Error(`Invalid batch_id for ${item.productName}`);
+        if (!item.batchId) {
+          throw new Error(`Missing batch_id for ${item.productName}`);
         }
-        if (isNaN(quantity) || quantity <= 0) {
+        if (!item.qty || item.qty <= 0) {
           throw new Error(`Invalid quantity for ${item.productName}`);
         }
-        if (isNaN(unitPrice) || unitPrice < 0) {
-          throw new Error(`Invalid unit_price for ${item.productName}`);
+        if (item.price === undefined || item.price < 0) {
+          throw new Error(`Invalid price for ${item.productName}`);
         }
+      }
 
-        const itemPayload: any = {
-          product_id: productId,
-          batch_id: batchId,
-          quantity: quantity,
-          unit_price: unitPrice,
-          discount_amount: discountAmount,
-          tax_amount: 0,
+      // ✅ FIXED: Calculate tax amount for each item based on VAT rate and proportional distribution
+      const vatAmount = (subtotal * vatRate) / 100;
+      
+      // Distribute VAT proportionally based on each item's share of subtotal
+      const itemsWithTax = cart.map(item => {
+        const itemSubtotal = item.amount; // After discount
+        const itemTaxShare = subtotal > 0 ? (itemSubtotal / subtotal) * vatAmount : 0;
+        return {
+          item,
+          taxAmount: parseFloat(itemTaxShare.toFixed(2))
         };
+      });
+      
+      console.log('📊 VAT Distribution:', {
+        subtotal: subtotal.toFixed(2),
+        vatRate: `${vatRate}%`,
+        totalVAT: vatAmount.toFixed(2),
+        itemDistribution: itemsWithTax.map(({ item, taxAmount }) => ({
+          product: item.productName,
+          itemAmount: item.amount.toFixed(2),
+          share: ((item.amount / subtotal) * 100).toFixed(2) + '%',
+          tax: taxAmount.toFixed(2)
+        }))
+      });
 
-        // ✅ CRITICAL: Only include barcode for NON-defective items
-        if (!item.isDefective && item.barcode) {
-          itemPayload.barcode = item.barcode;
+      // Create order payload
+      const orderPayload = {
+        order_type: 'counter' as const,
+        store_id: parseInt(selectedOutlet),
+        salesman_id: parseInt(selectedEmployee),
+        
+        // ✅ Only add customer if data is provided
+        ...(customerName || mobileNo ? {
+          customer: {
+            name: customerName || 'Walk-in Customer',
+            phone: mobileNo || '01XXXXXXXXX',
+            ...(address ? { address } : {}),
+          }
+        } : {}),
+        
+        // ✅ Map cart items with proportional VAT distribution
+        items: itemsWithTax.map(({ item, taxAmount }) => {
+          const productId = parseInt(String(item.productId));
+          const batchId = parseInt(String(item.batchId));
+          const quantity = parseInt(String(item.qty));
+          const unitPrice = parseFloat(String(item.price));
+          const discountAmount = parseFloat(String(item.discount || 0));
+
+          // Validate after conversion
+          if (isNaN(productId)) {
+            throw new Error(`Invalid product_id for ${item.productName}`);
+          }
+          if (isNaN(batchId)) {
+            throw new Error(`Invalid batch_id for ${item.productName}`);
+          }
+          if (isNaN(quantity) || quantity <= 0) {
+            throw new Error(`Invalid quantity for ${item.productName}`);
+          }
+          if (isNaN(unitPrice) || unitPrice < 0) {
+            throw new Error(`Invalid unit_price for ${item.productName}`);
+          }
+
+          const itemPayload: any = {
+            product_id: productId,
+            batch_id: batchId,
+            quantity: quantity,
+            unit_price: unitPrice,
+            discount_amount: discountAmount,
+            tax_amount: taxAmount, // ✅ FIXED: Use proportionally distributed VAT
+          };
+
+          // ✅ CRITICAL: Only include barcode for NON-defective items
+          if (!item.isDefective && item.barcode) {
+            itemPayload.barcode = item.barcode;
+          }
+
+          console.log(`Item ${item.productName}:`, {
+            ...itemPayload,
+            isDefective: item.isDefective,
+            hasBarcode: !!item.barcode,
+            vatShare: `${((item.amount / subtotal) * 100).toFixed(2)}%`,
+          });
+
+          return itemPayload;
+        }),
+        
+        // ✅ FIXED: Add totals correctly
+        discount_amount: totalDiscount,
+        shipping_amount: transportCost,
+        
+        // ✅ Add notes if any
+        ...(address || vatRate > 0 ? {
+          notes: `${vatRate > 0 ? `VAT: ${vatRate}%` : ''}${address ? `, Address: ${address}` : ''}${change > 0 ? `, Change Given: ৳${change.toFixed(2)}` : ''}`.trim()
+        } : {}),
+      };
+
+      console.log('═══════════════════════════════════');
+      console.log('📤 ORDER PAYLOAD:');
+      console.log(JSON.stringify(orderPayload, null, 2));
+      console.log('═══════════════════════════════════');
+
+      // Create order
+      console.log('📦 Creating order...');
+      const order = await orderService.create(orderPayload);
+      
+      console.log('✅ Order created:', order.order_number);
+      showToast(`Order #${order.order_number} created!`, 'success');
+
+      // ✅ Handle defective items
+      const defectiveItems = cart.filter(item => item.isDefective && item.defectId);
+      
+      if (defectiveItems.length > 0) {
+        console.log('🏷️ Processing', defectiveItems.length, 'defective items...');
+        
+        for (const item of defectiveItems) {
+          try {
+            console.log(`📋 Marking defective ${item.defectId} as sold...`);
+            
+            await defectIntegrationService.markDefectiveAsSold(
+              item.defectId!,
+              {
+                order_id: order.id,
+                selling_price: item.price,
+                sale_notes: `Sold via POS - Order #${order.order_number}`,
+                sold_at: new Date().toISOString(),
+              }
+            );
+            
+            console.log(`✅ Defective ${item.defectId} marked as sold`);
+            showToast(`✓ Defective item recorded: ${item.productName}`, 'success');
+          } catch (defectError: any) {
+            console.error(`❌ Failed to mark defective ${item.defectId}:`, defectError);
+            showToast(`Warning: Could not update defect status for ${item.productName}`, 'error');
+          }
+        }
+      }
+
+      // ✅ FIXED: Process payments - only charge the order total, not overpayment
+      const amountToCharge = Math.min(totalPaid, total); // Don't charge more than order total
+      
+      if (amountToCharge > 0) {
+        console.log('💰 Processing payments...');
+        console.log(`Amount to charge: ৳${amountToCharge.toFixed(2)} (Total paid: ৳${totalPaid.toFixed(2)}, Order total: ৳${total.toFixed(2)})`);
+        
+        const paymentSplits: any[] = [];
+        
+        // ✅ FIXED: If there's overpayment, reduce it from cash first
+        let adjustedCashPaid = cashPaid;
+        let adjustedCardPaid = cardPaid;
+        let adjustedBkashPaid = bkashPaid;
+        let adjustedNagadPaid = nagadPaid;
+        
+        if (change > 0) {
+          // Customer overpaid - reduce cash payment by the change amount
+          adjustedCashPaid = Math.max(0, cashPaid - change);
+          console.log(`⚠️ Overpayment detected. Reducing cash from ৳${cashPaid} to ৳${adjustedCashPaid}`);
+        }
+        
+        if (adjustedCashPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.cash || 1,
+            amount: adjustedCashPaid,
+          });
+        }
+        
+        if (adjustedCardPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.card || 2,
+            amount: adjustedCardPaid,
+          });
+        }
+        
+        if (adjustedBkashPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.mobileWallet || 6,
+            amount: adjustedBkashPaid,
+          });
+        }
+        
+        if (adjustedNagadPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.mobileWallet || 6,
+            amount: adjustedNagadPaid,
+          });
         }
 
-        console.log(`Item ${item.productName}:`, {
-          ...itemPayload,
-          isDefective: item.isDefective,
-          hasBarcode: !!item.barcode,
-        });
+        // Calculate actual total from splits
+        const splitsTotal = paymentSplits.reduce((sum, split) => sum + split.amount, 0);
+        
+        console.log('💳 Payment splits:', paymentSplits);
+        console.log('💰 Splits total:', splitsTotal.toFixed(2));
 
-        return itemPayload;
-      }),
-      
-      // ✅ Add totals
-      discount_amount: totalDiscount,
-      shipping_amount: transportCost,
-      
-      // ✅ Add notes if any
-      ...(address || vatRate > 0 ? {
-        notes: `${vatRate > 0 ? `VAT: ${vatRate}%` : ''}${address ? `, Address: ${address}` : ''}`.trim()
-      } : {}),
-    };
-
-    console.log('═══════════════════════════════════');
-    console.log('📤 ORDER PAYLOAD:');
-    console.log(JSON.stringify(orderPayload, null, 2));
-    console.log('═══════════════════════════════════');
-
-    // Create order
-    console.log('📦 Creating order...');
-    const order = await orderService.create(orderPayload);
-    
-    console.log('✅ Order created:', order.order_number);
-    showToast(`Order #${order.order_number} created!`, 'success');
-
-    // ✅ Handle defective items
-    const defectiveItems = cart.filter(item => item.isDefective && item.defectId);
-    
-    if (defectiveItems.length > 0) {
-      console.log('🏷️ Processing', defectiveItems.length, 'defective items...');
-      
-      for (const item of defectiveItems) {
-        try {
-          console.log(`📋 Marking defective ${item.defectId} as sold...`);
-          
-          await defectIntegrationService.markDefectiveAsSold(
-            item.defectId!,
-            {
-              order_id: order.id,
-              selling_price: item.price,
-              sale_notes: `Sold via POS - Order #${order.order_number}`,
-              sold_at: new Date().toISOString(),
-            }
-          );
-          
-          console.log(`✅ Defective ${item.defectId} marked as sold`);
-          showToast(`✓ Defective item recorded: ${item.productName}`, 'success');
-        } catch (defectError: any) {
-          console.error(`❌ Failed to mark defective ${item.defectId}:`, defectError);
-          // Don't fail the entire order, just log the error
-          showToast(`Warning: Could not update defect status for ${item.productName}`, 'error');
+        if (paymentSplits.length === 1) {
+          await paymentService.process(order.id, {
+            payment_method_id: paymentSplits[0].payment_method_id,
+            amount: paymentSplits[0].amount,
+            payment_type: (due <= 0 ? 'full' : 'partial') as 'full' | 'partial',
+            auto_complete: true,
+          });
+        } else if (paymentSplits.length > 1) {
+          await paymentService.processSplit(order.id, {
+            total_amount: splitsTotal, // ✅ FIXED: Use actual splits total
+            payment_type: due <= 0 ? 'full' : 'partial',
+            auto_complete: true,
+            splits: paymentSplits,
+          });
         }
+        
+        console.log('✅ Payments processed');
       }
+
+      // Complete order
+      console.log('🏁 Completing order...');
+      await orderService.complete(order.id);
+      console.log('✅ Order completed');
+
+      // ✅ FIXED: Show change message if applicable
+      if (change > 0) {
+        showToast(`✓ Order completed! Change to return: ৳${change.toFixed(2)}`, 'success');
+        alert(`Order #${order.order_number} completed!\n\nChange to return to customer: ৳${change.toFixed(2)}`);
+      } else {
+        showToast(`✓ Order #${order.order_number} completed successfully!`, 'success');
+      }
+      
+      console.log('═══════════════════════════════════');
+      console.log('✅ ORDER PROCESS COMPLETE');
+      if (change > 0) {
+        console.log(`💵 CHANGE TO RETURN: ৳${change.toFixed(2)}`);
+      }
+      console.log('═══════════════════════════════════');
+      
+      // Reset form
+      resetForm();
+      fetchProducts();
+
+    } catch (error: any) {
+      console.error('═══════════════════════════════════');
+      console.error('❌ ORDER CREATION FAILED');
+      console.error('Error:', error);
+      console.error('Error message:', error.message);
+      console.error('Error response:', error.response);
+      console.error('Error response data:', error.response?.data);
+      console.error('Validation errors:', error.response?.data?.errors);
+      console.error('═══════════════════════════════════');
+      
+      let errorMessage = 'Failed to complete sale';
+      
+      if (error.response?.data?.errors) {
+        const errors = error.response.data.errors;
+        const errorMessages = Object.entries(errors)
+          .map(([field, messages]: [string, any]) => {
+            const fieldName = field.replace(/_/g, ' ').replace(/\./g, ' ');
+            return `${fieldName}: ${Array.isArray(messages) ? messages.join(', ') : messages}`;
+          })
+          .join('\n');
+        
+        errorMessage = `Validation errors:\n${errorMessages}`;
+        console.error('📋 Formatted validation errors:\n', errorMessages);
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      showToast(errorMessage, 'error');
+      alert(`Error: ${errorMessage}\n\nCheck console for details.`);
+    } finally {
+      setIsProcessing(false);
     }
-
-    // ✅ Process payments if any
-    if (totalPaid > 0) {
-      console.log('💰 Processing payments...');
-      
-      const paymentSplits: any[] = [];
-      
-      if (cashPaid > 0) {
-        paymentSplits.push({
-          payment_method_id: paymentMethods.cash || 1,
-          amount: cashPaid,
-        });
-      }
-      
-      if (cardPaid > 0) {
-        paymentSplits.push({
-          payment_method_id: paymentMethods.card || 2,
-          amount: cardPaid,
-        });
-      }
-      
-      if (bkashPaid > 0) {
-        paymentSplits.push({
-          payment_method_id: paymentMethods.mobileWallet || 6,
-          amount: bkashPaid,
-        });
-      }
-      
-      if (nagadPaid > 0) {
-        paymentSplits.push({
-          payment_method_id: paymentMethods.mobileWallet || 6,
-          amount: nagadPaid,
-        });
-      }
-
-      if (paymentSplits.length === 1) {
-        await paymentService.process(order.id, {
-          payment_method_id: paymentSplits[0].payment_method_id,
-          amount: paymentSplits[0].amount,
-          payment_type: (due <= 0 ? 'full' : 'partial') as 'full' | 'partial',
-          auto_complete: true,
-        });
-      } else if (paymentSplits.length > 1) {
-        await paymentService.processSplit(order.id, {
-          total_amount: totalPaid,
-          payment_type: due <= 0 ? 'full' : 'partial',
-          auto_complete: true,
-          splits: paymentSplits,
-        });
-      }
-      
-      console.log('✅ Payments processed');
-    }
-
-    // Complete order
-    console.log('🏁 Completing order...');
-    await orderService.complete(order.id);
-    console.log('✅ Order completed');
-
-    showToast(`✓ Order #${order.order_number} completed successfully!`, 'success');
-    
-    console.log('═══════════════════════════════════');
-    console.log('✅ ORDER PROCESS COMPLETE');
-    console.log('═══════════════════════════════════');
-    
-    // Reset form
-    resetForm();
-    fetchProducts();
-
-  } catch (error: any) {
-    console.error('═══════════════════════════════════');
-    console.error('❌ ORDER CREATION FAILED');
-    console.error('Error:', error);
-    console.error('Error message:', error.message);
-    console.error('Error response:', error.response);
-    console.error('Error response data:', error.response?.data);
-    console.error('Validation errors:', error.response?.data?.errors);
-    console.error('═══════════════════════════════════');
-    
-    // Show detailed error
-    let errorMessage = 'Failed to complete sale';
-    
-    if (error.response?.data?.errors) {
-      // Laravel validation errors
-      const errors = error.response.data.errors;
-      const errorMessages = Object.entries(errors)
-        .map(([field, messages]: [string, any]) => {
-          const fieldName = field.replace(/_/g, ' ').replace(/\./g, ' ');
-          return `${fieldName}: ${Array.isArray(messages) ? messages.join(', ') : messages}`;
-        })
-        .join('\n');
-      
-      errorMessage = `Validation errors:\n${errorMessages}`;
-      console.error('📋 Formatted validation errors:\n', errorMessages);
-    } else if (error.response?.data?.message) {
-      errorMessage = error.response.data.message;
-    } else if (error.message) {
-      errorMessage = error.message;
-    }
-    
-    showToast(errorMessage, 'error');
-    alert(`Error: ${errorMessage}\n\nCheck console for details.`);
-  } finally {
-    setIsProcessing(false);
-  }
-};
+  };
 
   const resetForm = () => {
     setCart([]);
@@ -712,7 +788,6 @@ const handleSell = async () => {
       
       setOutlets(stores);
       
-      // Auto-select user's store
       if (storeId && stores.length > 0) {
         const userStore = stores.find((store: Store) => String(store.id) === String(storeId));
         if (userStore) {
@@ -739,10 +814,9 @@ const handleSell = async () => {
       if (Array.isArray(result)) {
         productsList = result;
       } else if (result?.data) {
-        productsList = Array.isArray(result.data) ? result.data : (result.data.data || []);
+        productsList = Array.isArray(result.data) ? result.data : (result.data || []);
       }
       
-      // Fetch batches for each product
       const productsWithBatches = await Promise.all(
         productsList.map(async (product: Product) => {
           try {
@@ -1116,7 +1190,9 @@ const handleSell = async () => {
                     items={cart}
                     onRemoveItem={removeFromCart}
                     onUpdateQuantity={updateCartItemQuantity}
+                    onUpdateDiscount={updateCartItemDiscount}
                     darkMode={darkMode}
+                    vatRate={vatRate}
                   />
                 </div>
 
@@ -1246,13 +1322,14 @@ const handleSell = async () => {
                         </span>
                       </div>
 
+                      {/* ✅ FIXED: Show change prominently when overpaid */}
                       {change > 0 && (
-                        <div className="mb-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded">
-                          <div className="flex justify-between">
-                            <span className="text-sm font-medium text-yellow-900 dark:text-yellow-200">
-                              Change
+                        <div className="mb-2 p-3 bg-yellow-50 dark:bg-yellow-900/20 border-2 border-yellow-400 dark:border-yellow-600 rounded-lg">
+                          <div className="flex justify-between items-center">
+                            <span className="text-sm font-bold text-yellow-900 dark:text-yellow-200">
+                              💵 Change to Return
                             </span>
-                            <span className="text-sm font-bold text-yellow-700 dark:text-yellow-400">
+                            <span className="text-lg font-bold text-yellow-700 dark:text-yellow-400">
                               ৳{change.toFixed(2)}
                             </span>
                           </div>
@@ -1266,7 +1343,7 @@ const handleSell = async () => {
                             ? 'text-red-600 dark:text-red-400' 
                             : 'text-green-600 dark:text-green-400'
                         }`}>
-                          ৳{due.toFixed(2)}
+                          ৳{Math.max(0, due).toFixed(2)}
                         </span>
                       </div>
                     </div>
