@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation'; // ✅ Correct for Next.js 13+ app router
 import { ArrowLeft, Plus } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -32,14 +33,58 @@ interface AddEditProductPageProps {
 }
 
 export default function AddEditProductPage({
-  productId,
-  mode = 'create',
-  baseSku = '',
-  baseName = '',
-  categoryId = '',
+  productId: propProductId,
+  mode: propMode = 'create',
+  baseSku: propBaseSku = '',
+  baseName: propBaseName = '',
+  categoryId: propCategoryId = '',
   onBack,
   onSuccess,
 }: AddEditProductPageProps) {
+  const router = useRouter();
+  
+  // Read from sessionStorage if props not provided
+  const [productId, setProductId] = useState<string | undefined>(propProductId);
+  const [mode, setMode] = useState<'create' | 'edit' | 'addVariation'>(propMode);
+  const [storedBaseSku, setStoredBaseSku] = useState(propBaseSku);
+  const [storedBaseName, setStoredBaseName] = useState(propBaseName);
+  const [storedCategoryId, setStoredCategoryId] = useState(propCategoryId);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !propProductId) {
+      const storedProductId = sessionStorage.getItem('editProductId');
+      const storedMode = sessionStorage.getItem('productMode');
+      const storedSku = sessionStorage.getItem('baseSku');
+      const storedName = sessionStorage.getItem('baseName');
+      const storedCatId = sessionStorage.getItem('categoryId');
+
+      if (storedProductId) {
+        setProductId(storedProductId);
+        sessionStorage.removeItem('editProductId');
+      }
+      
+      if (storedMode) {
+        setMode(storedMode as 'create' | 'edit' | 'addVariation');
+        sessionStorage.removeItem('productMode');
+      }
+
+      if (storedSku) {
+        setStoredBaseSku(storedSku);
+        sessionStorage.removeItem('baseSku');
+      }
+
+      if (storedName) {
+        setStoredBaseName(decodeURIComponent(storedName));
+        sessionStorage.removeItem('baseName');
+      }
+
+      if (storedCatId) {
+        setStoredCategoryId(storedCatId);
+        sessionStorage.removeItem('categoryId');
+      }
+    }
+  }, [propProductId]);
+
   const isEditMode = mode === 'edit';
   const addVariationMode = mode === 'addVariation';
   
@@ -76,21 +121,31 @@ export default function AddEditProductPage({
       fetchProduct();
     } else if (addVariationMode) {
       setFormData({
-        name: baseName,
-        sku: baseSku,
+        name: storedBaseName,
+        sku: storedBaseSku,
         description: '',
       });
-      setCategorySelection({ level0: categoryId });
+      setCategorySelection({ level0: storedCategoryId });
       setHasVariations(true);
       setActiveTab('variations');
     }
-  }, [isEditMode, productId, availableFields, addVariationMode]);
+  }, [isEditMode, productId, availableFields, addVariationMode, storedBaseName, storedBaseSku, storedCategoryId]);
 
   useEffect(() => {
     if (hasVariations && !isEditMode) {
       setActiveTab('variations');
     }
   }, [hasVariations, isEditMode]);
+
+  const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
+    return cats
+      .filter(cat => cat.is_active)
+      .map(cat => ({
+        ...cat,
+        children: cat.children ? filterActiveCategories(cat.children) : [],
+        all_children: cat.all_children ? filterActiveCategories(cat.all_children) : []
+      }));
+  };
 
   const fetchInitialData = async () => {
     try {
@@ -99,8 +154,12 @@ export default function AddEditProductPage({
       const fieldsData = await productService.getAvailableFields();
       setAvailableFields(Array.isArray(fieldsData) ? fieldsData : []);
 
-      const categoriesData = await categoryService.getTree();
-      setCategories(Array.isArray(categoriesData) ? categoriesData : []);
+      const categoriesData = await categoryService.getTree(true);
+      
+      const filteredCategories = filterActiveCategories(
+        Array.isArray(categoriesData) ? categoriesData : []
+      );
+      setCategories(filteredCategories);
 
       const vendorsData = await vendorService.getAll({ is_active: true });
       const vendorsList = Array.isArray(vendorsData) ? vendorsData : [];
@@ -152,9 +211,7 @@ export default function AddEditProductPage({
     } catch (error) {
       console.error('Failed to fetch product:', error);
       setToast({ message: 'Failed to load product', type: 'error' });
-      if (onBack) {
-        onBack();
-      }
+      handleBack();
     } finally {
       setLoading(false);
     }
@@ -351,7 +408,6 @@ export default function AddEditProductPage({
       }));
 
       if (isEditMode) {
-        // EDIT MODE - Images are handled by ImageGalleryManager automatically
         await productService.update(parseInt(productId!), {
           name: formData.name,
           sku: formData.sku,
@@ -365,10 +421,11 @@ export default function AddEditProductPage({
         setTimeout(() => {
           if (onSuccess) {
             onSuccess();
+          } else {
+            router.push('/product/list');
           }
         }, 1500);
       } else {
-        // CREATE MODE
         const baseData = {
           name: formData.name,
           sku: formData.sku,
@@ -378,7 +435,6 @@ export default function AddEditProductPage({
         };
 
         if (hasVariations && variations.length > 0) {
-          // VARIATIONS MODE
           const colorField = availableFields.find(f => f.title === 'Color');
           const sizeField = availableFields.find(f => f.title === 'Size');
 
@@ -420,7 +476,6 @@ export default function AddEditProductPage({
                 varCustomFields.push({ field_id: sizeField.id, value: size });
               }
 
-              // Create product
               const product = await productService.create({
                 name: variationName,
                 sku: baseData.sku,
@@ -430,7 +485,6 @@ export default function AddEditProductPage({
                 custom_fields: varCustomFields,
               });
 
-              // Upload variation images using productImageService
               if (variation.images.length > 0 && product.id) {
                 for (let i = 0; i < variation.images.length; i++) {
                   try {
@@ -460,8 +514,6 @@ export default function AddEditProductPage({
 
           setToast({ message: `Created ${createdProducts.length} product variation(s)!`, type: 'success' });
         } else {
-          // ===== SINGLE PRODUCT MODE =====
-          // STEP 1: CREATE THE PRODUCT FIRST (without images)
           console.log('Step 1: Creating product...');
           const createdProduct = await productService.create({
             ...baseData,
@@ -470,7 +522,6 @@ export default function AddEditProductPage({
 
           console.log('Product created with ID:', createdProduct.id);
 
-          // STEP 2: UPLOAD AND ATTACH IMAGES (after product exists)
           if (productImages.length > 0 && createdProduct.id) {
             console.log(`Step 2: Uploading ${productImages.length} images...`);
             
@@ -479,12 +530,10 @@ export default function AddEditProductPage({
             for (let i = 0; i < productImages.length; i++) {
               const imageItem = productImages[i];
               
-              // Check if this image needs to be uploaded
               if (imageItem.file && !imageItem.uploaded) {
                 try {
                   console.log(`Uploading image ${i + 1}: ${imageItem.file.name}`);
                   
-                  // ✅ USE productImageService.uploadImage - uploads AND attaches in one call!
                   await productImageService.uploadImage(
                     createdProduct.id,
                     imageItem.file,
@@ -499,7 +548,6 @@ export default function AddEditProductPage({
                   console.log(`Image ${i + 1} uploaded and attached successfully`);
                 } catch (error) {
                   console.error(`Failed to upload/attach image ${i + 1}:`, error);
-                  // Continue with other images even if one fails
                 }
               }
             }
@@ -513,6 +561,8 @@ export default function AddEditProductPage({
         setTimeout(() => {
           if (onSuccess) {
             onSuccess();
+          } else {
+            router.push('/product/list');
           }
         }, 1500);
       }
@@ -527,6 +577,8 @@ export default function AddEditProductPage({
   const handleBack = () => {
     if (onBack) {
       onBack();
+    } else {
+      router.push('/product/list');
     }
   };
 
@@ -548,8 +600,8 @@ export default function AddEditProductPage({
   }
 
   const showVariationsTab = isEditMode 
-  ? isVariationProduct 
-  : hasVariations;
+    ? isVariationProduct 
+    : hasVariations;
 
   return (
     <div className={`${darkMode ? 'dark' : ''} flex h-screen`}>
@@ -592,22 +644,22 @@ export default function AddEditProductPage({
                 General Information
               </button>
               {showVariationsTab && (
-            <button
-              onClick={() => setActiveTab('variations')}
-              className={`px-6 py-3 font-medium border-b-2 transition-all ${
-                activeTab === 'variations'
-                  ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
-                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-              }`}
-            >
-              Product Variations
-              {variations.length > 0 && (
-                <span className="ml-2 px-2 py-0.5 text-xs bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-full">
-                  {variations.length}
-                </span>
+                <button
+                  onClick={() => setActiveTab('variations')}
+                  className={`px-6 py-3 font-medium border-b-2 transition-all ${
+                    activeTab === 'variations'
+                      ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
+                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
+                  }`}
+                >
+                  Product Variations
+                  {variations.length > 0 && (
+                    <span className="ml-2 px-2 py-0.5 text-xs bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-full">
+                      {variations.length}
+                    </span>
+                  )}
+                </button>
               )}
-            </button>
-          )}
             </div>
 
             {activeTab === 'general' && (

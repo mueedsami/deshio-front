@@ -251,7 +251,18 @@ export default function ProductPage() {
   };
 
   const handleEdit = (id: number) => {
-    router.push(`/product/add?id=${id}`);
+    // Clear any existing session data
+    sessionStorage.removeItem('editProductId');
+    sessionStorage.removeItem('productMode');
+    sessionStorage.removeItem('baseSku');
+    sessionStorage.removeItem('baseName');
+    sessionStorage.removeItem('categoryId');
+    
+    // Store edit data in sessionStorage
+    sessionStorage.setItem('editProductId', id.toString());
+    sessionStorage.setItem('productMode', 'edit');
+    
+    router.push('/product/add');
   };
 
   const handleView = (id: number) => {
@@ -259,11 +270,31 @@ export default function ProductPage() {
   };
 
   const handleAdd = () => {
+    // Clear any stored data to ensure create mode
+    sessionStorage.removeItem('editProductId');
+    sessionStorage.removeItem('productMode');
+    sessionStorage.removeItem('baseSku');
+    sessionStorage.removeItem('baseName');
+    sessionStorage.removeItem('categoryId');
+    
     router.push('/product/add');
   };
 
   const handleAddVariation = (group: ProductGroup) => {
-    router.push(`/product/add?addVariation=true&baseSku=${group.sku}&baseName=${encodeURIComponent(group.baseName)}&categoryId=${group.category_id}`);
+    // Clear any existing session data
+    sessionStorage.removeItem('editProductId');
+    sessionStorage.removeItem('productMode');
+    sessionStorage.removeItem('baseSku');
+    sessionStorage.removeItem('baseName');
+    sessionStorage.removeItem('categoryId');
+    
+    // Store variation data in sessionStorage
+    sessionStorage.setItem('productMode', 'addVariation');
+    sessionStorage.setItem('baseSku', group.sku);
+    sessionStorage.setItem('baseName', group.baseName);
+    sessionStorage.setItem('categoryId', group.category_id.toString());
+    
+    router.push('/product/add');
   };
 
   const handleSelect = (variant: ProductVariant) => {
@@ -519,7 +550,7 @@ export default function ProductPage() {
                       key={`${group.sku}-${group.variants[0].id}`}
                       productGroup={group}
                       onDelete={handleDelete}
-                      onEdit={group.hasVariations ? undefined : handleEdit}
+                      onEdit={handleEdit}
                       onView={handleView}
                       onAddVariation={handleAddVariation}
                       {...(selectMode && { onSelect: handleSelect })}

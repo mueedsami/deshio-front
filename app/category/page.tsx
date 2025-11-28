@@ -40,10 +40,12 @@ export default function CategoryPageWrapper() {
       
       // Transform all_children to children
       const transformCategories = (cats: Category[]): Category[] => {
-        return cats.map(cat => ({
-          ...cat,
-          children: cat.all_children ? transformCategories(cat.all_children) : []
-        }));
+        return cats
+          .filter(cat => cat.is_active) // Filter out inactive categories
+          .map(cat => ({
+            ...cat,
+            children: cat.all_children ? transformCategories(cat.all_children) : []
+          }));
       };
       
       setCategories(transformCategories(result));

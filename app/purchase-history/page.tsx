@@ -864,6 +864,7 @@ export default function PurchaseHistoryPage() {
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Qty</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Price</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Discount</th>
+                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Tax</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Amount</th>
                                       </tr>
                                     </thead>
@@ -885,8 +886,9 @@ export default function PurchaseHistoryPage() {
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">{item.quantity}</td>
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.unit_price ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.discount_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
+                                          <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.tax_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
                                           <td className="px-3 py-2 text-gray-900 dark:text-white font-medium">
-                                            ৳{Number(String(item.total_price ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}
+                                            ৳{Number(String(item.total_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}
                                           </td>
                                         </tr>
                                       ))}
@@ -902,7 +904,7 @@ export default function PurchaseHistoryPage() {
                                 <div className="space-y-2 text-sm">
                                   <div className="flex justify-between">
                                     <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                                    <span className="text-gray-900 dark:text-white">৳{Number(String(order.subtotal_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
+                                    <span className="text-gray-900 dark:text-white">৳{Number(String(order.subtotal ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
                                   </div>
                                   <div className="flex justify-between">
                                     <span className="text-gray-600 dark:text-gray-400">Discount</span>
@@ -918,7 +920,7 @@ export default function PurchaseHistoryPage() {
                                   </div>
                                   <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700 font-medium">
                                     <span className="text-gray-900 dark:text-white">Total</span>
-                                    <span className="text-gray-900 dark:text-white">৳{Number(String(order.total_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
+                                    <span className="text-gray-900 dark:text-white">৳{Number(String(order.paid_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
                                   </div>
                                 </div>
                               </div>
