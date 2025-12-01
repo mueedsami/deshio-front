@@ -1,9 +1,10 @@
-
+// components/orders/OrderDetailsModal.tsx
 
 import { useState, useEffect } from 'react';
 import { X, User, MapPin, Package, CreditCard, Edit2, Printer, Truck, Settings, Store as StoreIcon } from 'lucide-react';
 import { Order } from '@/types/order';
-import { connectQZ, printReceipt, getPrinters, checkQZStatus } from '@/lib/qz-tray';
+import { checkQZStatus, printReceipt, getPrinters } from '@/lib/qz-tray';
+import shipmentService from '@/services/shipmentService';
 
 interface OrderDetailsModalProps {
   order: Order;
@@ -33,7 +34,6 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
         const printerList = await getPrinters();
         setPrinters(printerList);
         
-        // Load saved printer preference
         const savedPrinter = localStorage.getItem('defaultPrinter');
         if (savedPrinter && printerList.includes(savedPrinter)) {
           setSelectedPrinter(savedPrinter);
@@ -55,13 +55,14 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
 
     if (!selectedPrinter) {
       setShowPrinterSelect(true);
+      alert('Please select a printer first.');
       return;
     }
 
     setIsPrinting(true);
     try {
       await printReceipt(order, selectedPrinter);
-      alert(`Receipt printed successfully for Order #${order.id}`);
+      alert(`Receipt printed successfully for Order #${order.orderNumber || order.id}`);
     } catch (error: any) {
       console.error('Print error:', error);
       alert(`Failed to print receipt: ${error.message}`);
@@ -85,14 +86,60 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
     setShowPrinterSelect(false);
   };
 
-  const handleSendToPathao = () => {
+  const handleSendToPathao = async () => {
+    if (!confirm(`Send order #${order.orderNumber || order.id} to Pathao for delivery?`)) {
+      return;
+    }
+
     setIsSendingToPathao(true);
-    
-    // Simulate sending to Pathao
-    setTimeout(() => {
-      alert(`Successfully sent Order #${order.id} to Pathao!`);
+    try {
+      const existingShipment = await shipmentService.getByOrderId(order.id);
+      
+      if (existingShipment) {
+        if (existingShipment.pathao_consignment_id) {
+          alert(`This order already has a Pathao shipment.\nConsignment ID: ${existingShipment.pathao_consignment_id}`);
+          setIsSendingToPathao(false);
+          return;
+        }
+        
+        const updatedShipment = await shipmentService.sendToPathao(existingShipment.id);
+        alert(`Order sent to Pathao successfully!\nConsignment ID: ${updatedShipment.pathao_consignment_id}\nTracking: ${updatedShipment.pathao_tracking_number}`);
+        setIsSendingToPathao(false);
+        return;
+      }
+
+      const shipment = await shipmentService.create({
+        order_id: order.id,
+        delivery_type: 'home_delivery',
+        package_weight: 1.0,
+        send_to_pathao: true
+      });
+
+      alert(`Shipment created and sent to Pathao successfully!\nShipment #: ${shipment.shipment_number}\nConsignment ID: ${shipment.pathao_consignment_id}`);
+    } catch (error: any) {
+      console.error('Send to Pathao error:', error);
+      alert(`Failed to send to Pathao: ${error.message}`);
+    } finally {
       setIsSendingToPathao(false);
-    }, 1500);
+    }
+  };
+
+  // Get store name helper
+  const getStoreName = () => {
+    if (!order.store) return 'N/A';
+    return typeof order.store === 'string' ? order.store : order.store.name;
+  };
+
+  // Get store location helper
+  const getStoreLocation = () => {
+    if (!order.store || typeof order.store === 'string') return null;
+    return order.store.location;
+  };
+
+  // Get store type helper
+  const getStoreType = () => {
+    if (!order.store || typeof order.store === 'string') return null;
+    return order.store.type;
   };
 
   return (
@@ -101,8 +148,26 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
         {/* Header */}
         <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-5 flex items-center justify-between rounded-t-2xl z-10">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Order Details</h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order #{order.id}</p>
+            <div className="flex items-center gap-3 mb-1">
+              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Order Details</h2>
+              {/* Order Type Badge */}
+              {order.orderType && (
+                <span className={`inline-flex items-center px-3 py-1 rounded-lg text-xs font-semibold ${
+                  order.orderType === 'social_commerce'
+                    ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800'
+                    : order.orderType === 'ecommerce'
+                    ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                    : 'bg-gray-50 dark:bg-gray-800 text-gray-700 dark:text-gray-400 border border-gray-200 dark:border-gray-700'
+                }`}>
+                  {order.orderType === 'social_commerce' ? 'Social Commerce' : 
+                   order.orderType === 'ecommerce' ? 'E-Commerce' : 
+                   order.orderTypeLabel || order.orderType}
+                </span>
+              )}
+            </div>
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Order #{order.orderNumber || order.id}
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {/* QZ Status Indicator */}
@@ -125,7 +190,7 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                 </button>
                 
                 {showPrinterSelect && (
-                  <div className="absolute right-0 top-full mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 w-64 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="absolute right-0 top-full mt-2 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 py-2 w-64 z-50">
                     <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
                       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase">Select Printer</p>
                     </div>
@@ -154,8 +219,8 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
               className="group relative px-4 py-2.5 bg-gradient-to-br from-gray-900 to-black hover:from-black hover:to-gray-900 text-white rounded-lg transition-all hover:shadow-lg hover:shadow-black/30 active:scale-95 font-medium"
             >
               <span className="flex items-center gap-2">
-              <Printer className="w-4 h-4" />
-              <span className="hidden sm:inline">Preview</span>
+                <Printer className="w-4 h-4" />
+                <span className="hidden sm:inline">Preview</span>
               </span>
               <div className="absolute inset-0 rounded-lg bg-white/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
             </button>
@@ -217,36 +282,46 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                 <p className="text-sm font-medium text-gray-900 dark:text-white">{order.customer.name}</p>
               </div>
               <div>
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Email</p>
-                <p className="text-sm font-medium text-gray-900 dark:text-white">{order.customer.email}</p>
-              </div>
-              <div>
                 <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Phone</p>
                 <p className="text-sm font-medium text-gray-900 dark:text-white">{order.customer.phone}</p>
               </div>
+              {order.customer.email && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Email</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{order.customer.email}</p>
+                </div>
+              )}
               <div>
                 <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-1">Sales By</p>
-                <p className="text-sm font-medium text-gray-900 dark:text-white">{order.salesBy}</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-white">{order.salesBy || 'N/A'}</p>
               </div>
             </div>
           </div>
 
           {/* Delivery Address */}
-          <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
-                <MapPin className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+          {(order.deliveryAddress || order.customer.address) && (
+            <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-lg flex items-center justify-center">
+                  <MapPin className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+                </div>
+                <h3 className="font-semibold text-gray-900 dark:text-white text-lg">Delivery Address</h3>
               </div>
-              <h3 className="font-semibold text-gray-900 dark:text-white text-lg">Delivery Address</h3>
+              {order.deliveryAddress ? (
+                <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
+                  <p>{order.deliveryAddress.address}</p>
+                  {order.deliveryAddress.area && <p>{order.deliveryAddress.area}, {order.deliveryAddress.zone}</p>}
+                  {!order.deliveryAddress.area && <p>{order.deliveryAddress.zone}</p>}
+                  <p>{order.deliveryAddress.city}, {order.deliveryAddress.district}</p>
+                  <p>{order.deliveryAddress.division} - {order.deliveryAddress.postalCode}</p>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-700 dark:text-gray-300">
+                  <p>{order.customer.address}</p>
+                </div>
+              )}
             </div>
-            <div className="space-y-2 text-sm text-gray-700 dark:text-gray-300">
-              <p>{order.deliveryAddress.address}</p>
-              {order.deliveryAddress.area && <p>{order.deliveryAddress.area}, {order.deliveryAddress.zone}</p>}
-              {!order.deliveryAddress.area && <p>{order.deliveryAddress.zone}</p>}
-              <p>{order.deliveryAddress.city}, {order.deliveryAddress.district}</p>
-              <p>{order.deliveryAddress.division} - {order.deliveryAddress.postalCode}</p>
-            </div>
-          </div>
+          )}
 
           {/* Products */}
           <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
@@ -257,46 +332,70 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
               <h3 className="font-semibold text-gray-900 dark:text-white text-lg">Products</h3>
             </div>
             <div className="space-y-3">
-              {order.products.map((product, idx) => {
-                const productWithBarcodes = product as any;
-                const barcodes = productWithBarcodes.barcodes || [];
-                
-                return (
-                  <div key={product.id || idx} className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+              {/* Show items if available, otherwise show products */}
+              {order.items && order.items.length > 0 ? (
+                order.items.map((item, idx) => (
+                  <div key={item.id || idx} className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
                     <div className="flex justify-between items-start">
                       <div className="flex-1">
-                        <p className="font-medium text-gray-900 dark:text-white mb-2">{product.productName}</p>
+                        <p className="font-medium text-gray-900 dark:text-white mb-2">{item.name}</p>
                         <div className="flex gap-3 text-xs mb-2">
-                          <span className="text-gray-600 dark:text-gray-400">Size: {product.size}</span>
-                          <span className="text-gray-600 dark:text-gray-400">Qty: {product.qty}</span>
-                          <span className="text-gray-600 dark:text-gray-400">৳{product.price} each</span>
+                          {item.sku && <span className="text-gray-600 dark:text-gray-400">SKU: {item.sku}</span>}
+                          <span className="text-gray-600 dark:text-gray-400">Qty: {item.quantity}</span>
+                          <span className="text-gray-600 dark:text-gray-400">৳{item.price} each</span>
                         </div>
-                        {barcodes.length > 0 && (
-                          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Barcodes:</p>
-                            <div className="flex flex-wrap gap-2">
-                              {barcodes.map((barcode: string, barcodeIdx: number) => (
-                                <span
-                                  key={barcodeIdx}
-                                  className="inline-flex items-center px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-md text-xs font-mono border border-blue-200 dark:border-blue-800"
-                                >
-                                  {barcode}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
                       <div className="text-right ml-4">
-                        <p className="font-bold text-gray-900 dark:text-white">৳{product.amount.toLocaleString()}</p>
-                        {product.discount > 0 && (
-                          <p className="text-xs font-medium text-green-600 dark:text-green-400 mt-1">-৳{product.discount} off</p>
+                        <p className="font-bold text-gray-900 dark:text-white">৳{(item.quantity * item.price).toLocaleString()}</p>
+                        {item.discount > 0 && (
+                          <p className="text-xs font-medium text-green-600 dark:text-green-400 mt-1">-৳{item.discount} off</p>
                         )}
                       </div>
                     </div>
                   </div>
-                );
-              })}
+                ))
+              ) : order.products && order.products.length > 0 ? (
+                order.products.map((product, idx) => {
+                  const barcodes = product.barcodes || [];
+                  return (
+                    <div key={product.id || idx} className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900 dark:text-white mb-2">{product.productName}</p>
+                          <div className="flex gap-3 text-xs mb-2">
+                            <span className="text-gray-600 dark:text-gray-400">Size: {product.size}</span>
+                            <span className="text-gray-600 dark:text-gray-400">Qty: {product.qty}</span>
+                            <span className="text-gray-600 dark:text-gray-400">৳{product.price} each</span>
+                          </div>
+                          {barcodes.length > 0 && (
+                            <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Barcodes:</p>
+                              <div className="flex flex-wrap gap-2">
+                                {barcodes.map((barcode: string, barcodeIdx: number) => (
+                                  <span
+                                    key={barcodeIdx}
+                                    className="inline-flex items-center px-3 py-1.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-md text-xs font-mono border border-blue-200 dark:border-blue-800"
+                                  >
+                                    {barcode}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="font-bold text-gray-900 dark:text-white">৳{product.amount.toLocaleString()}</p>
+                          {product.discount > 0 && (
+                            <p className="text-xs font-medium text-green-600 dark:text-green-400 mt-1">-৳{product.discount} off</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">No items available</p>
+              )}
             </div>
 
             {/* Store Info - Placed After Products */}
@@ -311,16 +410,20 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div>
                         <p className="text-xs text-gray-500 dark:text-gray-500 mb-0.5">Store</p>
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">{order.store.name}</p>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">{getStoreName()}</p>
                       </div>
-                      <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-500 mb-0.5">Location</p>
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">{order.store.location}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-500 mb-0.5">Type</p>
-                        <p className="text-sm font-medium text-gray-900 dark:text-white">{order.store.type}</p>
-                      </div>
+                      {getStoreLocation() && (
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-500 mb-0.5">Location</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">{getStoreLocation()}</p>
+                        </div>
+                      )}
+                      {getStoreType() && (
+                        <div>
+                          <p className="text-xs text-gray-500 dark:text-gray-500 mb-0.5">Type</p>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">{getStoreType()}</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -339,38 +442,54 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
             <div className="space-y-3">
               <div className="flex justify-between items-center text-sm">
                 <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                <span className="font-semibold text-gray-900 dark:text-white">৳{(order.amounts?.subtotal || order.subtotal).toLocaleString()}</span>
+                <span className="font-semibold text-gray-900 dark:text-white">৳{order.subtotal.toLocaleString()}</span>
               </div>
+              {order.discount && order.discount > 0 && (
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Discount</span>
+                  <span className="font-medium text-green-600 dark:text-green-400">-৳{order.discount.toLocaleString()}</span>
+                </div>
+              )}
+              {order.shipping && order.shipping > 0 && (
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Shipping</span>
+                  <span className="font-medium text-gray-900 dark:text-white">৳{order.shipping.toLocaleString()}</span>
+                </div>
+              )}
               {order.amounts && (
                 <>
                   {order.amounts.totalDiscount > 0 && (
                     <div className="flex justify-between items-center text-sm">
-                      <span className="text-gray-600 dark:text-gray-400">Discount</span>
+                      <span className="text-gray-600 dark:text-gray-400">Total Discount</span>
                       <span className="font-medium text-green-600 dark:text-green-400">-৳{order.amounts.totalDiscount.toLocaleString()}</span>
                     </div>
                   )}
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">VAT ({order.amounts.vatRate}%)</span>
-                    <span className="font-medium text-gray-900 dark:text-white">৳{order.amounts.vat.toLocaleString()}</span>
-                  </div>
+                  {order.amounts.vat > 0 && (
+                    <div className="flex justify-between items-center text-sm">
+                      <span className="text-gray-600 dark:text-gray-400">VAT ({order.amounts.vatRate}%)</span>
+                      <span className="font-medium text-gray-900 dark:text-white">৳{order.amounts.vat.toLocaleString()}</span>
+                    </div>
+                  )}
                   {order.amounts.transportCost > 0 && (
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-gray-600 dark:text-gray-400">Transport Cost</span>
                       <span className="font-medium text-gray-900 dark:text-white">৳{order.amounts.transportCost.toLocaleString()}</span>
                     </div>
                   )}
-                  <div className="pt-2 border-t border-gray-300 dark:border-gray-700">
-                    <div className="flex justify-between items-center text-sm font-semibold">
-                      <span className="text-gray-900 dark:text-white">Total Amount</span>
-                      <span className="text-gray-900 dark:text-white">৳{order.amounts.total.toLocaleString()}</span>
-                    </div>
-                  </div>
                 </>
               )}
+              <div className="pt-2 border-t border-gray-300 dark:border-gray-700">
+                <div className="flex justify-between items-center text-sm font-semibold">
+                  <span className="text-gray-900 dark:text-white">Total Amount</span>
+                  <span className="text-gray-900 dark:text-white">
+                    ৳{(order.amounts?.total || order.subtotal + (order.shipping || 0) - (order.discount || 0)).toLocaleString()}
+                  </span>
+                </div>
+              </div>
               <div className="pt-3 border-t border-gray-300 dark:border-gray-700">
                 <div className="flex justify-between items-center text-sm">
                   <span className="text-gray-600 dark:text-gray-400">Amount Paid</span>
-                  <span className="font-medium text-gray-900 dark:text-white">৳{order.payments.totalPaid.toLocaleString()}</span>
+                  <span className="font-medium text-gray-900 dark:text-white">৳{order.payments.paid.toLocaleString()}</span>
                 </div>
               </div>
               {order.payments.due > 0 && (
@@ -425,7 +544,7 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   <div className="text-xs mb-4">Order Confirmation</div>
                   <div className="border-t-2 border-double border-black pt-2">
                     <div className="flex justify-between font-semibold">
-                      <span>ORDER #{order.id}</span>
+                      <span>ORDER #{order.orderNumber || order.id}</span>
                       <span>{order.date}</span>
                     </div>
                   </div>
@@ -438,8 +557,8 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   <>
                     <div className="mb-3">
                       <div className="font-bold mb-1">STORE</div>
-                      <div>{order.store.name}</div>
-                      <div className="text-[10px] text-gray-600">{order.store.location}</div>
+                      <div>{getStoreName()}</div>
+                      {getStoreLocation() && <div className="text-[10px] text-gray-600">{getStoreLocation()}</div>}
                     </div>
                     <div className="border-t border-gray-400 my-3"></div>
                   </>
@@ -449,28 +568,51 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   <div className="font-bold mb-1">CUSTOMER DETAILS</div>
                   <div>Name: {order.customer.name}</div>
                   <div>Phone: {order.customer.phone}</div>
-                  <div>Sales By: {order.salesBy}</div>
+                  {order.salesBy && <div>Sales By: {order.salesBy}</div>}
                 </div>
 
-                <div className="mb-3">
-                  <div className="font-bold mb-1">DELIVERY ADDRESS</div>
-                  <div>{order.deliveryAddress.address}</div>
-                  {order.deliveryAddress.area && (
-                    <div>{order.deliveryAddress.area}, {order.deliveryAddress.zone}</div>
-                  )}
-                  {!order.deliveryAddress.area && <div>{order.deliveryAddress.zone}</div>}
-                  <div>{order.deliveryAddress.city}, {order.deliveryAddress.district}</div>
-                  <div>{order.deliveryAddress.division} - {order.deliveryAddress.postalCode}</div>
-                </div>
+                {order.deliveryAddress && (
+                  <>
+                    <div className="mb-3">
+                      <div className="font-bold mb-1">DELIVERY ADDRESS</div>
+                      <div>{order.deliveryAddress.address}</div>
+                      {order.deliveryAddress.area && (
+                        <div>{order.deliveryAddress.area}, {order.deliveryAddress.zone}</div>
+                      )}
+                      {!order.deliveryAddress.area && <div>{order.deliveryAddress.zone}</div>}
+                      <div>{order.deliveryAddress.city}, {order.deliveryAddress.district}</div>
+                      <div>{order.deliveryAddress.division} - {order.deliveryAddress.postalCode}</div>
+                    </div>
+                    <div className="border-t border-gray-400 my-3"></div>
+                  </>
+                )}
 
-                <div className="border-t border-gray-400 my-3"></div>
+                {order.customer.address && !order.deliveryAddress && (
+                  <>
+                    <div className="mb-3">
+                      <div className="font-bold mb-1">DELIVERY ADDRESS</div>
+                      <div>{order.customer.address}</div>
+                    </div>
+                    <div className="border-t border-gray-400 my-3"></div>
+                  </>
+                )}
 
                 <div className="mb-3">
                   <div className="font-bold mb-2">ORDER ITEMS</div>
                   <div className="border-t-2 border-black pt-2 space-y-2">
-                    {order.products.map((product, idx) => {
-                      const productWithBarcodes = product as any;
-                      const barcodes = productWithBarcodes.barcodes || [];
+                    {order.items && order.items.map((item, idx) => (
+                      <div key={idx} className="pb-2">
+                        <div className="font-semibold">
+                          {item.name.length > 40 ? item.name.substring(0, 37) + '...' : item.name}
+                        </div>
+                        <div className="flex justify-between">
+                          <span>  {item.sku} x{item.quantity} @ Tk{item.price}</span>
+                          <span>Tk{(item.quantity * item.price).toLocaleString()}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {order.products && order.products.map((product, idx) => {
+                      const barcodes = product.barcodes || [];
                       return (
                         <div key={idx} className="pb-2">
                           <div className="font-semibold">
@@ -498,15 +640,21 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                 <div className="space-y-1 mb-3">
                   <div className="flex justify-between">
                     <span>Subtotal:</span>
-                    <span>Tk{(order.amounts?.subtotal || order.subtotal).toLocaleString()}</span>
+                    <span>Tk{order.subtotal.toLocaleString()}</span>
                   </div>
-                  {order.amounts && order.amounts.totalDiscount > 0 && (
+                  {order.discount && order.discount > 0 && (
                     <div className="flex justify-between text-green-700">
                       <span>Discount:</span>
-                      <span>-Tk{order.amounts.totalDiscount.toLocaleString()}</span>
+                      <span>-Tk{order.discount.toLocaleString()}</span>
                     </div>
                   )}
-                  {order.amounts && (
+                  {order.shipping && order.shipping > 0 && (
+                    <div className="flex justify-between">
+                      <span>Shipping:</span>
+                      <span>Tk{order.shipping.toLocaleString()}</span>
+                    </div>
+                  )}
+                  {order.amounts && order.amounts.vat > 0 && (
                     <div className="flex justify-between">
                       <span>VAT ({order.amounts.vatRate}%):</span>
                       <span>Tk{order.amounts.vat.toLocaleString()}</span>
@@ -520,14 +668,14 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   )}
                   <div className="border-t border-gray-400 pt-1 mt-2 flex justify-between font-bold text-base">
                     <span>TOTAL:</span>
-                    <span>Tk{(order.amounts?.total || order.subtotal).toLocaleString()}</span>
+                    <span>Tk{(order.amounts?.total || order.subtotal + (order.shipping || 0) - (order.discount || 0)).toLocaleString()}</span>
                   </div>
                 </div>
 
                 <div className="bg-gray-100 -mx-2 px-2 py-2 mb-2">
                   <div className="flex justify-between font-semibold">
                     <span>Amount Paid:</span>
-                    <span>Tk{order.payments.totalPaid.toLocaleString()}</span>
+                    <span>Tk{order.payments.paid.toLocaleString()}</span>
                   </div>
                 </div>
 

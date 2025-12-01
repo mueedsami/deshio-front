@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Package, Scan, CheckCircle, XCircle, AlertTriangle, Search, ArrowLeft, Loader, RefreshCw } from 'lucide-react';
+import { Package, Scan, CheckCircle, XCircle, AlertTriangle, Search, ArrowLeft, Loader, RefreshCw, ShoppingBag, Globe } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import orderService from '@/services/orderService';
@@ -82,9 +82,26 @@ export default function WarehouseFulfillmentPage() {
   const fetchPendingOrders = async () => {
     setIsLoadingOrders(true);
     try {
-      const response = await orderService.getPendingFulfillment({ per_page: 100 });
-      setPendingOrders(response.data || []);
-      console.log('📦 Loaded pending orders:', response.data?.length || 0);
+      // Fetch both social_commerce and ecommerce orders
+      const [socialCommerceResponse, ecommerceResponse] = await Promise.all([
+        orderService.getPendingFulfillment({ per_page: 100, order_type: 'social_commerce' }),
+        orderService.getPendingFulfillment({ per_page: 100, order_type: 'ecommerce' })
+      ]);
+      
+      const allOrders = [
+        ...(socialCommerceResponse.data || []),
+        ...(ecommerceResponse.data || [])
+      ];
+      
+      // Sort by date, newest first
+      allOrders.sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
+      
+      setPendingOrders(allOrders);
+      console.log('📦 Loaded pending orders:', {
+        social_commerce: socialCommerceResponse.data?.length || 0,
+        ecommerce: ecommerceResponse.data?.length || 0,
+        total: allOrders.length
+      });
     } catch (error: any) {
       console.error('Error fetching orders:', error);
       displayToast('Error loading orders: ' + error.message, 'error');
@@ -366,6 +383,28 @@ export default function WarehouseFulfillmentPage() {
     };
   };
 
+  const getOrderTypeBadge = (orderType: string) => {
+    if (orderType === 'social_commerce') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400">
+          <ShoppingBag className="h-3.5 w-3.5" />
+          Social Commerce
+        </span>
+      );
+    }
+    
+    if (orderType === 'ecommerce') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
+          <Globe className="h-3.5 w-3.5" />
+          E-Commerce
+        </span>
+      );
+    }
+    
+    return null;
+  };
+
   const filteredOrders = pendingOrders.filter(order => 
     order.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     order.customer?.name?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -396,7 +435,7 @@ export default function WarehouseFulfillmentPage() {
                       📦 Warehouse Fulfillment
                     </h1>
                     <p className="mt-2 text-gray-600 dark:text-gray-400">
-                      Scan barcodes to fulfill pending orders
+                      Scan barcodes to fulfill pending social commerce & e-commerce orders
                     </p>
                   </div>
                   <button
@@ -450,10 +489,13 @@ export default function WarehouseFulfillmentPage() {
                         className="p-6 rounded-lg border-2 border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 cursor-pointer transition-all hover:border-blue-500 hover:shadow-lg"
                       >
                         <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                              {order.order_number}
-                            </h3>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                                {order.order_number}
+                              </h3>
+                              {getOrderTypeBadge(order.order_type)}
+                            </div>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
                               {order.customer?.name} • {order.items?.length || 0} item(s)
                             </p>
@@ -520,9 +562,12 @@ export default function WarehouseFulfillmentPage() {
                     <ArrowLeft className="text-gray-900 dark:text-white" />
                   </button>
                   <div>
-                    <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">
-                      {orderDetails?.order_number || 'Loading...'}
-                    </h1>
+                    <div className="flex items-center gap-2 mb-1">
+                      <h1 className="text-xl md:text-2xl font-bold text-gray-900 dark:text-white">
+                        {orderDetails?.order_number || 'Loading...'}
+                      </h1>
+                      {orderDetails && getOrderTypeBadge(orderDetails.order_type)}
+                    </div>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
                       {orderDetails?.customer?.name} • {orderDetails?.items?.length || 0} items
                     </p>

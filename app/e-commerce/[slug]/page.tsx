@@ -226,7 +226,7 @@ export default function CategoryProductsPage() {
   };
 
   const handleProductClick = (productId: number) => {
-    router.push(`/products/${productId}`);
+    router.push(`/e-commerce/product/${productId}`);
   };
 
   if (loading) {
@@ -359,28 +359,6 @@ export default function CategoryProductsPage() {
                               {group.totalVariants} Colors
                             </div>
                           )}
-
-                          {/* Quick Actions */}
-                          <div className="absolute bottom-2 right-2 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                              }}
-                              className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                            >
-                              <Heart className="h-4 w-4 text-gray-700" />
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleProductClick(firstVariant.id);
-                              }}
-                              className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                            >
-                              <Eye className="h-4 w-4 text-gray-700" />
-                            </button>
-                          </div>
-
                           {/* Color Swatches for variations */}
                           {group.hasVariations && group.variants.length > 1 && (
                             <div className="absolute bottom-2 left-2 flex gap-1">
@@ -410,59 +388,57 @@ export default function CategoryProductsPage() {
                           )}
                         </div>
 
-                        {/* Product Info */}
-                        <div className="p-4">
-                          <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                            {group.baseName}
-                          </h3>
+                  {/* Product Info */}
+                  <div className="p-4">
+                    {/* Product Title */}
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[1rem]">
+                      {group.baseName}
+                    </h3>
+                    
+                    {/* Category */}
+                    {group.category && (
+                      <p className="text-xs text-gray-500 mb-2">
+                        {group.category.name}
+                      </p>
+                    )}
+                    
+                    {/* Price */}
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="flex items-center space-x-3">
+                        {group.hasVariations && group.lowestPrice !== group.highestPrice ? (
+                          <span className="text-lg font-bold text-gray-900">
+                            ৳{group.lowestPrice.toFixed(2)} - ৳{group.highestPrice.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="text-lg font-bold text-gray-900">
+                            ৳{Number(firstVariant.selling_price).toFixed(2)}
+                          </span>
+                        )}
 
-                          {/* Category */}
-                          {group.category && (
-                            <p className="text-xs text-gray-500 mb-2">
-                              {group.category.name}
-                            </p>
-                          )}
+                        {group.hasVariations && (
+                          <span className="text-xs font-medium text-blue-600">
+                            {group.totalVariants} variations available
+                          </span>
+                        )}
+                      </div>
 
-                          {/* Price */}
-                          <div className="flex items-center space-x-2 mb-3">
-                            {group.hasVariations && group.lowestPrice !== group.highestPrice ? (
-                              <span className="text-lg font-bold text-gray-900">
-                                ৳{group.lowestPrice.toFixed(2)} - ৳{group.highestPrice.toFixed(2)}
-                              </span>
-                            ) : (
-                              <span className="text-lg font-bold text-gray-900">
-                                ৳{Number(firstVariant.selling_price).toFixed(2)}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Stock Status */}
-                          <div className="flex items-center justify-between">
-                            {group.hasVariations ? (
-                              <span className="text-xs font-medium text-red-800">
-                                {group.totalVariants} variations available
-                              </span>
-                            ) : (
-                              <span className={`text-xs font-medium ${firstVariant.in_stock ? 'text-red-800' : 'text-red-600'}`}>
-                                {firstVariant.in_stock ? `In Stock (${firstVariant.stock_quantity})` : 'Out of Stock'}
-                              </span>
-                            )}
-                            
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                              }}
-                              disabled={!firstVariant.in_stock}
-                              className={`p-2 rounded-full ${
-                                firstVariant.in_stock
-                                  ? 'bg-red-800 text-white hover:bg-red-1000'
-                                  : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                              } transition-colors`}
-                            >
-                              <ShoppingCart className="h-4 w-4" />
-                            </button>
-                          </div>
-                        </div>
+                      {!group.hasVariations && (
+                        <span className={`text-xs font-medium ${firstVariant.in_stock ? 'text-green-600' : 'text-red-600'}`}>
+                          {firstVariant.in_stock ? `In Stock (${firstVariant.stock_quantity})` : 'Out of Stock'}
+                        </span>
+                      )}
+                    </div>
+                    {/* View Details Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleProductClick(firstVariant.id);
+                      }}
+                      className="w-full bg-red-800 hover:bg-red-900 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+                    >
+                      Go To Product Details
+                    </button>
+                  </div>
                       </div>
                     );
                   })}

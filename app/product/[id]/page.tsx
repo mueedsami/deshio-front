@@ -2,12 +2,11 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Edit, Trash2, Package, Tag, Calendar, User, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, Edit, Trash2, Archive, Package, Tag, Calendar, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import Toast from '@/components/Toast';
 import { productService, Product } from '@/services/productService';
-import categoryService, { Category } from '@/services/categoryService';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4=';
@@ -54,6 +53,19 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     } catch (error) {
       console.error('Failed to delete product:', error);
       setToast({ message: 'Failed to delete product', type: 'error' });
+    }
+  };
+
+  const handleArchive = async () => {
+    if (!confirm(`Archive "${product?.name}"? You can restore it later from archived products.`)) return;
+
+    try {
+      await productService.archive(productId);
+      setToast({ message: 'Product archived successfully', type: 'success' });
+      setTimeout(() => router.push('/product/list'), 1500);
+    } catch (error) {
+      console.error('Failed to archive product:', error);
+      setToast({ message: 'Failed to archive product', type: 'error' });
     }
   };
 
@@ -150,6 +162,13 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                   Edit
                 </button>
                 <button
+                  onClick={handleArchive}
+                  className="flex items-center gap-2 px-4 py-2.5 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors font-medium shadow-sm"
+                >
+                  <Archive className="w-4 h-4" />
+                  Archive
+                </button>
+                <button
                   onClick={handleDelete}
                   className="flex items-center gap-2 px-4 py-2.5 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium shadow-sm"
                 >
@@ -167,7 +186,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                   <div className="relative aspect-square bg-gray-100 dark:bg-gray-900">
                     <img
                       src={selectedImage ? getImageUrl(selectedImage.image_path) : ERROR_IMG_SRC}
-                      alt={selectedImage?.alt_text || product.name}
+                      alt={product.name}
                       className="w-full h-full object-contain"
                       onError={(e) => {
                         e.currentTarget.src = ERROR_IMG_SRC;
@@ -221,7 +240,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                       >
                         <img
                           src={getImageUrl(img.image_path)}
-                          alt={img.alt_text || `Thumbnail ${index + 1}`}
+                          alt={`Thumbnail ${index + 1}`}
                           className="w-full h-full object-cover"
                           onError={(e) => {
                             e.currentTarget.src = ERROR_IMG_SRC;
@@ -292,7 +311,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                     <div>
                       <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Category</p>
                       <p className="text-base font-medium text-gray-900 dark:text-white">
-                        {product.category?.name || 'N/A'}
+                        {product.category?.title || 'N/A'}
                       </p>
                     </div>
 

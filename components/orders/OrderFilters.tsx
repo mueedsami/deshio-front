@@ -9,6 +9,8 @@ interface OrderFiltersProps {
   setDateFilter: (value: string) => void;
   statusFilter: string;
   setStatusFilter: (value: string) => void;
+  orderTypeFilter?: string;
+  setOrderTypeFilter?: (value: string) => void;
 }
 
 export default function OrderFilters({
@@ -17,7 +19,9 @@ export default function OrderFilters({
   dateFilter,
   setDateFilter,
   statusFilter,
-  setStatusFilter
+  setStatusFilter,
+  orderTypeFilter,
+  setOrderTypeFilter
 }: OrderFiltersProps) {
   return (
     <div className="bg-white dark:bg-gray-900 rounded-xl p-5 mb-6 border border-gray-200 dark:border-gray-800 shadow-sm">
@@ -25,7 +29,7 @@ export default function OrderFilters({
         <Filter className="w-5 h-5 text-gray-700 dark:text-gray-300" />
         <span className="font-semibold text-gray-900 dark:text-white">Filter Orders</span>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <div className="relative">
           <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
           <input
@@ -44,6 +48,18 @@ export default function OrderFilters({
           onChange={(e) => setDateFilter(e.target.value)}
           className="px-3 py-2.5 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:border-gray-900 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700 outline-none transition-all text-sm text-gray-900 dark:text-white placeholder:text-gray-400"
         />
+
+        {orderTypeFilter !== undefined && setOrderTypeFilter && (
+          <select
+            value={orderTypeFilter}
+            onChange={(e) => setOrderTypeFilter(e.target.value)}
+            className="px-3 py-2.5 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 focus:border-gray-900 dark:focus:border-gray-600 focus:ring-2 focus:ring-gray-200 dark:focus:ring-gray-700 outline-none transition-all text-sm text-gray-900 dark:text-white"
+          >
+            <option>All Types</option>
+            <option>Social Commerce</option>
+            <option>E-Commerce</option>
+          </select>
+        )}
 
         <select
           value={statusFilter}

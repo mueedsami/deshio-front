@@ -354,6 +354,48 @@ class CatalogService {
       throw error;
     }
   }
+
+  /**
+   * ✅ GET SUGGESTED PRODUCTS (top-selling products)
+   * Backend returns best-selling products based on order history
+   * Returns simplified product objects
+   */
+  async getSuggestedProducts(limit: number = 5): Promise<{
+    suggested_products: SimpleProduct[];
+    total_suggested: number;
+  }> {
+    try {
+      const queryString = this.buildQueryString({ limit });
+      const url = this.baseUrl + '/suggested-products' + queryString;
+      
+      console.log('🔍 Fetching suggested products from:', url);
+      
+      const response = await axiosInstance.get<ApiResponse<{
+        suggested_products: SimpleProduct[];
+        total_suggested: number;
+      }>>(url);
+      
+      console.log('📦 Raw API response:', response.data);
+      
+      const data = response.data.data;
+      
+      // Normalize image URLs for simplified products
+      data.suggested_products = data.suggested_products.map(product => this.normalizeSimpleProduct(product));
+      
+      console.log('✅ Normalized suggested products:', data.suggested_products.length);
+      
+      return data;
+    } catch (error: any) {
+      console.error('❌ Failed to fetch suggested products:', error.response?.data?.message || error.message);
+      console.error('Error details:', error.response?.data);
+      
+      // Return empty array on error instead of throwing
+      return {
+        suggested_products: [],
+        total_suggested: 0,
+      };
+    }
+  }
 }
 
 // Export a singleton instance

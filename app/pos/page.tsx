@@ -814,7 +814,7 @@ export default function POSPage() {
       if (Array.isArray(result)) {
         productsList = result;
       } else if (result?.data) {
-        productsList = Array.isArray(result.data) ? result.data : (result.data || []);
+        productsList = Array.isArray(result.data) ? result.data : (result.data.data || []);
       }
       
       const productsWithBatches = await Promise.all(

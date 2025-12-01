@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation'; // ✅ Correct for Next.js 13+ app router
+import { useRouter } from 'next/navigation'; 
 import { ArrowLeft, Plus } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -179,6 +179,8 @@ export default function AddEditProductPage({
       setLoading(true);
       const product = await productService.getById(productId);
 
+      console.log('Fetched product:', product);
+
       setFormData({
         name: product.name,
         sku: product.sku,
@@ -188,9 +190,8 @@ export default function AddEditProductPage({
       setSelectedVendorId(String(product.vendor_id));
       setCategorySelection({ level0: String(product.category_id) });
 
-      if (product.images && product.images.length > 0) {
-        setProductImages(product.images);
-      }
+      // ImageGalleryManager will fetch and display images automatically when productId is provided
+      // No need to manually fetch images here
 
       const hasColor = product.custom_fields?.some(cf => cf.field_id === 6 && cf.value) ?? false;
       setIsVariationProduct(hasColor);
@@ -794,7 +795,6 @@ export default function AddEditProductPage({
                       </h2>
                       <ImageGalleryManager
                         productId={isEditMode ? parseInt(productId!) : undefined}
-                        existingImages={productImages}
                         onImagesChange={(images) => {
                           setProductImages(images);
                         }}

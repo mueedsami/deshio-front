@@ -32,7 +32,7 @@ export default function NewArrivals() {
   }, []);
 
   const handleProductClick = (productId: number) => {
-    router.push(`/products/${productId}`);
+    router.push(`/e-commerce/product/${productId}`);
   };
 
   if (loading) {

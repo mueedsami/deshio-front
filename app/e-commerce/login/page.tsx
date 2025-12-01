@@ -2,18 +2,13 @@
 import React, { useState, useEffect } from 'react';
 import { Eye, EyeOff, ArrowLeft, AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '@/contexts/AuthContext';
+import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
+import cartService from '@/services/cartService';
 
 export default function LoginRegisterPage() {
   const router = useRouter();
-  const { login, isAuthenticated } = useAuth();
+  const { login, register, isAuthenticated } = useCustomerAuth();
 
-  // Redirect if already logged in
-  useEffect(() => {
-    if (isAuthenticated) {
-      router.push('/e-commerce/my-account');
-    }
-  }, [isAuthenticated, router]);
   const [activeTab, setActiveTab] = useState('login');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -24,14 +19,93 @@ export default function LoginRegisterPage() {
   const [loginPassword, setLoginPassword] = useState('');
   
   // Register state
+  const [registerName, setRegisterName] = useState('');
   const [registerEmail, setRegisterEmail] = useState('');
-  const [registerUsername, setRegisterUsername] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   
   // Alert state
   const [alert, setAlert] = useState({ show: false, type: '', message: '' });
   const [isLoading, setIsLoading] = useState(false);
+
+  // Check if redirected from add to cart
+  const [redirectMessage, setRedirectMessage] = useState('');
+  const [pendingCartItem, setPendingCartItem] = useState<any>(null);
+
+  // Redirect if already authenticated
+  useEffect(() => {
+    if (isAuthenticated) {
+      handlePostLoginRedirect();
+    }
+  }, [isAuthenticated, router]);
+
+  useEffect(() => {
+    const checkRedirect = () => {
+      const cartRedirect = localStorage.getItem('cart-redirect');
+      const pendingItem = localStorage.getItem('pending-cart-item');
+      
+      if (cartRedirect === 'true') {
+        if (pendingItem) {
+          setPendingCartItem(JSON.parse(pendingItem));
+          setRedirectMessage('Please login to add this item to your cart and continue shopping.');
+        } else {
+          setRedirectMessage('Please login to view your cart and complete your purchase.');
+        }
+      }
+    };
+    checkRedirect();
+  }, []);
+
+  const handlePostLoginRedirect = async () => {
+    const cartRedirect = localStorage.getItem('cart-redirect');
+    const pendingItem = localStorage.getItem('pending-cart-item');
+    
+    // Clean up flags
+    localStorage.removeItem('cart-redirect');
+    localStorage.removeItem('pending-cart-item');
+    
+    // If there's a pending cart item, add it first
+    if (pendingItem) {
+      try {
+        const item = JSON.parse(pendingItem);
+        console.log('Adding pending cart item:', item);
+        
+        await cartService.addToCart({
+          product_id: item.product_id,
+          quantity: item.quantity
+        });
+        
+        console.log('Pending item added successfully');
+        
+        // Show success message
+        showAlert('success', 'Item added to cart!');
+        
+        // Dispatch cart update event
+        window.dispatchEvent(new Event('cart-updated'));
+        
+        // Redirect to cart after a short delay
+        setTimeout(() => {
+          router.push('/e-commerce/cart');
+        }, 1000);
+        
+      } catch (error: any) {
+        console.error('Error adding pending cart item:', error);
+        showAlert('error', 'Failed to add item to cart. Please try again.');
+        
+        // Still redirect to cart
+        setTimeout(() => {
+          router.push('/e-commerce/cart');
+        }, 1500);
+      }
+    } else if (cartRedirect === 'true') {
+      // No pending item, just redirect to cart
+      router.push('/e-commerce/cart');
+    } else {
+      // Normal login, go to account
+      router.push('/e-commerce/my-account');
+    }
+  };
 
   const showAlert = (type: string, message: string) => {
     setAlert({ show: true, type, message });
@@ -46,118 +120,87 @@ export default function LoginRegisterPage() {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: loginEmail,
-          password: loginPassword,
-          rememberMe
-        })
-      });
-
-      const data = await response.json();
-
-      if (response.ok) {
-        showAlert('success', 'Login successful! Redirecting...');
-        // Store user data in localStorage
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('user', JSON.stringify(data.user));
-          if (rememberMe) {
-            localStorage.setItem('rememberMe', 'true');
-          }
-        }
-        // Redirect after 1.5 seconds
-        setTimeout(() => {
-          router.push('/e-commerce/my-account');
-        }, 1500);
-      } else {
-        showAlert('error', data.message || 'Invalid credentials');
-      }
-    } catch (error) {
-      showAlert('error', 'Login failed. Please try again.');
-      console.error('Login error:', error);
+      // Use customerAuthService via context
+      await login(loginEmail, loginPassword, rememberMe);
+      
+      showAlert('success', 'Login successful! Redirecting...');
+      
+      // The redirect logic is handled in the useEffect above
+      // which triggers when isAuthenticated becomes true
+      
+    } catch (error: any) {
+      showAlert('error', error.message);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleRegister = async () => {
-    console.log('Register button clicked'); // Debug log
-    
     // Validation
-    if (!registerEmail || !registerUsername || !registerPassword || !registerConfirmPassword) {
-      console.log('Validation failed: missing fields');
+    if (!registerName || !registerEmail || !registerPhone || !registerPassword || !registerConfirmPassword) {
       showAlert('error', 'Please fill in all fields');
       return;
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(registerEmail)) {
-      console.log('Validation failed: invalid email');
       showAlert('error', 'Please enter a valid email address');
       return;
     }
 
-    if (registerUsername.length < 3) {
-      console.log('Validation failed: username too short');
-      showAlert('error', 'Username must be at least 3 characters long');
+    const phoneRegex = /^(\+88)?01[3-9]\d{8}$/;
+    if (!phoneRegex.test(registerPhone)) {
+      showAlert('error', 'Please enter a valid Bangladesh phone number');
       return;
     }
 
-    if (registerPassword.length < 6) {
-      console.log('Validation failed: password too short');
-      showAlert('error', 'Password must be at least 6 characters long');
+    if (registerName.length < 2) {
+      showAlert('error', 'Name must be at least 2 characters long');
+      return;
+    }
+
+    if (registerPassword.length < 8) {
+      showAlert('error', 'Password must be at least 8 characters long');
       return;
     }
 
     if (registerPassword !== registerConfirmPassword) {
-      console.log('Validation failed: passwords do not match');
       showAlert('error', 'Passwords do not match');
       return;
     }
 
-    console.log('Starting registration...');
     setIsLoading(true);
     
     try {
-      const requestBody = {
+      // Use customerAuthService via context
+      await register({
+        name: registerName,
         email: registerEmail,
-        username: registerUsername,
-        password: registerPassword
-      };
-      console.log('Sending registration request:', { ...requestBody, password: '***' });
-
-      const response = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        phone: registerPhone,
+        password: registerPassword,
+        password_confirmation: registerConfirmPassword,
+        country: 'Bangladesh'
       });
 
-      console.log('Response status:', response.status);
-      const data = await response.json();
-      console.log('Response data:', data);
-
-      if (response.ok) {
-        showAlert('success', 'Registration successful! You can now login.');
-        // Clear form
-        setRegisterEmail('');
-        setRegisterUsername('');
-        setRegisterPassword('');
-        setRegisterConfirmPassword('');
-        // Switch to login tab after 1.5 seconds
-        setTimeout(() => {
-          setActiveTab('login');
-        }, 1500);
-      } else {
-        showAlert('error', data.message || 'Registration failed');
-      }
+      showAlert('success', 'Registration successful! Please login to continue.');
+      
+      // Clear form
+      setRegisterName('');
+      setRegisterEmail('');
+      setRegisterPhone('');
+      setRegisterPassword('');
+      setRegisterConfirmPassword('');
+      
+      // Switch to login tab after 1.5 seconds
+      setTimeout(() => {
+        setActiveTab('login');
+        setLoginEmail(registerEmail); // Pre-fill email
+      }, 1500);
     } catch (error: any) {
-  console.error('Registration error:', error);
-  showAlert('error', 'Registration failed. Please try again. Error: ' + error.message);
-} finally {
-  setIsLoading(false);
-}
+      showAlert('error', error.message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -189,6 +232,30 @@ export default function LoginRegisterPage() {
           <span>My account</span>
         </div>
       </div>
+
+      {/* Cart Redirect Notice */}
+      {redirectMessage && (
+        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 mb-4">
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
+            <AlertCircle className="text-blue-600 flex-shrink-0 mt-0.5" size={20} />
+            <div>
+              <h3 className="font-medium text-blue-900">Login Required</h3>
+              <p className="text-sm text-blue-700 mt-1">{redirectMessage}</p>
+              {pendingCartItem && (
+                <div className="mt-2 flex items-center gap-2 text-sm text-blue-800">
+                  <img 
+                    src={pendingCartItem.image} 
+                    alt={pendingCartItem.name}
+                    className="w-10 h-10 object-cover rounded"
+                  />
+                  <span className="font-medium">{pendingCartItem.name}</span>
+                  <span>×{pendingCartItem.quantity}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast Notification */}
       {alert.show && (
@@ -338,6 +405,20 @@ export default function LoginRegisterPage() {
             <div className="space-y-6">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Full Name <span className="text-red-700">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={registerName}
+                  onChange={(e) => setRegisterName(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
+                  placeholder="Enter your full name"
+                  disabled={isLoading}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Email address <span className="text-red-700">*</span>
                 </label>
                 <input
@@ -352,16 +433,17 @@ export default function LoginRegisterPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Username <span className="text-red-700">*</span>
+                  Phone Number <span className="text-red-700">*</span>
                 </label>
                 <input
-                  type="text"
-                  value={registerUsername}
-                  onChange={(e) => setRegisterUsername(e.target.value)}
+                  type="tel"
+                  value={registerPhone}
+                  onChange={(e) => setRegisterPhone(e.target.value)}
                   className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                  placeholder="Choose a username"
+                  placeholder="01XXXXXXXXX"
                   disabled={isLoading}
                 />
+                <p className="text-xs text-gray-500 mt-1">Bangladesh phone number (e.g., 01712345678)</p>
               </div>
 
               <div>
@@ -372,10 +454,7 @@ export default function LoginRegisterPage() {
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={registerPassword}
-                    onChange={(e) => {
-                      console.log('Password changed:', e.target.value.length + ' chars');
-                      setRegisterPassword(e.target.value);
-                    }}
+                    onChange={(e) => setRegisterPassword(e.target.value)}
                     className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
                     placeholder="Create a password"
                     disabled={isLoading}
@@ -391,7 +470,7 @@ export default function LoginRegisterPage() {
                     {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
                   </button>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">Minimum 6 characters (Current: {registerPassword.length})</p>
+                <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
               </div>
 
               <div>
@@ -402,10 +481,7 @@ export default function LoginRegisterPage() {
                   <input
                     type={showConfirmPassword ? 'text' : 'password'}
                     value={registerConfirmPassword}
-                    onChange={(e) => {
-                      console.log('Confirm password changed:', e.target.value.length + ' chars');
-                      setRegisterConfirmPassword(e.target.value);
-                    }}
+                    onChange={(e) => setRegisterConfirmPassword(e.target.value)}
                     className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
                     placeholder="Confirm your password"
                     disabled={isLoading}
@@ -438,11 +514,7 @@ export default function LoginRegisterPage() {
               </div>
 
               <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  console.log('Button clicked!');
-                  handleRegister();
-                }}
+                onClick={handleRegister}
                 disabled={isLoading}
                 type="button"
                 className="w-full bg-red-700 text-white py-3 rounded-md font-medium hover:bg-red-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"

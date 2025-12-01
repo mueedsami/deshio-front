@@ -1,3 +1,4 @@
+// types/order.ts
 
 export interface Customer {
   name: string;
@@ -71,7 +72,9 @@ export interface Store {
 export interface Order {
   id: number;
   orderNumber?: string; 
-  order_number?: string; 
+  order_number?: string;
+  orderType?: string; // 'social_commerce' | 'ecommerce' | 'counter'
+  orderTypeLabel?: string;
   date: string;
   customer: Customer;
   deliveryAddress?: DeliveryAddress;
@@ -84,6 +87,7 @@ export interface Order {
   payments: Payments;
   salesBy: string;
   status?: string;
+  fulfillmentStatus?: string;
   store?: Store | string; // Can be Store object or string
   notes?: string;
   createdAt?: string;

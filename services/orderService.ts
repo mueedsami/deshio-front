@@ -412,6 +412,7 @@ const orderService = {
   async getPendingFulfillment(params?: {
     store_id?: number;
     per_page?: number;
+    order_type?: 'social_commerce' | 'ecommerce';
   }): Promise<{
     data: Order[];
     total: number;
@@ -421,7 +422,6 @@ const orderService = {
         params: {
           ...params,
           fulfillment_status: 'pending_fulfillment',
-          status: 'pending'
         }
       });
       const result = response.data;

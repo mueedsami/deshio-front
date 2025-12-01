@@ -1,6 +1,6 @@
 // components/orders/OrdersTable.tsx
 
-import { Package, MoreVertical, Edit2, Plane, Truck } from 'lucide-react';
+import { Package, MoreVertical, Edit2, Truck } from 'lucide-react';
 import { Order } from '@/types/order';
 
 interface OrdersTableProps {
@@ -80,6 +80,7 @@ export default function OrdersTable({
                     </th>
                   )}
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Order No</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Type</th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Customer</th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Date</th>
                   <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">Status</th>
@@ -101,9 +102,17 @@ export default function OrdersTable({
                       </td>
                     )}
                     <td className="px-6 py-4">
-                      <span className="text-sm font-bold text-gray-900 dark:text-white">#{order.id}</span>
-                      {order.isInternational && (
-                        <Plane className="inline-block w-4 h-4 text-blue-600 ml-1" />
+                      <span className="text-sm font-bold text-gray-900 dark:text-white">#{order.orderNumber || order.id}</span>
+                    </td>
+                    <td className="px-6 py-4">
+                      {order.orderType && (
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold ${
+                          order.orderType === 'social_commerce'
+                            ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800'
+                            : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                        }`}>
+                          {order.orderType === 'social_commerce' ? 'Social' : 'E-Com'}
+                        </span>
                       )}
                     </td>
                     <td className="px-6 py-4">
@@ -231,11 +240,18 @@ export default function OrdersTable({
                       {order.customer.name.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <p className="font-bold text-gray-900 dark:text-white">#{order.id}
-                        {order.isInternational && (
-                          <Plane className="inline-block w-4 h-4 text-blue-600 ml-1" />
+                      <div className="flex items-center gap-2 mb-1">
+                        <p className="font-bold text-gray-900 dark:text-white">#{order.orderNumber || order.id}</p>
+                        {order.orderType && (
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${
+                            order.orderType === 'social_commerce'
+                              ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border border-purple-200 dark:border-purple-800'
+                              : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400 border border-blue-200 dark:border-blue-800'
+                          }`}>
+                            {order.orderType === 'social_commerce' ? 'Social' : 'E-Com'}
+                          </span>
                         )}
-                      </p>
+                      </div>
                       <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">{order.customer.name}</p>
                       <p className="text-xs text-gray-500 dark:text-gray-500 mt-0.5">{order.date}</p>
                     </div>

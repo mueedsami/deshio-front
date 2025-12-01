@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import StatsCards from '@/components/orders/StatsCards';
 import OrderFilters from '@/components/orders/OrderFilters';
 import OrdersTable from '@/components/orders/OrdersTable';
 import OrderDetailsModal from '@/components/orders/OrderDetailsModal';
@@ -13,7 +12,7 @@ import ReturnProductModal from '@/components/orders/ReturnProductModal';
 import { Order } from '@/types/order';
 import { Truck, Printer, Settings, CheckCircle, XCircle, Package, ShoppingBag } from 'lucide-react';
 import { checkQZStatus, printBulkReceipts, getPrinters } from '@/lib/qz-tray';
-import axiosInstance from '@/lib/axios';
+import orderService from '@/services/orderService';
 import shipmentService from '@/services/shipmentService';
 
 export default function OrdersDashboard() {
@@ -23,6 +22,7 @@ export default function OrdersDashboard() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('All Status');
+  const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
@@ -38,6 +38,7 @@ export default function OrdersDashboard() {
   const [printers, setPrinters] = useState<string[]>([]);
   const [selectedPrinter, setSelectedPrinter] = useState<string>('');
   const [showPrinterSelect, setShowPrinterSelect] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [bulkPrintProgress, setBulkPrintProgress] = useState<{
     show: boolean;
     current: number;
@@ -91,76 +92,98 @@ export default function OrdersDashboard() {
 
   useEffect(() => {
     loadOrders();
+    checkPrinterStatus();
   }, []);
 
   const loadOrders = async () => {
+    setIsLoading(true);
     try {
-      const response = await axiosInstance.get('/orders', {
-        params: {
-          order_type: 'social_commerce',
-          sort_by: 'created_at',
-          sort_order: 'desc',
-          per_page: 1000
-        }
+      // Fetch social commerce orders with fulfilled status
+      const socialCommerceResponse = await orderService.getAll({
+        order_type: 'social_commerce',
+        fulfillment_status: 'fulfilled',
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        per_page: 1000
       });
 
-      if (response.data.success && response.data.data.data) {
-        const transformedOrders = response.data.data.data.map((order: any) => ({
-          id: order.id,
-          orderNumber: order.order_number,
-          date: new Date(order.order_date).toLocaleDateString('en-GB'),
-          customer: {
-            name: order.customer.name,
-            phone: order.customer.phone,
-            email: order.customer.email || '',
-            address: order.shipping_address || ''
-          },
-          items: order.items?.map((item: any) => ({
-            id: item.id,
-            name: item.product_name,
-            sku: item.product_sku,
-            quantity: item.quantity,
-            price: parseFloat(item.unit_price),
-            discount: parseFloat(item.discount_amount || '0')
-          })) || [],
-          subtotal: parseFloat(order.subtotal),
-          discount: parseFloat(order.discount_amount || '0'),
-          shipping: parseFloat(order.shipping_amount || '0'),
-          amounts: {
-            total: parseFloat(order.total_amount),
-            paid: parseFloat(order.paid_amount),
-            due: parseFloat(order.outstanding_amount)
-          },
-          payments: {
-            total: parseFloat(order.total_amount),
-            paid: parseFloat(order.paid_amount),
-            due: parseFloat(order.outstanding_amount)
-          },
-          status: order.payment_status === 'paid' ? 'Paid' : 'Pending',
-          salesBy: order.salesman?.name || userName || 'N/A',
-          store: order.store.name,
-          notes: order.notes || ''
-        }));
+      // Fetch e-commerce orders with fulfilled status
+      const ecommerceResponse = await orderService.getAll({
+        order_type: 'ecommerce',
+        fulfillment_status: 'fulfilled',
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        per_page: 1000
+      });
 
-        let filteredData = transformedOrders;
-        if (userRole === 'social_commerce_manager') {
-          filteredData = transformedOrders.filter((order: any) => 
-            order.salesBy === userName
-          );
-        }
-        
-        setOrders(filteredData);
-        setFilteredOrders(filteredData);
-        return;
+      // Combine both order types
+      const allOrders = [
+        ...socialCommerceResponse.data,
+        ...ecommerceResponse.data
+      ];
+
+      // Sort combined orders by date
+      allOrders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+      // Transform the orders to match your Order type
+      const transformedOrders = allOrders.map((order: any) => ({
+        id: order.id,
+        orderNumber: order.order_number,
+        orderType: order.order_type,
+        orderTypeLabel: order.order_type_label,
+        date: new Date(order.order_date).toLocaleDateString('en-GB'),
+        customer: {
+          name: order.customer.name,
+          phone: order.customer.phone,
+          email: order.customer.email || '',
+          address: order.shipping_address || ''
+        },
+        items: order.items?.map((item: any) => ({
+          id: item.id,
+          name: item.product_name,
+          sku: item.product_sku,
+          quantity: item.quantity,
+          price: parseFloat(item.unit_price),
+          discount: parseFloat(item.discount_amount || '0')
+        })) || [],
+        subtotal: parseFloat(order.subtotal),
+        discount: parseFloat(order.discount_amount || '0'),
+        shipping: parseFloat(order.shipping_amount || '0'),
+        amounts: {
+          total: parseFloat(order.total_amount),
+          paid: parseFloat(order.paid_amount),
+          due: parseFloat(order.outstanding_amount)
+        },
+        payments: {
+          total: parseFloat(order.total_amount),
+          paid: parseFloat(order.paid_amount),
+          due: parseFloat(order.outstanding_amount)
+        },
+        status: order.payment_status === 'paid' ? 'Paid' : 'Pending',
+        salesBy: order.salesman?.name || userName || 'N/A',
+        store: order.store.name,
+        notes: order.notes || '',
+        fulfillmentStatus: order.fulfillment_status
+      }));
+
+      // Apply user role filtering if needed
+      let filteredData = transformedOrders;
+      if (userRole === 'social_commerce_manager') {
+        filteredData = transformedOrders.filter((order: any) => 
+          order.salesBy === userName
+        );
       }
+      
+      setOrders(filteredData);
+      setFilteredOrders(filteredData);
 
-      setOrders([]);
-      setFilteredOrders([]);
     } catch (error: any) {
-      console.error('Failed to load orders from backend:', error);
+      console.error('Failed to load orders:', error);
       alert('Failed to load orders. Please check your connection.');
       setOrders([]);
       setFilteredOrders([]);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -170,6 +193,7 @@ export default function OrdersDashboard() {
     if (search.trim()) {
       filtered = filtered.filter((o) =>
         o.id.toString().includes(search.trim()) ||
+        o.orderNumber?.toLowerCase().includes(search.toLowerCase()) ||
         o.customer.name.toLowerCase().includes(search.toLowerCase()) ||
         o.customer.phone.includes(search.trim())
       );
@@ -181,7 +205,7 @@ export default function OrdersDashboard() {
         let filterDateFormatted = dateFilter;
         if (dateFilter.includes('-') && dateFilter.split('-')[0].length === 4) {
           const [year, month, day] = dateFilter.split('-');
-          filterDateFormatted = `${day}-${month}-${year}`;
+          filterDateFormatted = `${day}/${month}/${year}`;
         }
         return orderDate === filterDateFormatted;
       });
@@ -193,8 +217,16 @@ export default function OrdersDashboard() {
       );
     }
 
+    if (orderTypeFilter !== 'All Types') {
+      filtered = filtered.filter((o) => {
+        if (orderTypeFilter === 'Social Commerce') return o.orderType === 'social_commerce';
+        if (orderTypeFilter === 'E-Commerce') return o.orderType === 'ecommerce';
+        return true;
+      });
+    }
+
     setFilteredOrders(filtered);
-  }, [search, dateFilter, statusFilter, orders]);
+  }, [search, dateFilter, statusFilter, orderTypeFilter, orders]);
 
   const handleViewDetails = (order: Order) => {
     setSelectedOrder(order);
@@ -223,6 +255,9 @@ export default function OrdersDashboard() {
         notes: (updatedOrder as any).notes ?? ''
       };
 
+      // Note: You'll need to add an update method to orderService
+      // For now, using the direct axios call
+      const axiosInstance = (await import('@/lib/axios')).default;
       const response = await axiosInstance.put(`/orders/${updatedOrder.id}`, payload);
 
       if (response.data.success) {
@@ -274,20 +309,13 @@ export default function OrdersDashboard() {
     if (!confirm('Are you sure you want to cancel this order?')) return;
 
     try {
-      const response = await axiosInstance.patch(`/orders/${orderId}/cancel`, {
-        reason: 'Cancelled by user'
-      });
-
-      if (response.data.success) {
-        await loadOrders();
-        setActiveMenu(null);
-        alert('Order cancelled successfully!');
-      } else {
-        alert('Failed to cancel order');
-      }
+      await orderService.cancel(orderId, 'Cancelled by user');
+      await loadOrders();
+      setActiveMenu(null);
+      alert('Order cancelled successfully!');
     } catch (error: any) {
       console.error('Error cancelling order:', error);
-      alert(`Failed to cancel order: ${error.response?.data?.message || error.message}`);
+      alert(`Failed to cancel order: ${error.message}`);
     }
   };
 
@@ -536,6 +564,8 @@ export default function OrdersDashboard() {
   const totalRevenue = orders.reduce((sum, order) => sum + (order.amounts?.total || order.subtotal), 0);
   const paidOrders = orders.filter(o => o.payments.due === 0).length;
   const pendingOrders = orders.filter(o => o.payments.due > 0).length;
+  const socialCommerceCount = orders.filter(o => o.orderType === 'social_commerce').length;
+  const ecommerceCount = orders.filter(o => o.orderType === 'ecommerce').length;
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -554,9 +584,9 @@ export default function OrdersDashboard() {
                       <ShoppingBag className="w-4 h-4 text-white dark:text-black" />
                     </div>
                     <div>
-                      <h1 className="text-lg font-bold text-black dark:text-white leading-none">Orders</h1>
+                      <h1 className="text-lg font-bold text-black dark:text-white leading-none">Fulfilled Orders</h1>
                       <p className="text-[10px] text-gray-600 dark:text-gray-400 leading-none mt-0.5">
-                        {filteredOrders.length} of {orders.length}
+                        {filteredOrders.length} of {orders.length} orders
                       </p>
                     </div>
                   </div>
@@ -612,10 +642,18 @@ export default function OrdersDashboard() {
             {/* Ultra Compact Stats */}
             <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800">
               <div className="max-w-7xl mx-auto">
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-6 gap-2">
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                     <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Total</p>
                     <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{orders.length}</p>
+                  </div>
+                  <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Social</p>
+                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{socialCommerceCount}</p>
+                  </div>
+                  <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">E-Com</p>
+                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{ecommerceCount}</p>
                   </div>
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                     <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Paid</p>
@@ -642,6 +680,8 @@ export default function OrdersDashboard() {
                 setDateFilter={setDateFilter}
                 statusFilter={statusFilter}
                 setStatusFilter={setStatusFilter}
+                orderTypeFilter={orderTypeFilter}
+                setOrderTypeFilter={setOrderTypeFilter}
               />
 
               {/* Ultra Compact Bulk Actions */}
@@ -732,21 +772,28 @@ export default function OrdersDashboard() {
                 </div>
               )}
 
-              <OrdersTable
-                filteredOrders={filteredOrders}
-                totalOrders={orders.length}
-                activeMenu={activeMenu}
-                setActiveMenu={setActiveMenu}
-                onViewDetails={handleViewDetails}
-                onEditOrder={handleEditOrder}
-                onExchangeOrder={handleExchangeOrder}
-                onReturnOrder={handleReturnOrder}
-                onCancelOrder={handleCancelOrder}
-                onSendToPathao={handleSendToPathao}
-                selectedOrders={selectedOrders}
-                onToggleSelect={handleToggleSelect}
-                onToggleSelectAll={handleToggleSelectAll}
-              />
+              {isLoading ? (
+                <div className="bg-white dark:bg-gray-900 rounded-xl p-12 text-center border border-gray-200 dark:border-gray-800">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-black dark:border-white mx-auto"></div>
+                  <p className="text-gray-500 dark:text-gray-400 font-medium mt-4">Loading orders...</p>
+                </div>
+              ) : (
+                <OrdersTable
+                  filteredOrders={filteredOrders}
+                  totalOrders={orders.length}
+                  activeMenu={activeMenu}
+                  setActiveMenu={setActiveMenu}
+                  onViewDetails={handleViewDetails}
+                  onEditOrder={handleEditOrder}
+                  onExchangeOrder={handleExchangeOrder}
+                  onReturnOrder={handleReturnOrder}
+                  onCancelOrder={handleCancelOrder}
+                  onSendToPathao={handleSendToPathao}
+                  selectedOrders={selectedOrders}
+                  onToggleSelect={handleToggleSelect}
+                  onToggleSelectAll={handleToggleSelectAll}
+                />
+              )}
             </div>
           </main>
         </div>

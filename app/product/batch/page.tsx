@@ -6,7 +6,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import BatchForm from '@/components/BatchForm';
 import BatchCard from '@/components/BatchCard';
-import batchService, { Batch, CreateBatchData } from '@/services/batchService';
+import batchService, { Batch, CreateBatchData, UpdateBatchData } from '@/services/batchService';
 import storeService, { Store } from '@/services/storeService';
 
 interface Product {
@@ -146,6 +146,30 @@ export default function BatchPage() {
     }
   };
 
+  const handleEditBatch = async (batchId: number, data: UpdateBatchData) => {
+    try {
+      console.log('Editing batch:', batchId, data);
+      
+      const response = await batchService.updateBatch(batchId, data);
+      
+      console.log('Update response:', response);
+      
+      // Update local state
+      setBatches(prev => prev.map(b => 
+        b.id === batchId ? response.data : b
+      ));
+      
+      showToast('Batch updated successfully', 'success');
+    } catch (err: any) {
+      console.error('Failed to update batch:', err);
+      console.error('Error response:', err.response?.data);
+      
+      const errorMsg = err.response?.data?.message || 'Failed to update batch';
+      showToast(errorMsg, 'error');
+      throw err; // Re-throw to let modal handle it
+    }
+  };
+
   const handleDeleteBatch = async (batchId: number) => {
     try {
       console.log('Deleting batch:', batchId);
@@ -252,6 +276,7 @@ export default function BatchPage() {
                     key={batch.id} 
                     batch={batch}
                     onDelete={handleDeleteBatch}
+                    onEdit={handleEditBatch}
                   />
                 ))
               )}

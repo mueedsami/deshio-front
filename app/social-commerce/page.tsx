@@ -565,8 +565,8 @@ export default function SocialCommercePage() {
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
 
   const handleConfirmOrder = async () => {
-    if (!userName || !userEmail || !userPhone) {
-      alert('Please fill in customer information');
+    if (!userName || !userPhone) {
+      alert('Please fill in customer name and phone number');
       return;
     }
     if (cart.length === 0) {
@@ -598,7 +598,7 @@ export default function SocialCommercePage() {
         store_id: parseInt(selectedStore),
         customer: {
           name: userName,
-          email: userEmail,
+          email: userEmail || undefined,
           phone: userPhone,
           address: isInternational ? 
             `${internationalCity}, ${state ? state + ', ' : ''}${country}` :
@@ -726,10 +726,10 @@ export default function SocialCommercePage() {
                       </div>
 
                       <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Email*</label>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Email</label>
                         <input
                           type="email"
-                          placeholder="sample@email.com"
+                          placeholder="sample@email.com (optional)"
                           value={userEmail}
                           onChange={(e) => setUserEmail(e.target.value)}
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
