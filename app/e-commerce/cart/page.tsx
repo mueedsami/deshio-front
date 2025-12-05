@@ -17,9 +17,9 @@ export default function CartPage() {
   const [couponCode, setCouponCode] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // Check authentication
+  // ✅ FIX: Check for both token types
   const isAuthenticated = () => {
-    const token = localStorage.getItem('auth_token');
+    const token = localStorage.getItem('customer_token') || localStorage.getItem('auth_token');
     return !!token;
   };
 
@@ -47,10 +47,9 @@ export default function CartPage() {
       const cartData = await cartService.getCart();
       setCart(cartData);
     } catch (err: any) {
-      console.error('Error fetching cart:', err);
+      console.error('❌ Error fetching cart:', err);
       setError(err.message || 'Failed to load cart');
       
-      // If authentication error, redirect to login
       if (err.message?.includes('401') || err.message?.includes('Unauthenticated')) {
         router.push('/e-commerce/login');
       }
@@ -86,11 +85,9 @@ export default function CartPage() {
     
     try {
       await cartService.updateQuantity(cartItemId, { quantity: newQuantity });
-      
-      // Refresh cart to get updated totals
       await fetchCart();
     } catch (err: any) {
-      console.error('Error updating quantity:', err);
+      console.error('❌ Error updating quantity:', err);
       alert(err.message || 'Failed to update quantity');
     } finally {
       setIsUpdating(prev => {
@@ -109,17 +106,15 @@ export default function CartPage() {
     try {
       await cartService.removeFromCart(cartItemId);
       
-      // Remove from selected items
       setSelectedItems(prev => {
         const next = new Set(prev);
         next.delete(cartItemId);
         return next;
       });
       
-      // Refresh cart
       await fetchCart();
     } catch (err: any) {
-      console.error('Error removing item:', err);
+      console.error('❌ Error removing item:', err);
       alert(err.message || 'Failed to remove item');
     } finally {
       setIsUpdating(prev => {
@@ -141,11 +136,9 @@ export default function CartPage() {
     try {
       await Promise.all(itemsToDelete.map(id => cartService.removeFromCart(id)));
       setSelectedItems(new Set());
-      
-      // Refresh cart
       await fetchCart();
     } catch (err: any) {
-      console.error('Error deleting items:', err);
+      console.error('❌ Error deleting items:', err);
       alert(err.message || 'Failed to delete items');
     } finally {
       setIsUpdating(new Set());
@@ -161,7 +154,7 @@ export default function CartPage() {
       setSelectedItems(new Set());
       await fetchCart();
     } catch (err: any) {
-      console.error('Error clearing cart:', err);
+      console.error('❌ Error clearing cart:', err);
       alert(err.message || 'Failed to clear cart');
     } finally {
       setIsLoading(false);
@@ -174,7 +167,9 @@ export default function CartPage() {
     return cart.cart_items
       .filter(item => selectedItems.has(item.id))
       .reduce((total, item) => {
-        const itemTotal = parseFloat(item.total_price);
+        const itemTotal = typeof item.total_price === 'string' 
+          ? parseFloat(item.total_price) 
+          : item.total_price;
         return total + itemTotal;
       }, 0);
   };
@@ -187,6 +182,7 @@ export default function CartPage() {
   const shippingFee = subtotal >= freeShippingThreshold ? 0 : 60;
   const total = subtotal + shippingFee;
 
+  // ✅ CRITICAL FIX: Synchronous localStorage save before navigation
   const handleProceedToCheckout = async () => {
     if (selectedItems.size === 0) {
       alert('Please select at least one item to checkout');
@@ -198,21 +194,31 @@ export default function CartPage() {
       const validation = await cartService.validateCart();
       
       if (!validation.is_valid) {
-        // Show validation issues
         const issues = validation.issues.map(issue => issue.issue).join('\n');
         alert(`Cart validation failed:\n${issues}`);
-        
-        // Refresh cart to get updated state
         await fetchCart();
         return;
       }
 
-      // Save selected item IDs to localStorage for checkout
-      localStorage.setItem('checkout-selected-items', JSON.stringify(Array.from(selectedItems)));
+      // ✅ CRITICAL: Save to localStorage SYNCHRONOUSLY before ANY navigation
+      const selectedItemsArray = Array.from(selectedItems);
+      localStorage.setItem('checkout-selected-items', JSON.stringify(selectedItemsArray));
+      
+      // ✅ Force a small delay to ensure localStorage write completes
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Verify save succeeded
+      const saved = localStorage.getItem('checkout-selected-items');
+      if (!saved) {
+        throw new Error('Failed to save checkout data');
+      }
+
+      // Now navigate
       router.push('/e-commerce/checkout');
+
     } catch (err: any) {
-      console.error('Error validating cart:', err);
-      alert('Failed to validate cart. Please try again.');
+      console.error('❌ Error during checkout:', err);
+      alert(err.message || 'Failed to proceed to checkout. Please try again.');
     }
   };
 
@@ -344,8 +350,12 @@ export default function CartPage() {
             {/* Cart Items */}
             <div className="space-y-4 mt-6">
               {cart.cart_items.map((item: CartItem) => {
-                const price = parseFloat(item.unit_price);
-                const itemTotal = parseFloat(item.total_price);
+                const price = typeof item.unit_price === 'string' 
+                  ? parseFloat(item.unit_price) 
+                  : item.unit_price;
+                const itemTotal = typeof item.total_price === 'string' 
+                  ? parseFloat(item.total_price) 
+                  : item.total_price;
                 const isItemUpdating = isUpdating.has(item.id);
                 const productImage = item.product.images?.[0]?.image_url || '/placeholder-product.jpg';
 
@@ -394,6 +404,22 @@ export default function CartPage() {
                         <h3 className="font-semibold text-gray-900">
                           {item.product.name}
                         </h3>
+                        
+                        {item.variant_options && (
+                          <div className="flex gap-2 mt-1">
+                            {item.variant_options.color && (
+                              <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                                Color: {item.variant_options.color}
+                              </span>
+                            )}
+                            {item.variant_options.size && (
+                              <span className="text-xs bg-gray-100 text-gray-700 px-2 py-1 rounded">
+                                Size: {item.variant_options.size}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        
                         {item.product.category && (
                           <p className="text-sm text-gray-500 mt-1">
                             {typeof item.product.category === 'string' 
@@ -484,7 +510,6 @@ export default function CartPage() {
               />
               <button 
                 onClick={() => {
-                  // TODO: Implement coupon application via API
                   console.log('Apply coupon:', couponCode);
                   alert('Coupon functionality coming soon!');
                 }}
@@ -527,7 +552,6 @@ export default function CartPage() {
                   </div>
                   <button 
                     onClick={() => {
-                      // TODO: Implement address change
                       alert('Address change functionality coming soon!');
                     }}
                     className="text-sm text-red-700 hover:underline mt-2"
@@ -548,7 +572,14 @@ export default function CartPage() {
                   disabled={selectedItems.size === 0 || isUpdating.size > 0}
                   className="w-full bg-red-700 text-white py-4 rounded font-bold text-lg hover:bg-red-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  PROCEED TO CHECKOUT ({selectedItems.size})
+                  {isUpdating.size > 0 ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="animate-spin" size={20} />
+                      Processing...
+                    </span>
+                  ) : (
+                    `PROCEED TO CHECKOUT (${selectedItems.size})`
+                  )}
                 </button>
 
                 <button

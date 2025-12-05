@@ -1,5 +1,7 @@
+'use client';
+
 import React from 'react';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 import { useCart } from '../../../app/e-commerce/CartContext';
 import { useRouter } from 'next/navigation';
 import CartItem from './CartItem';
@@ -10,9 +12,10 @@ interface CartSidebarProps {
 }
 
 export default function CartSidebar({ isOpen, onClose }: CartSidebarProps) {
-  const { cartItems, getCartTotal } = useCart();
+  const { cart, getTotalPrice, isLoading } = useCart();
   const router = useRouter();
-  const subtotal = getCartTotal();
+  
+  const subtotal = getTotalPrice();
   const freeShippingThreshold = 5000;
   const remaining = Math.max(0, freeShippingThreshold - subtotal);
   const progress = Math.min(100, (subtotal / freeShippingThreshold) * 100);
@@ -55,27 +58,47 @@ export default function CartSidebar({ isOpen, onClose }: CartSidebarProps) {
 
         {/* Cart Items */}
         <div className="flex-1 overflow-y-auto p-6">
-          {cartItems.length === 0 ? (
+          {/* Loading State */}
+          {isLoading && (
+            <div className="flex justify-center items-center py-12">
+              <Loader2 className="animate-spin text-gray-400" size={32} />
+            </div>
+          )}
+
+          {/* Empty State */}
+          {!isLoading && cart.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500">Your cart is empty</p>
+              <button
+                onClick={onClose}
+                className="mt-4 text-teal-600 hover:text-teal-700 font-medium"
+              >
+                Continue Shopping
+              </button>
             </div>
-          ) : (
+          )}
+
+          {/* Cart Items */}
+          {!isLoading && cart.length > 0 && (
             <div className="space-y-4">
-              {cartItems.map((item: any) => (
-                <CartItem key={item.id} item={item} />
+              {cart.map((item) => (
+                <CartItem 
+                  key={item.id} 
+                  item={item}
+                />
               ))}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        {cartItems.length > 0 && (
+        {!isLoading && cart.length > 0 && (
           <div className="border-t p-6 space-y-4 bg-white">
             {/* Free Shipping Progress */}
             {remaining > 0 ? (
               <div>
                 <p className="text-sm text-gray-600 mb-2">
-                  Add <span className="font-bold text-red-700">{remaining.toFixed(2)}৳</span> to cart and get free shipping!
+                  Add <span className="font-bold text-red-700">৳{remaining.toFixed(2)}</span> to cart and get free shipping!
                 </p>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div 
@@ -96,7 +119,7 @@ export default function CartSidebar({ isOpen, onClose }: CartSidebarProps) {
             <div className="flex items-center justify-between">
               <span className="text-lg font-semibold text-gray-900">Subtotal:</span>
               <span className="text-2xl font-bold text-red-700">
-                {subtotal.toLocaleString()}.00৳
+                ৳{subtotal.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
 

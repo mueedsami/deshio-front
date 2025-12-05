@@ -195,11 +195,11 @@ const Navbar = () => {
               All Products
             </Link>
 
-            <Link href="/e-commerce/about-us" className="text-gray-700 hover:text-red-700 transition">
+            <Link href="/e-commerce/about" className="text-gray-700 hover:text-red-700 transition">
               About
             </Link>
 
-            <Link href="/e-commerce/contact-us" className="text-gray-700 hover:text-red-700 transition">
+            <Link href="/e-commerce/contact" className="text-gray-700 hover:text-red-700 transition">
               Contact
             </Link>
           </div>
