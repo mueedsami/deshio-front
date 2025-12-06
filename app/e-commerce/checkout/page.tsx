@@ -5,16 +5,16 @@ import { useRouter } from 'next/navigation';
 import { Package, MapPin, CreditCard, ShoppingBag, AlertCircle, Loader2, ChevronRight, Plus, Edit2, Trash2 } from 'lucide-react';
 import Navigation from '@/components/ecommerce/Navigation';
 import checkoutService, { Address, OrderItem, PaymentMethod } from '@/services/checkoutService';
-import { useCart } from '../CartContext';
+import cartService from '@/services/cartService';
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { cart, refreshCart } = useCart();
 
   // State
   const [selectedItems, setSelectedItems] = useState<any[]>([]);
   const [currentStep, setCurrentStep] = useState<'shipping' | 'payment' | 'review'>('shipping');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoadingItems, setIsLoadingItems] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   
@@ -64,77 +64,81 @@ export default function CheckoutPage() {
     }
   }, [router]);
 
-  // ✅ FIXED: Load selected items from cart
+  // ✅ FIXED: Load selected items directly from backend
   useEffect(() => {
-    console.log('🔍 === CHECKOUT DEBUG START ===');
-    
-    console.log('1️⃣ Cart value:', cart);
-    console.log('1️⃣ Cart is array?', Array.isArray(cart));
-    console.log('1️⃣ Cart length:', cart?.length);
-    
-    if (!cart) {
-      console.log('⏳ Waiting for cart to load...');
-      return;
-    }
-
-    // ✅ cart is already an array from CartContext
-    const cartItems = cart;
-    
-    console.log('2️⃣ Cart items:', cartItems);
-    console.log('2️⃣ Cart items length:', cartItems.length);
-    console.log('2️⃣ Cart item IDs:', cartItems.map((i: any) => i.id));
-
-    const selectedIdsStr = localStorage.getItem('checkout-selected-items');
-    console.log('3️⃣ localStorage value:', selectedIdsStr);
-    
-    if (!selectedIdsStr) {
-      console.warn('⚠️ No selected items in localStorage, redirecting to cart...');
-      router.push('/e-commerce/cart');
-      return;
-    }
-
-    try {
-      const ids = JSON.parse(selectedIdsStr);
-      console.log('4️⃣ Parsed IDs:', ids);
-      console.log('4️⃣ IDs is array?', Array.isArray(ids));
+    const loadCheckoutItems = async () => {
+      console.log('🔍 === CHECKOUT LOAD START ===');
       
-      // ✅ Filter cart items by selected IDs
-      const items = cartItems.filter((item: any) => {
-        const included = ids.includes(item.id);
-        console.log(`  - Item ${item.id} (${item.name}): ${included ? '✅' : '❌'}`);
-        return included;
-      });
+      const selectedIdsStr = localStorage.getItem('checkout-selected-items');
+      console.log('📋 localStorage checkout items:', selectedIdsStr);
       
-      console.log('5️⃣ Filtered items:', items);
-      console.log('5️⃣ Filtered count:', items.length);
-      
-      if (items.length === 0) {
-        console.error('❌ No matching items found!');
-        console.error('📋 Available:', cartItems.map((i: any) => i.id));
-        console.error('🔍 Looking for:', ids);
-        
-        alert(
-          `Cart synchronization issue!\n\n` +
-          `Expected: ${ids.join(', ')}\n` +
-          `Found: ${cartItems.map((i: any) => i.id).join(', ') || 'none'}\n\n` +
-          `Redirecting to cart...`
-        );
-        
-        localStorage.removeItem('checkout-selected-items');
+      if (!selectedIdsStr) {
+        console.warn('⚠️ No selected items in localStorage, redirecting to cart...');
+        setIsLoadingItems(false);
         router.push('/e-commerce/cart');
         return;
       }
-      
-      console.log('✅ Setting selected items:', items);
-      setSelectedItems(items);
-      console.log('🔍 === CHECKOUT DEBUG END ===');
-      
-    } catch (error) {
-      console.error('❌ Error parsing selected items:', error);
-      localStorage.removeItem('checkout-selected-items');
-      router.push('/e-commerce/cart');
-    }
-  }, [cart, router]);
+
+      try {
+        const ids = JSON.parse(selectedIdsStr);
+        console.log('🔢 Selected IDs:', ids);
+        
+        if (!Array.isArray(ids) || ids.length === 0) {
+          console.error('❌ Invalid selected items format');
+          localStorage.removeItem('checkout-selected-items');
+          setIsLoadingItems(false);
+          router.push('/e-commerce/cart');
+          return;
+        }
+
+        // ✅ Load fresh cart data from backend
+        console.log('📦 Fetching cart from backend...');
+        const cartData = await cartService.getCart();
+        console.log('✅ Cart data loaded:', cartData);
+        
+        // ✅ Filter by selected IDs
+        const items = cartData.cart_items.filter(item => ids.includes(item.id));
+        console.log('✅ Filtered checkout items:', items);
+        console.log('✅ Item count:', items.length);
+        
+        if (items.length === 0) {
+          console.error('❌ No matching items found in cart!');
+          alert('Selected items are no longer in your cart. Redirecting...');
+          localStorage.removeItem('checkout-selected-items');
+          setIsLoadingItems(false);
+          router.push('/e-commerce/cart');
+          return;
+        }
+        
+        // ✅ Transform to match expected format
+        const transformedItems = items.map(item => ({
+          id: item.id,
+          product_id: item.product_id,
+          name: item.product.name,
+          images: item.product.images || [],
+          sku: item.product.sku ?? '',
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          variant_options: item.variant_options,
+          notes: item.notes,
+        }));
+        
+        console.log('✅ Setting selected items:', transformedItems);
+        setSelectedItems(transformedItems);
+        setIsLoadingItems(false);
+        console.log('🔍 === CHECKOUT LOAD END ===');
+        
+      } catch (error) {
+        console.error('❌ Error loading checkout items:', error);
+        localStorage.removeItem('checkout-selected-items');
+        setIsLoadingItems(false);
+        router.push('/e-commerce/cart');
+      }
+    };
+
+    loadCheckoutItems();
+  }, [router]); // ✅ Remove cart dependency - we fetch directly
 
   // Fetch addresses
   useEffect(() => {
@@ -338,66 +342,63 @@ export default function CheckoutPage() {
     }
   };
 
-const handlePlaceOrder = async () => {
-  if (!selectedShippingAddressId) {
-    setError('Please select a shipping address');
-    return;
-  }
-
-  if (!selectedPaymentMethod) {
-    setError('Please select a payment method');
-    return;
-  }
-
-  setIsProcessing(true);
-  setError(null);
-
-  try {
-    // Get the payment method CODE (string) and convert to lowercase
-    const paymentMethod = paymentMethods.find(pm => pm.id === selectedPaymentMethod);
-    const paymentMethodCode = (paymentMethod?.name || 'cod').toLowerCase();
-
-    const orderData = {
-      payment_method: paymentMethodCode,
-      shipping_address_id: selectedShippingAddressId,
-      billing_address_id: sameAsShipping ? selectedShippingAddressId : (selectedBillingAddressId || selectedShippingAddressId),
-      notes: orderNotes || '',
-      delivery_preference: 'standard' as const,
-    };
-
-    // Only include coupon_code if it has a value
-    if (appliedCoupon && couponCode) {
-      orderData.coupon_code = couponCode;
+  const handlePlaceOrder = async () => {
+    if (!selectedShippingAddressId) {
+      setError('Please select a shipping address');
+      return;
     }
 
-    console.log('📦 Placing order:', orderData);
+    if (!selectedPaymentMethod) {
+      setError('Please select a payment method');
+      return;
+    }
 
-    const result = await checkoutService.createOrderFromCart(orderData);
+    setIsProcessing(true);
+    setError(null);
 
-    console.log('✅ Order placed successfully:', result);
+    try {
+      // Get the payment method CODE (string) and convert to lowercase
+      const paymentMethod = paymentMethods.find(pm => pm.id === selectedPaymentMethod);
+      const paymentMethodCode = (paymentMethod?.name || 'cod').toLowerCase();
 
-    // Clear checkout data
-    localStorage.removeItem('checkout-selected-items');
-    
-    // Refresh cart to clear items
-    await refreshCart();
+      const orderData: any = {
+        payment_method: paymentMethodCode,
+        shipping_address_id: selectedShippingAddressId,
+        billing_address_id: sameAsShipping ? selectedShippingAddressId : (selectedBillingAddressId || selectedShippingAddressId),
+        notes: orderNotes || '',
+        delivery_preference: 'standard' as const,
+      };
 
-    // ✅ Show success message
-    alert(`🎉 Order placed successfully!\n\nOrder Number: ${result.order.order_number}\nTotal: ৳${result.order.total_amount}\n\nYou will be redirected to your account.`);
+      // Only include coupon_code if it has a value
+      if (appliedCoupon && couponCode) {
+        orderData.coupon_code = couponCode;
+      }
 
-    // ✅ Redirect to my-account page
-    router.push('/e-commerce/my-account');
+      console.log('📦 Placing order:', orderData);
 
-  } catch (error: any) {
-    console.error('❌ Order placement failed:', error);
-    setError(error.message || 'Failed to place order. Please try again.');
-  } finally {
-    setIsProcessing(false);
-  }
-};
+      const result = await checkoutService.createOrderFromCart(orderData);
+
+      console.log('✅ Order placed successfully:', result);
+
+      // Clear checkout data
+      localStorage.removeItem('checkout-selected-items');
+
+      // ✅ Show success message
+      alert(`🎉 Order placed successfully!\n\nOrder Number: ${result.order.order_number}\nTotal: ৳${result.order.total_amount}\n\nYou will be redirected to your account.`);
+
+      // ✅ Redirect to my-account page
+      router.push('/e-commerce/my-account');
+
+    } catch (error: any) {
+      console.error('❌ Order placement failed:', error);
+      setError(error.message || 'Failed to place order. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   // Loading state
-  if (!cart || selectedItems.length === 0) {
+  if (isLoadingItems) {
     return (
       <div className="min-h-screen bg-gray-50">
         <Navigation />
@@ -719,7 +720,6 @@ const handlePlaceOrder = async () => {
                           </label>
                         </div>
 
-                        {/* ✅ FIX: Button calls handler directly, no form submission */}
                         <div className="flex gap-2 pt-2">
                           <button
                             type="button"
@@ -741,7 +741,6 @@ const handlePlaceOrder = async () => {
                           <button
                             type="button"
                             onClick={() => {
-                              console.log('🚫 Cancel clicked');
                               setShowAddressForm(false);
                               setEditingAddressId(null);
                               setAddressForm(getEmptyAddressForm());
