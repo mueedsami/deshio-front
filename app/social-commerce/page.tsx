@@ -33,45 +33,60 @@ interface CartProduct {
   defectId?: string;
 }
 
+// Pathao types
+interface PathaoCity {
+  city_id: number;
+  city_name: string;
+}
+interface PathaoZone {
+  zone_id: number;
+  zone_name: string;
+}
+interface PathaoArea {
+  area_id: number;
+  area_name: string;
+}
+
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [allProducts, setAllProducts] = useState<any[]>([]);
   const [batches, setBatches] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
-  
+
   const [date, setDate] = useState(getTodayDate());
   const [salesBy, setSalesBy] = useState('');
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
   const [socialId, setSocialId] = useState('');
-  
+
   const [isInternational, setIsInternational] = useState(false);
-  
-  const [division, setDivision] = useState('');
-  const [district, setDistrict] = useState('');
-  const [city, setCity] = useState('');
-  const [zone, setZone] = useState('');
-  const [area, setArea] = useState('');
+
+  // ✅ Domestic (Pathao)
+  const [pathaoCities, setPathaoCities] = useState<PathaoCity[]>([]);
+  const [pathaoZones, setPathaoZones] = useState<PathaoZone[]>([]);
+  const [pathaoAreas, setPathaoAreas] = useState<PathaoArea[]>([]);
+
+  const [pathaoCityId, setPathaoCityId] = useState<string>('');
+  const [pathaoZoneId, setPathaoZoneId] = useState<string>('');
+  const [pathaoAreaId, setPathaoAreaId] = useState<string>('');
+
+  const [streetAddress, setStreetAddress] = useState('');
   const [postalCode, setPostalCode] = useState('');
-  
+
+  // ✅ International
   const [country, setCountry] = useState('');
   const [state, setState] = useState('');
   const [internationalCity, setInternationalCity] = useState('');
   const [internationalPostalCode, setInternationalPostalCode] = useState('');
-  
   const [deliveryAddress, setDeliveryAddress] = useState('');
-
-  const [divisions, setDivisions] = useState<any[]>([]);
-  const [districts, setDistricts] = useState<any[]>([]);
-  const [upazillas, setUpazillas] = useState<any[]>([]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [cart, setCart] = useState<CartProduct[]>([]);
-  
+
   const [quantity, setQuantity] = useState('');
   const [discountPercent, setDiscountPercent] = useState('');
   const [discountTk, setDiscountTk] = useState('');
@@ -80,6 +95,12 @@ export default function SocialCommercePage() {
   const [defectiveProduct, setDefectiveProduct] = useState<DefectItem | null>(null);
   const [selectedStore, setSelectedStore] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // 🧑‍💼 Existing customer + last order summary states
+  const [existingCustomer, setExistingCustomer] = useState<any | null>(null);
+  const [lastOrderInfo, setLastOrderInfo] = useState<any | null>(null);
+  const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
+  const [customerCheckError, setCustomerCheckError] = useState<string | null>(null);
 
   function getTodayDate() {
     const today = new Date();
@@ -102,35 +123,35 @@ export default function SocialCommercePage() {
 
   const getImageUrl = (imagePath: string | null | undefined): string => {
     if (!imagePath) return '/placeholder-image.jpg';
-    
+
     if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
       return imagePath;
     }
-    
+
     const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || '';
-    
+
     if (imagePath.startsWith('/storage')) {
       return `${baseUrl}${imagePath}`;
     }
-    
+
     return `${baseUrl}/storage/product-images/${imagePath}`;
   };
 
   const fetchPrimaryImage = async (productId: number): Promise<string> => {
     try {
       const images = await productImageService.getProductImages(productId);
-      
-      const primaryImage = images.find(img => img.is_primary && img.is_active);
-      
+
+      const primaryImage = images.find((img: any) => img.is_primary && img.is_active);
+
       if (primaryImage) {
         return getImageUrl(primaryImage.image_url || primaryImage.image_path);
       }
-      
-      const firstActiveImage = images.find(img => img.is_active);
+
+      const firstActiveImage = images.find((img: any) => img.is_active);
       if (firstActiveImage) {
         return getImageUrl(firstActiveImage.image_url || firstActiveImage.image_path);
       }
-      
+
       return '/placeholder-image.jpg';
     } catch (error) {
       console.error('Error fetching product images:', error);
@@ -141,15 +162,18 @@ export default function SocialCommercePage() {
   const fetchStores = async () => {
     try {
       const response = await storeService.getStores({ is_active: true, per_page: 1000 });
-      let storesData = [];
-      
+      let storesData: any[] = [];
+
       if (response?.success && response?.data) {
-        storesData = Array.isArray(response.data) ? response.data : 
-                     Array.isArray(response.data.data) ? response.data.data : [];
-      } else if (Array.isArray(response.data)) {
-        storesData = response.data;
+        storesData = Array.isArray(response.data)
+          ? response.data
+          : Array.isArray(response.data.data)
+          ? response.data.data
+          : [];
+      } else if (Array.isArray((response as any)?.data)) {
+        storesData = (response as any).data;
       }
-      
+
       setStores(storesData);
       if (storesData.length > 0) {
         setSelectedStore(String(storesData[0].id));
@@ -163,15 +187,18 @@ export default function SocialCommercePage() {
   const fetchProducts = async () => {
     try {
       const response = await axios.get('/products', { params: { per_page: 1000 } });
-      let productsData = [];
-      
+      let productsData: any[] = [];
+
       if (response.data?.success && response.data?.data) {
-        productsData = Array.isArray(response.data.data) ? response.data.data : 
-                      Array.isArray(response.data.data.data) ? response.data.data.data : [];
+        productsData = Array.isArray(response.data.data)
+          ? response.data.data
+          : Array.isArray(response.data.data.data)
+          ? response.data.data.data
+          : [];
       } else if (Array.isArray(response.data)) {
         productsData = response.data;
       }
-      
+
       setAllProducts(productsData);
     } catch (error) {
       console.error('Error fetching products:', error);
@@ -181,17 +208,17 @@ export default function SocialCommercePage() {
 
   const fetchBatchesForStore = async (storeId: string) => {
     if (!storeId) return;
-    
+
     try {
       setIsLoadingData(true);
       console.log('📦 Fetching batches for store:', storeId);
-      
+
       try {
         const batchesData = await batchService.getAvailableBatches(parseInt(storeId));
         console.log('✅ Raw batches from getAvailableBatches:', batchesData);
-        
+
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(batch => batch.quantity > 0);
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setBatches(availableBatches);
           console.log('✅ Filtered available batches:', availableBatches.length);
           return;
@@ -199,16 +226,16 @@ export default function SocialCommercePage() {
       } catch (err) {
         console.warn('⚠️ getAvailableBatches failed, trying getBatchesArray...', err);
       }
-      
+
       try {
-        const batchesData = await batchService.getBatchesArray({ 
+        const batchesData = await batchService.getBatchesArray({
           store_id: parseInt(storeId),
-          status: 'available'
+          status: 'available',
         });
         console.log('✅ Raw batches from getBatchesArray:', batchesData);
-        
+
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(batch => batch.quantity > 0);
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setBatches(availableBatches);
           console.log('✅ Filtered available batches:', availableBatches.length);
           return;
@@ -216,13 +243,13 @@ export default function SocialCommercePage() {
       } catch (err) {
         console.warn('⚠️ getBatchesArray failed, trying getBatchesByStore...', err);
       }
-      
+
       try {
         const batchesData = await batchService.getBatchesByStore(parseInt(storeId));
         console.log('✅ Raw batches from getBatchesByStore:', batchesData);
-        
+
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(batch => batch.quantity > 0);
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setBatches(availableBatches);
           console.log('✅ Filtered available batches:', availableBatches.length);
           return;
@@ -230,10 +257,9 @@ export default function SocialCommercePage() {
       } catch (err) {
         console.error('⚠️ All batch fetch methods failed', err);
       }
-      
+
       setBatches([]);
       console.log('⚠️ No batches found for store:', storeId);
-      
     } catch (error: any) {
       console.error('❌ Batch fetch error:', error);
       setBatches([]);
@@ -242,19 +268,53 @@ export default function SocialCommercePage() {
     }
   };
 
+  // ✅ Pathao lookup
+  const fetchPathaoCities = async () => {
+    try {
+      const res = await axios.get('/shipments/pathao/cities');
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoCities(data);
+    } catch (err) {
+      console.error('Failed to load Pathao cities', err);
+      setPathaoCities([]);
+    }
+  };
+
+  const fetchPathaoZones = async (cityId: number) => {
+    try {
+      const res = await axios.get(`/shipments/pathao/zones/${cityId}`);
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoZones(data);
+    } catch (err) {
+      console.error('Failed to load Pathao zones', err);
+      setPathaoZones([]);
+    }
+  };
+
+  const fetchPathaoAreas = async (zoneId: number) => {
+    try {
+      const res = await axios.get(`/shipments/pathao/areas/${zoneId}`);
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoAreas(data);
+    } catch (err) {
+      console.error('Failed to load Pathao areas', err);
+      setPathaoAreas([]);
+    }
+  };
+
   const performLocalSearch = async (query: string) => {
     const results: any[] = [];
     const queryLower = query.toLowerCase().trim();
-    
+
     console.log('🔍 Local search for:', queryLower);
 
     for (const prod of allProducts) {
       const productName = (prod.name || '').toLowerCase();
       const productSku = (prod.sku || '').toLowerCase();
-      
+
       let matches = false;
       let relevanceScore = 0;
-      
+
       if (productName === queryLower || productSku === queryLower) {
         relevanceScore = 100;
         matches = true;
@@ -265,9 +325,9 @@ export default function SocialCommercePage() {
         relevanceScore = 60;
         matches = true;
       }
-      
+
       if (matches) {
-        const productBatches = batches.filter(batch => {
+        const productBatches = batches.filter((batch: any) => {
           const batchProductId = batch.product?.id || batch.product_id;
           return batchProductId === prod.id && batch.quantity > 0;
         });
@@ -282,21 +342,21 @@ export default function SocialCommercePage() {
               sku: prod.sku,
               batchId: batch.id,
               batchNumber: batch.batch_number,
-              attributes: { 
-                Price: Number(String(batch.sell_price ?? "0").replace(/[^0-9.-]/g, "")),
-                mainImage: imageUrl
+              attributes: {
+                Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
+                mainImage: imageUrl,
               },
               available: batch.quantity,
               expiryDate: batch.expiry_date,
               daysUntilExpiry: batch.days_until_expiry,
               relevance_score: relevanceScore,
-              search_stage: 'local'
+              search_stage: 'local',
             });
           }
         }
       }
     }
-    
+
     results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
     return results;
   };
@@ -308,29 +368,82 @@ export default function SocialCommercePage() {
     return Math.max(0, baseAmount - totalDiscount);
   };
 
+  // 🔍 Helper: check if customer exists + get last order
+  const handlePhoneBlur = async () => {
+    const phone = userPhone.trim();
+    if (!phone) {
+      setExistingCustomer(null);
+      setLastOrderInfo(null);
+      setCustomerCheckError(null);
+      return;
+    }
+
+    try {
+      setIsCheckingCustomer(true);
+      setCustomerCheckError(null);
+
+      const response = await axios.get('/customers/by-phone', {
+        params: { phone },
+      });
+
+      if (response.data?.success && response.data?.data) {
+        const customer = response.data.data;
+        setExistingCustomer(customer);
+
+        // Auto-fill name/email if empty
+        if (!userName && customer.name) setUserName(customer.name);
+        if (!userEmail && customer.email) setUserEmail(customer.email);
+
+        // Fetch last order summary
+        try {
+          const lastOrderRes = await axios.get(`/customers/${customer.id}/last-order-summary`);
+          if (lastOrderRes.data?.success) {
+            setLastOrderInfo(lastOrderRes.data.data);
+          } else {
+            setLastOrderInfo(null);
+          }
+        } catch (err) {
+          console.warn('Failed to load last order summary', err);
+          setLastOrderInfo(null);
+        }
+      } else {
+        // No existing customer
+        setExistingCustomer(null);
+        setLastOrderInfo(null);
+      }
+    } catch (err) {
+      console.error('Customer lookup failed', err);
+      setExistingCustomer(null);
+      setLastOrderInfo(null);
+      setCustomerCheckError('Could not check existing customer. Please try again.');
+    } finally {
+      setIsCheckingCustomer(false);
+    }
+  };
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const defectId = urlParams.get('defect');
-    
+
     if (defectId) {
       console.log('🔍 DEFECT ID IN URL:', defectId);
-      
+
       const defectData = sessionStorage.getItem('defectItem');
       console.log('📦 Checking sessionStorage:', defectData);
-      
+
       if (defectData) {
         try {
           const defect = JSON.parse(defectData);
           console.log('✅ Loaded defect from sessionStorage:', defect);
-          
+
           if (!defect.batchId) {
             console.error('❌ Missing batch_id in defect data');
             showToast('Error: Defect item is missing batch information', 'error');
             return;
           }
-          
+
           setDefectiveProduct(defect);
-          
+
           const defectCartItem: CartProduct = {
             id: Date.now(),
             product_id: defect.productId,
@@ -341,9 +454,9 @@ export default function SocialCommercePage() {
             discount_amount: 0,
             amount: defect.sellingPrice || 0,
             isDefective: true,
-            defectId: defect.id
+            defectId: defect.id,
           };
-          
+
           setCart([defectCartItem]);
           showToast(`Defective item added to cart: ${defect.productName}`, 'success');
           sessionStorage.removeItem('defectItem');
@@ -361,7 +474,7 @@ export default function SocialCommercePage() {
   useEffect(() => {
     const userName = localStorage.getItem('userName') || '';
     setSalesBy(userName);
-    
+
     const loadInitialData = async () => {
       await Promise.all([fetchProducts(), fetchStores()]);
     };
@@ -374,12 +487,54 @@ export default function SocialCommercePage() {
     }
   }, [selectedStore]);
 
+  // ✅ Load Pathao cities when domestic
+  useEffect(() => {
+    if (!isInternational) {
+      fetchPathaoCities();
+    } else {
+      // reset domestic fields if switching to international
+      setPathaoCityId('');
+      setPathaoZoneId('');
+      setPathaoAreaId('');
+      setPathaoZones([]);
+      setPathaoAreas([]);
+    }
+  }, [isInternational]);
+
+  // ✅ Fetch zones when city changes
+  useEffect(() => {
+    if (isInternational) return;
+    if (!pathaoCityId) {
+      setPathaoZoneId('');
+      setPathaoAreaId('');
+      setPathaoZones([]);
+      setPathaoAreas([]);
+      return;
+    }
+    fetchPathaoZones(Number(pathaoCityId));
+    setPathaoZoneId('');
+    setPathaoAreaId('');
+    setPathaoAreas([]);
+  }, [pathaoCityId, isInternational]);
+
+  // ✅ Fetch areas when zone changes
+  useEffect(() => {
+    if (isInternational) return;
+    if (!pathaoZoneId) {
+      setPathaoAreaId('');
+      setPathaoAreas([]);
+      return;
+    }
+    fetchPathaoAreas(Number(pathaoZoneId));
+    setPathaoAreaId('');
+  }, [pathaoZoneId, isInternational]);
+
   useEffect(() => {
     if (!searchQuery.trim() || !Array.isArray(batches)) {
       setSearchResults([]);
       return;
     }
-    
+
     if (batches.length === 0) {
       console.log('⚠️ No batches available to search');
       return;
@@ -393,19 +548,20 @@ export default function SocialCommercePage() {
           enable_fuzzy: true,
           fuzzy_threshold: 60,
           search_fields: ['name', 'sku', 'description', 'category'],
-          per_page: 50
+          per_page: 50,
         });
 
         if (response.data?.success) {
-          const products = response.data.data?.items || 
-                          response.data.data?.data?.items ||
-                          response.data.data || 
-                          [];
-          
+          const products =
+            response.data.data?.items ||
+            response.data.data?.data?.items ||
+            response.data.data ||
+            [];
+
           const results: any[] = [];
 
           for (const prod of products) {
-            const productBatches = batches.filter(batch => {
+            const productBatches = batches.filter((batch: any) => {
               const batchProductId = batch.product?.id || batch.product_id;
               return batchProductId === prod.id && batch.quantity > 0;
             });
@@ -420,15 +576,15 @@ export default function SocialCommercePage() {
                   sku: prod.sku,
                   batchId: batch.id,
                   batchNumber: batch.batch_number,
-                  attributes: { 
-                    Price: Number(String(batch.sell_price ?? "0").replace(/[^0-9.-]/g, "")),
-                    mainImage: imageUrl
+                  attributes: {
+                    Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
+                    mainImage: imageUrl,
                   },
                   available: batch.quantity,
                   expiryDate: batch.expiry_date,
                   daysUntilExpiry: batch.days_until_expiry,
                   relevance_score: prod.relevance_score || 0,
-                  search_stage: prod.search_stage || 'api'
+                  search_stage: prod.search_stage || 'api',
                 });
               }
             }
@@ -436,7 +592,7 @@ export default function SocialCommercePage() {
 
           results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
           setSearchResults(results);
-          
+
           if (results.length === 0 && products.length > 0) {
             showToast('Products found but not available in selected store', 'error');
           }
@@ -447,7 +603,7 @@ export default function SocialCommercePage() {
         console.warn('❌ API search failed, using local search');
         const localResults = await performLocalSearch(searchQuery);
         setSearchResults(localResults);
-        
+
         if (localResults.length === 0) {
           showToast('No products found', 'error');
         }
@@ -458,43 +614,12 @@ export default function SocialCommercePage() {
   }, [searchQuery, batches, allProducts]);
 
   useEffect(() => {
-    if (!isInternational) {
-      fetch('https://bdapi.vercel.app/api/v.1/division')
-        .then(res => res.json())
-        .then(data => setDivisions(data.data || []))
-        .catch(() => setDivisions([]));
-    }
-  }, [isInternational]);
-
-  useEffect(() => {
-    if (!division || isInternational) return;
-    const selectedDiv = divisions.find(d => d.name === division);
-    if (selectedDiv) {
-      fetch(`https://bdapi.vercel.app/api/v.1/district/${selectedDiv.id}`)
-        .then(res => res.json())
-        .then(data => setDistricts(data.data || []))
-        .catch(() => setDistricts([]));
-    }
-  }, [division, divisions, isInternational]);
-
-  useEffect(() => {
-    if (!district || isInternational) return;
-    const selectedDist = districts.find(d => d.name === district);
-    if (selectedDist) {
-      fetch(`https://bdapi.vercel.app/api/v.1/upazilla/${selectedDist.id}`)
-        .then(res => res.json())
-        .then(data => setUpazillas(data.data || []))
-        .catch(() => setUpazillas([]));
-    }
-  }, [district, districts, isInternational]);
-
-  useEffect(() => {
     if (selectedProduct && quantity) {
       const price = parseFloat(String(selectedProduct.attributes?.Price || 0));
       const qty = parseFloat(quantity) || 0;
       const discPer = parseFloat(discountPercent) || 0;
       const discTk = parseFloat(discountTk) || 0;
-      
+
       const finalAmount = calculateAmount(price, qty, discPer, discTk);
       setAmount(finalAmount.toFixed(2));
     } else {
@@ -517,16 +642,16 @@ export default function SocialCommercePage() {
       return;
     }
 
-    const price = Number(String(selectedProduct.attributes?.Price ?? "0").replace(/[^0-9.-]/g, ""));
+    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
     const qty = parseInt(quantity);
     const discPer = parseFloat(discountPercent) || 0;
     const discTk = parseFloat(discountTk) || 0;
-    
+
     if (qty > selectedProduct.available && !selectedProduct.isDefective) {
       alert(`Only ${selectedProduct.available} units available for this batch`);
       return;
     }
-    
+
     const baseAmount = price * qty;
     const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
     const finalAmount = baseAmount - discountValue;
@@ -541,15 +666,15 @@ export default function SocialCommercePage() {
       discount_amount: discountValue,
       amount: finalAmount,
       isDefective: selectedProduct.isDefective,
-      defectId: selectedProduct.defectId
+      defectId: selectedProduct.defectId,
     };
-    
+
     console.log('✅ Adding to cart:', {
       product_id: newItem.product_id,
       batch_id: newItem.batch_id,
-      isDefective: newItem.isDefective
+      isDefective: newItem.isDefective,
     });
-    
+
     setCart([...cart, newItem]);
     setSelectedProduct(null);
     setQuantity('');
@@ -559,7 +684,7 @@ export default function SocialCommercePage() {
   };
 
   const removeFromCart = (id: number | string) => {
-    setCart(cart.filter(item => item.id !== id));
+    setCart(cart.filter((item) => item.id !== id));
   };
 
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
@@ -577,21 +702,65 @@ export default function SocialCommercePage() {
       alert('Please select a store');
       return;
     }
-    
+
+    // ✅ Always delivery validation
     if (isInternational) {
-      if (!country || !internationalCity) {
+      if (!country || !internationalCity || !deliveryAddress) {
         alert('Please fill in international address');
         return;
       }
     } else {
-      if (!division || !district || !city) {
-        alert('Please fill in delivery address');
+      if (!pathaoCityId || !pathaoZoneId || !pathaoAreaId || !streetAddress) {
+        alert('Please select City/Zone/Area and enter Street Address');
         return;
       }
     }
-    
+
+    // ⚠️ Duplicate protection: warn if there is an order today already
+    if (lastOrderInfo && lastOrderInfo.date) {
+      const lastDate = new Date(lastOrderInfo.date);
+      const now = new Date();
+      const sameDay = lastDate.toDateString() === now.toDateString();
+
+      if (sameDay) {
+        const summaryText = lastOrderInfo.summary_text || '';
+        const confirmMsg = `This customer already has an order today.\n\nLast order: ${lastDate.toLocaleString()}\n${
+          summaryText ? `Items: ${summaryText}\n` : ''
+        }\nDo you still want to place another order?`;
+
+        const proceed = window.confirm(confirmMsg);
+        if (!proceed) return;
+      }
+    }
+
     try {
       console.log('📦 CREATING SOCIAL COMMERCE ORDER');
+
+      const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+      const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+      const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+
+      const shipping_address = isInternational
+        ? {
+            name: userName,
+            phone: userPhone,
+            street: deliveryAddress,
+            city: internationalCity,
+            state: state || undefined,
+            country,
+            postal_code: internationalPostalCode || undefined,
+          }
+        : {
+            name: userName,
+            phone: userPhone,
+            street: streetAddress,
+            area: areaObj?.area_name || '',
+            city: cityObj?.city_name || '',
+            pathao_city_id: Number(pathaoCityId),
+            pathao_zone_id: Number(pathaoZoneId),
+            pathao_area_id: Number(pathaoAreaId),
+            postal_code: postalCode || undefined,
+          };
 
       const orderData = {
         order_type: 'social_commerce',
@@ -600,41 +769,37 @@ export default function SocialCommercePage() {
           name: userName,
           email: userEmail || undefined,
           phone: userPhone,
-          address: isInternational ? 
-            `${internationalCity}, ${state ? state + ', ' : ''}${country}` :
-            `${city}, ${district}, ${division}`
         },
-        items: cart.map(item => ({
+        shipping_address,
+        items: cart.map((item) => ({
           product_id: item.product_id,
           batch_id: item.batch_id,
           quantity: item.quantity,
           unit_price: item.unit_price,
-          discount_amount: item.discount_amount
+          discount_amount: item.discount_amount,
         })),
         shipping_amount: 0,
-        notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
+        notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`,
       };
-      
-      sessionStorage.setItem('pendingOrder', JSON.stringify({
-        ...orderData,
-        salesBy,
-        date,
-        isInternational,
-        deliveryAddress: isInternational ? {
-          country, state, city: internationalCity,
-          address: deliveryAddress, postalCode: internationalPostalCode
-        } : {
-          division, district, city, zone, area,
-          address: deliveryAddress, postalCode
-        },
-        subtotal,
-        defectiveItems: cart.filter(item => item.isDefective).map(item => ({
-          defectId: item.defectId,
-          price: item.unit_price,
-          productName: item.productName
-        }))
-      }));
-      
+
+      sessionStorage.setItem(
+        'pendingOrder',
+        JSON.stringify({
+          ...orderData,
+          salesBy,
+          date,
+          isInternational,
+          subtotal,
+          defectiveItems: cart
+            .filter((item) => item.isDefective)
+            .map((item) => ({
+              defectId: item.defectId,
+              price: item.unit_price,
+              productName: item.productName,
+            })),
+        })
+      );
+
       console.log('✅ Order data prepared, redirecting...');
       window.location.href = '/social-commerce/amount-details';
     } catch (error) {
@@ -647,15 +812,15 @@ export default function SocialCommercePage() {
     <div className={darkMode ? 'dark' : ''}>
       <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
-        
+
         <div className="flex-1 flex flex-col overflow-hidden">
           <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
-          
+
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <div className="max-w-7xl mx-auto">
               <div className="flex items-center justify-between mb-4 md:mb-6">
                 <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
-                
+
                 {defectiveProduct && (
                   <div className="flex items-center gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
                     <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
@@ -665,7 +830,7 @@ export default function SocialCommercePage() {
                   </div>
                 )}
               </div>
-              
+
               <div className="mb-4 md:mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3">
                 <div className="w-full sm:w-auto">
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Sales By</label>
@@ -677,7 +842,9 @@ export default function SocialCommercePage() {
                   />
                 </div>
                 <div className="w-full sm:w-auto">
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Date <span className="text-red-500">*</span></label>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Date <span className="text-red-500">*</span>
+                  </label>
                   <input
                     type="text"
                     value={date}
@@ -686,7 +853,9 @@ export default function SocialCommercePage() {
                   />
                 </div>
                 <div className="w-full sm:w-auto">
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Store <span className="text-red-500">*</span></label>
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Store <span className="text-red-500">*</span>
+                  </label>
                   <select
                     value={selectedStore}
                     onChange={(e) => setSelectedStore(e.target.value)}
@@ -694,12 +863,12 @@ export default function SocialCommercePage() {
                   >
                     <option value="">Select Store</option>
                     {stores.map((store) => (
-                      <option key={store.id} value={store.id}>{store.name}</option>
+                      <option key={store.id} value={store.id}>
+                        {store.name}
+                      </option>
                     ))}
                   </select>
-                  {selectedStore && isLoadingData && (
-                    <p className="mt-1 text-xs text-blue-600">Loading batches...</p>
-                  )}
+                  {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading batches...</p>}
                   {selectedStore && !isLoadingData && batches.length > 0 && (
                     <p className="mt-1 text-xs text-green-600">{batches.length} batches available</p>
                   )}
@@ -712,7 +881,7 @@ export default function SocialCommercePage() {
                   {/* Customer Information */}
                   <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-5">
                     <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-4">Customer Information</h3>
-                    
+
                     <div className="space-y-3">
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Name*</label>
@@ -743,10 +912,55 @@ export default function SocialCommercePage() {
                           placeholder="Phone Number"
                           value={userPhone}
                           onChange={(e) => setUserPhone(e.target.value)}
+                          onBlur={handlePhoneBlur}
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
                         />
+                        {isCheckingCustomer && (
+                          <p className="mt-1 text-xs text-blue-600 dark:text-blue-400">
+                            Checking existing customer & last order...
+                          </p>
+                        )}
+                        {customerCheckError && (
+                          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{customerCheckError}</p>
+                        )}
+                        {existingCustomer && (
+                          <div className="mt-2 p-2 rounded border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/60 text-xs text-gray-800 dark:text-gray-100">
+                            <div className="flex items-start gap-2">
+                              <AlertCircle className="w-4 h-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                              <div className="space-y-1">
+                                <p className="font-semibold">
+                                  Existing Customer: {existingCustomer.name}{' '}
+                                  {existingCustomer.customer_code ? `(${existingCustomer.customer_code})` : ''}
+                                </p>
+                                <p>
+                                  Total Orders: <span className="font-medium">{existingCustomer.total_orders ?? 0}</span>
+                                </p>
+                                {lastOrderInfo ? (
+                                  <div className="mt-1">
+                                    <p className="font-semibold">Last Order Summary:</p>
+                                    <p>
+                                      Date:{' '}
+                                      <span className="font-medium">
+                                        {lastOrderInfo.date ? new Date(lastOrderInfo.date).toLocaleString() : 'N/A'}
+                                      </span>
+                                    </p>
+                                    {lastOrderInfo.summary_text && (
+                                      <p>
+                                        Items: <span className="font-medium">{lastOrderInfo.summary_text}</span>
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <p className="mt-1 text-gray-600 dark:text-gray-300">
+                                    No previous orders found for this customer.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      
+
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Social ID</label>
                         <input
@@ -767,8 +981,21 @@ export default function SocialCommercePage() {
                       <button
                         onClick={() => {
                           setIsInternational(!isInternational);
-                          setDivision(''); setDistrict(''); setCity(''); setZone(''); setArea(''); setPostalCode('');
-                          setCountry(''); setState(''); setInternationalCity(''); setInternationalPostalCode('');
+
+                          // reset domestic
+                          setPathaoCityId('');
+                          setPathaoZoneId('');
+                          setPathaoAreaId('');
+                          setPathaoZones([]);
+                          setPathaoAreas([]);
+                          setStreetAddress('');
+                          setPostalCode('');
+
+                          // reset international
+                          setCountry('');
+                          setState('');
+                          setInternationalCity('');
+                          setInternationalPostalCode('');
                           setDeliveryAddress('');
                         }}
                         className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
@@ -781,72 +1008,136 @@ export default function SocialCommercePage() {
                         {isInternational ? 'International' : 'Domestic'}
                       </button>
                     </div>
-                    
+
                     {isInternational ? (
                       <div className="space-y-3">
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Country*</label>
-                          <input type="text" placeholder="Enter Country" value={country} onChange={(e) => setCountry(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Enter Country"
+                            value={country}
+                            onChange={(e) => setCountry(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">State/Province</label>
-                          <input type="text" placeholder="Enter State" value={state} onChange={(e) => setState(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Enter State"
+                            value={state}
+                            onChange={(e) => setState(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">City*</label>
-                          <input type="text" placeholder="Enter City" value={internationalCity} onChange={(e) => setInternationalCity(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Enter City"
+                            value={internationalCity}
+                            onChange={(e) => setInternationalCity(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
-                          <input type="text" placeholder="Enter Postal Code" value={internationalPostalCode} onChange={(e) => setInternationalPostalCode(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <input
+                            type="text"
+                            placeholder="Enter Postal Code"
+                            value={internationalPostalCode}
+                            onChange={(e) => setInternationalPostalCode(e.target.value)}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Street Address*</label>
-                          <textarea placeholder="Full Address" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} rows={3} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <textarea
+                            placeholder="Full Address"
+                            value={deliveryAddress}
+                            onChange={(e) => setDeliveryAddress(e.target.value)}
+                            rows={3}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                       </div>
                     ) : (
                       <div className="space-y-3">
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Division*</label>
-                            <select value={division} onChange={(e) => setDivision(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                              <option value="">Select Division</option>
-                              {divisions.map((d) => (<option key={d.id} value={d.name}>{d.name}</option>))}
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">City (Pathao)*</label>
+                            <select
+                              value={pathaoCityId}
+                              onChange={(e) => setPathaoCityId(e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            >
+                              <option value="">Select City</option>
+                              {pathaoCities.map((c) => (
+                                <option key={c.city_id} value={c.city_id}>
+                                  {c.city_name}
+                                </option>
+                              ))}
                             </select>
                           </div>
+
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">District*</label>
-                            <select value={district} onChange={(e) => setDistrict(e.target.value)} disabled={!division} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                              <option value="">Select District</option>
-                              {districts.map((d) => (<option key={d.id} value={d.name}>{d.name}</option>))}
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Zone (Pathao)*</label>
+                            <select
+                              value={pathaoZoneId}
+                              onChange={(e) => setPathaoZoneId(e.target.value)}
+                              disabled={!pathaoCityId}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                            >
+                              <option value="">Select Zone</option>
+                              {pathaoZones.map((z) => (
+                                <option key={z.zone_id} value={z.zone_id}>
+                                  {z.zone_name}
+                                </option>
+                              ))}
                             </select>
                           </div>
                         </div>
+
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Upazilla*</label>
-                            <select value={city} onChange={(e) => setCity(e.target.value)} disabled={!district} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                              <option value="">Select Upazilla</option>
-                              {upazillas.map((u) => (<option key={u.id} value={u.name}>{u.name}</option>))}
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Area (Pathao)*</label>
+                            <select
+                              value={pathaoAreaId}
+                              onChange={(e) => setPathaoAreaId(e.target.value)}
+                              disabled={!pathaoZoneId}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                            >
+                              <option value="">Select Area</option>
+                              {pathaoAreas.map((a) => (
+                                <option key={a.area_id} value={a.area_id}>
+                                  {a.area_name}
+                                </option>
+                              ))}
                             </select>
                           </div>
+
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Zone*</label>
-                            <input type="text" placeholder="Search Zone..." value={zone} onChange={(e) => setZone(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
+                            <input
+                              type="text"
+                              placeholder="e.g., 1212"
+                              value={postalCode}
+                              onChange={(e) => setPostalCode(e.target.value)}
+                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                            />
                           </div>
                         </div>
+
                         <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Area (Optional)</label>
-                          <input type="text" placeholder="Search Area..." value={area} onChange={(e) => setArea(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Delivery Address</label>
-                          <textarea placeholder="Delivery Address" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} rows={2} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
-                          <input type="text" placeholder="e.g., 1212" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400" />
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Street Address*</label>
+                          <textarea
+                            placeholder="House 12, Road 5, etc."
+                            value={streetAddress}
+                            onChange={(e) => setStreetAddress(e.target.value)}
+                            rows={2}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
                         </div>
                       </div>
                     )}
@@ -856,24 +1147,38 @@ export default function SocialCommercePage() {
                 {/* Right Column - Product Search & Cart */}
                 <div className="space-y-4 md:space-y-6">
                   {/* Product Search */}
-                  <div className={`bg-white dark:bg-gray-800 rounded-lg border p-4 md:p-5 ${selectedProduct?.isDefective ? 'border-orange-300 dark:border-orange-700' : 'border-gray-200 dark:border-gray-700'}`}>
+                  <div
+                    className={`bg-white dark:bg-gray-800 rounded-lg border p-4 md:p-5 ${
+                      selectedProduct?.isDefective
+                        ? 'border-orange-300 dark:border-orange-700'
+                        : 'border-gray-200 dark:border-gray-700'
+                    }`}
+                  >
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-sm font-medium text-gray-900 dark:text-white">Search Product</h3>
                       {selectedProduct?.isDefective && (
-                        <span className="px-2 py-1 bg-orange-500 text-white text-xs font-medium rounded">Defective Product</span>
+                        <span className="px-2 py-1 bg-orange-500 text-white text-xs font-medium rounded">
+                          Defective Product
+                        </span>
                       )}
                     </div>
-                    
+
                     <div className="flex gap-2 mb-4">
                       <input
                         type="text"
-                        placeholder={!selectedStore ? "Select a store first..." : isLoadingData ? "Loading batches..." : "Search product name..."}
+                        placeholder={
+                          !selectedStore
+                            ? 'Select a store first...'
+                            : isLoadingData
+                            ? 'Loading batches...'
+                            : 'Search product name...'
+                        }
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         disabled={!selectedStore || isLoadingData}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
-                      <button 
+                      <button
                         disabled={!selectedStore || isLoadingData}
                         className="px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
@@ -907,17 +1212,25 @@ export default function SocialCommercePage() {
                             onClick={() => handleProductSelect(product)}
                             className="border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                           >
-                            <img 
-                              src={product.attributes.mainImage} 
-                              alt={product.name} 
-                              className="w-full h-24 sm:h-32 object-cover rounded mb-2" 
+                            <img
+                              src={product.attributes.mainImage}
+                              alt={product.name}
+                              className="w-full h-24 sm:h-32 object-cover rounded mb-2"
                             />
-                            <p className="text-xs text-gray-900 dark:text-white font-medium truncate">{product.name}</p>
+                            <p className="text-xs text-gray-900 dark:text-white font-medium truncate">
+                              {product.name}
+                            </p>
                             {product.batchNumber && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400 truncate">Batch: {product.batchNumber}</p>
+                              <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
+                                Batch: {product.batchNumber}
+                              </p>
                             )}
-                            <p className="text-xs text-gray-600 dark:text-gray-400">{product.attributes.Price} Tk</p>
-                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">Available: {product.available}</p>
+                            <p className="text-xs text-gray-600 dark:text-gray-400">
+                              {product.attributes.Price} Tk
+                            </p>
+                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
+                              Available: {product.available}
+                            </p>
                             {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
                               <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
                                 Expires in {product.daysUntilExpiry} days
@@ -929,29 +1242,40 @@ export default function SocialCommercePage() {
                     )}
 
                     {selectedProduct && (
-                      <div className={`mt-4 p-3 border rounded mb-4 ${
-                        selectedProduct.isDefective 
-                          ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-300 dark:border-orange-700' 
-                          : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
-                      }`}>
+                      <div
+                        className={`mt-4 p-3 border rounded mb-4 ${
+                          selectedProduct.isDefective
+                            ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-300 dark:border-orange-700'
+                            : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                        }`}
+                      >
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-sm font-medium text-gray-900 dark:text-white">Selected Product</span>
-                          <button onClick={() => {
-                            setSelectedProduct(null);
-                            setQuantity('');
-                            setDiscountPercent('');
-                            setDiscountTk('');
-                            setAmount('0.00');
-                          }} className="text-red-600 hover:text-red-700">
+                          <button
+                            onClick={() => {
+                              setSelectedProduct(null);
+                              setQuantity('');
+                              setDiscountPercent('');
+                              setDiscountTk('');
+                              setAmount('0.00');
+                            }}
+                            className="text-red-600 hover:text-red-700"
+                          >
                             <X size={16} />
                           </button>
                         </div>
                         <p className="text-sm font-medium text-gray-900 dark:text-white">{selectedProduct.name}</p>
                         {selectedProduct.batchNumber && (
-                          <p className="text-sm text-blue-600 dark:text-blue-400">Batch: {selectedProduct.batchNumber}</p>
+                          <p className="text-sm text-blue-600 dark:text-blue-400">
+                            Batch: {selectedProduct.batchNumber}
+                          </p>
                         )}
-                        <p className="text-sm text-gray-600 dark:text-gray-400">Price: {selectedProduct.attributes.Price} Tk</p>
-                        <p className="text-sm text-green-600 dark:text-green-400">Available: {selectedProduct.available}</p>
+                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                          Price: {selectedProduct.attributes.Price} Tk
+                        </p>
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Available: {selectedProduct.available}
+                        </p>
                       </div>
                     )}
 
@@ -977,7 +1301,10 @@ export default function SocialCommercePage() {
                             type="number"
                             placeholder="0"
                             value={discountPercent}
-                            onChange={(e) => { setDiscountPercent(e.target.value); setDiscountTk(''); }}
+                            onChange={(e) => {
+                              setDiscountPercent(e.target.value);
+                              setDiscountTk('');
+                            }}
                             disabled={!selectedProduct || selectedProduct?.isDefective}
                             className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
                           />
@@ -988,7 +1315,10 @@ export default function SocialCommercePage() {
                             type="number"
                             placeholder="0"
                             value={discountTk}
-                            onChange={(e) => { setDiscountTk(e.target.value); setDiscountPercent(''); }}
+                            onChange={(e) => {
+                              setDiscountTk(e.target.value);
+                              setDiscountPercent('');
+                            }}
                             disabled={!selectedProduct || selectedProduct?.isDefective}
                             className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
                           />
@@ -1023,32 +1353,56 @@ export default function SocialCommercePage() {
                       <table className="w-full text-sm">
                         <thead className="bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-600 sticky top-0">
                           <tr>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Product</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Qty</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Price</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Amount</th>
-                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Action</th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Product
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Qty
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Price
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Amount
+                            </th>
+                            <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">
+                              Action
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
                           {cart.length === 0 ? (
-                            <tr><td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">No products in cart</td></tr>
+                            <tr>
+                              <td colSpan={5} className="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400">
+                                No products in cart
+                              </td>
+                            </tr>
                           ) : (
                             cart.map((item) => (
-                              <tr key={item.id} className={`border-b border-gray-200 dark:border-gray-700 ${
-                                item.isDefective ? 'bg-orange-50 dark:bg-orange-900/10' : ''
-                              }`}>
+                              <tr
+                                key={item.id}
+                                className={`border-b border-gray-200 dark:border-gray-700 ${
+                                  item.isDefective ? 'bg-orange-50 dark:bg-orange-900/10' : ''
+                                }`}
+                              >
                                 <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
                                   {item.productName}
                                   {item.isDefective && (
-                                    <span className="ml-2 px-2 py-0.5 bg-orange-500 text-white text-xs rounded">DEFECTIVE</span>
+                                    <span className="ml-2 px-2 py-0.5 bg-orange-500 text-white text-xs rounded">
+                                      DEFECTIVE
+                                    </span>
                                   )}
                                 </td>
                                 <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{item.quantity}</td>
                                 <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{item.unit_price.toFixed(2)}</td>
                                 <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">{item.amount.toFixed(2)}</td>
                                 <td className="px-3 py-2">
-                                  <button onClick={() => removeFromCart(item.id)} className="text-red-600 hover:text-red-700 text-xs font-medium">Remove</button>
+                                  <button
+                                    onClick={() => removeFromCart(item.id)}
+                                    className="text-red-600 hover:text-red-700 text-xs font-medium"
+                                  >
+                                    Remove
+                                  </button>
                                 </td>
                               </tr>
                             ))
@@ -1056,7 +1410,7 @@ export default function SocialCommercePage() {
                         </tbody>
                       </table>
                     </div>
-                    
+
                     {cart.length > 0 && (
                       <div className="p-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600">
                         <div className="flex justify-between text-sm mb-3">

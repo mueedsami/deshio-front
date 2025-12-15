@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const axiosInstance = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api',
+  baseURL: process.env.NEXT_PUBLIC_API_URL,
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json',
@@ -32,7 +32,7 @@ const isPublicRoute = (url?: string): boolean => {
 // Helper function to check if route is for customer (e-commerce)
 const isCustomerRoute = (url?: string): boolean => {
   if (!url) return false;
-  const customerPaths = ['/customer-auth', '/cart', '/wishlist', '/customer/'];
+  const customerPaths = ['/customer-auth', '/cart', '/wishlist', '/customer/', '/profile']; // ✅ add '/profile'
   return customerPaths.some(path => url.includes(path));
 };
 
@@ -138,7 +138,7 @@ axiosInstance.interceptors.response.use(
 
           // Try to refresh customer token
           const response = await axios.post(
-            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'}/customer-auth/refresh`,
+            `${process.env.NEXT_PUBLIC_API_URL}/customer-auth/refresh`,
             {},
             {
               headers: {

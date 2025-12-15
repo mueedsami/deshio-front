@@ -104,17 +104,44 @@ export const productService = {
       const response = await axiosInstance.get('/products', { params });
       const result = response.data;
 
-      if (result.success) {
-        const products = (result.data.data || result.data || []).map(transformProduct);
+      if (!result?.success) {
+        return { data: [], total: 0, current_page: 1, last_page: 1 };
+      }
+
+      // ✅ Support multiple backend response shapes:
+      // 1) { success, data: { products: [...], pagination: {...} } }
+      // 2) { success, data: { data: [...], total, current_page, last_page } } (Laravel paginator)
+      // 3) { success, data: [...] }
+      const dataRoot = result.data ?? {};
+
+      const rawList: any[] = Array.isArray(dataRoot.products)
+        ? dataRoot.products
+        : Array.isArray(dataRoot.data)
+          ? dataRoot.data
+          : Array.isArray(dataRoot)
+            ? dataRoot
+            : [];
+
+      const products = rawList.map(transformProduct);
+
+      // Pagination (new shape)
+      const pagination = dataRoot.pagination;
+      if (pagination) {
         return {
           data: products,
-          total: result.data.total || products.length,
-          current_page: result.data.current_page || 1,
-          last_page: result.data.last_page || 1,
+          total: pagination.total ?? products.length,
+          current_page: pagination.current_page ?? 1,
+          last_page: pagination.total_pages ?? 1,
         };
       }
 
-      return { data: [], total: 0, current_page: 1, last_page: 1 };
+      // Pagination (Laravel-like)
+      return {
+        data: products,
+        total: dataRoot.total ?? products.length,
+        current_page: dataRoot.current_page ?? 1,
+        last_page: dataRoot.last_page ?? 1,
+      };
     } catch (error: any) {
       console.error('Get products error:', error);
       return { data: [], total: 0, current_page: 1, last_page: 1 };

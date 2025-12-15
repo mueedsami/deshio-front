@@ -12,7 +12,7 @@
  */
 export async function updateAccounting() {
   try {
-    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/accounting`, {
+    const response = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL}/api/accounting`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });

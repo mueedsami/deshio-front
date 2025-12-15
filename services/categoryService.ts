@@ -105,7 +105,7 @@ class CategoryService {
 
   
 private normalizeCategory<T extends Category | CategoryTree>(category: T): T {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:8000';
+  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
 
   if (category.image_url && !category.image_url.startsWith('http')) {
     // Simply prepend base URL - no need to replace anything

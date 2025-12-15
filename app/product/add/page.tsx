@@ -282,10 +282,10 @@ export default function AddEditProductPage({
       return false;
     }
 
-    if (!selectedVendorId) {
-      setToast({ message: 'Please select a vendor', type: 'error' });
-      return false;
-    }
+    // if (!selectedVendorId) {
+    //   setToast({ message: 'Please select a vendor', type: 'error' });
+    //   return false;
+    // }
 
     if (!isEditMode && hasVariations && variations.length > 0) {
       const hasValidVariation = variations.some(v => v.color.trim());
@@ -695,7 +695,8 @@ export default function AddEditProductPage({
                             value={formData.sku}
                             onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
                             placeholder="e.g., PROD-001"
-                            disabled={isEditMode || addVariationMode}
+                            // disabled={isEditMode || addVariationMode}
+                            disabled={addVariationMode}
                             className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
                           />
                           {(isEditMode || addVariationMode) && (

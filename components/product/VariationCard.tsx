@@ -1,5 +1,27 @@
 import { Trash2, Plus, X } from 'lucide-react';
 
+// Clothing + Footwear sizes (EU 38–43 with US mapping in label)
+const SIZE_OPTIONS = [
+  // Apparel
+  'XXS',
+  'XS',
+  'S',
+  'M',
+  'L',
+  'XL',
+  'XXL',
+  'XXXL',
+
+  // Footwear (EU 38–43)
+  'EU 38 (US 6)',
+  'EU 39 (US 7)',
+  'EU 40 (US 7.5)',
+  'EU 41 (US 8.5)',
+  'EU 42 (US 9)',
+  'EU 43 (US 10)',
+];
+
+
 interface VariationData {
   id: string;
   color: string;
@@ -145,7 +167,7 @@ export default function VariationCard({
                     className="flex-1 px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:bg-gray-800 dark:text-white"
                   >
                     <option value="">Select</option>
-                    {['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'].map((s) => (
+                    {SIZE_OPTIONS.map((s) => (
                       <option key={s} value={s}>
                         {s}
                       </option>

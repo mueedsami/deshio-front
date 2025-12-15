@@ -40,7 +40,7 @@ export interface OrderSummary {
 }
 
 export interface CreateOrderRequest {
-  payment_method: 'cash' | 'card' | 'bank_transfer' | 'digital_wallet' | 'cod';
+  payment_method: string; // Changed to string to accept any payment method code
   shipping_address_id: number;
   billing_address_id?: number;
   notes?: string;
@@ -76,15 +76,25 @@ export interface Order {
   };
 }
 
+// ✅ FIXED: Match actual backend PaymentMethod model
 export interface PaymentMethod {
-  id: string;
+  id: number;
+  code: string;
   name: string;
-  description: string;
-  icon?: string;
-  fee: number;
-  is_online: boolean;
+  description: string | null;
+  type: 'cash' | 'card' | 'bank_transfer' | 'online_banking' | 'mobile_banking' | 'digital_wallet' | 'other';
+  allowed_customer_types: string[];
   is_active: boolean;
-  customer_types?: string[];
+  requires_reference: boolean;
+  supports_partial: boolean;
+  min_amount: number | null;
+  max_amount: number | null;
+  processor: string | null;
+  processor_config: any;
+  icon: string | null;
+  fixed_fee: number;
+  percentage_fee: number;
+  sort_order: number;
 }
 
 export interface TrackingStep {
@@ -168,6 +178,23 @@ class CheckoutService {
   }
 
   /**
+   * Check if payment method is online/requires gateway
+   */
+  isOnlinePaymentMethod(paymentMethod: PaymentMethod): boolean {
+    // Online payment methods that require payment gateway
+    const onlineTypes = ['card', 'online_banking', 'mobile_banking', 'digital_wallet'];
+    const onlineProcessors = ['sslcommerz', 'stripe', 'paypal', 'bkash', 'nagad'];
+    
+    return (
+      onlineTypes.includes(paymentMethod.type) ||
+      (paymentMethod.processor && onlineProcessors.includes(paymentMethod.processor.toLowerCase())) ||
+      paymentMethod.code === 'sslcommerz' ||
+      paymentMethod.name.toLowerCase().includes('sslcommerz') ||
+      paymentMethod.name.toLowerCase().includes('online payment')
+    );
+  }
+
+  /**
    * ✅ FIXED: Create order from cart
    * POST /customer/orders/create-from-cart (matches backend route)
    */
@@ -185,15 +212,18 @@ class CheckoutService {
       status: string;
       status_description: string;
     };
+    payment_url?: string; // For SSLCommerz
+    transaction_id?: string; // For SSLCommerz
   }> {
     try {
       console.log('📦 Creating order from cart...');
       console.log('📋 Order data:', orderData);
       
-      // ✅ FIX: Correct route that matches backend
       const response = await axiosInstance.post<ApiResponse<{
         order: Order;
         order_summary: any;
+        payment_url?: string;
+        transaction_id?: string;
       }>>('/customer/orders/create-from-cart', orderData);
       
       console.log('✅ Order created successfully:', response.data);

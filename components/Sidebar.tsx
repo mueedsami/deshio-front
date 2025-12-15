@@ -14,6 +14,7 @@ import {
   X,
   AlertTriangle,
   Truck,
+  Search,
 } from 'lucide-react';
 import { useState } from 'react';
 // ──────────────────────────────
@@ -65,6 +66,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       subMenu: [
         { label: 'Field', href: '/product/field' },
         { label: 'Product List', href: '/product/list' },
+        { label: 'Archived Products', href: '/product/archived' },
         { label: 'Batch', href: '/product/batch' },
       ],
     },
@@ -86,9 +88,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'Pack Orders', href: '/social-commerce/package' },
        ]
     },
+    {icon: Package, label: 'Preorders', href: '/pre-order' },
     {icon: Package, label: 'Orders', href: '/orders' },
     { icon: ClipboardList, label: 'Purchase History', href: '/purchase-history' },
-    { icon: AlertTriangle, label: 'Defect Panel', href: '/defects' },
+    { icon: Search, label: 'Lookup', href: '/lookup' },
+    { icon: AlertTriangle, label: 'Extra Panel', href: '/extra' },
     { icon: CreditCard, label: 'Transaction', href: '/transaction' },
     { icon: CreditCard, label: 'Accounting', href: '/accounting' },
     
