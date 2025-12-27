@@ -3,92 +3,551 @@
 import React, { useState } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import CustomerTagManager from '@/components/customers/CustomerTagManager';
+
 import customerService, { Customer, CustomerOrder } from '@/services/customerService';
 import orderService from '@/services/orderService';
+import batchService, { Batch } from '@/services/batchService';
+import barcodeTrackingService from '@/services/barcodeTrackingService';
+import barcodeOrderMapper from '@/services/barcodeOrderMapper';
+import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 
-export default function CustomerLookup() {
+type LookupTab = 'customer' | 'order' | 'barcode' | 'batch';
+
+type BarcodeHistoryItem = {
+  id: number;
+  date: string;
+  from_store?: string | null;
+  to_store?: string | null;
+  movement_type?: string | null;
+  status_before?: string | null;
+  status_after?: string | null;
+  reference_type?: string | null;
+  reference_id?: number | string | null;
+  performed_by?: string | null;
+  notes?: string | null;
+
+  order_id?: number | string | null;
+  order_number?: string | null;
+  customer?: any;
+  metadata?: any;
+  meta?: any;
+};
+
+type BarcodeHistoryData = {
+  barcode: string;
+  product: { id: number; name: string; sku: string | null };
+  current_location: any; // backend-dependent
+  total_movements: number;
+  history: BarcodeHistoryItem[];
+};
+
+type BatchLookupData = {
+  batch: {
+    id: number;
+    batch_number: string;
+    product: { id: number; name: string; sku: string | null };
+    original_quantity: number;
+    // some backends may include pricing:
+    cost_price?: string | number | null;
+    selling_price?: string | number | null;
+  };
+  summary: {
+    total_units: number;
+    active: number;
+    available_for_sale: number;
+    sold: number;
+    defective: number;
+  };
+  status_breakdown: Array<{ status: string; count: number }>;
+  store_distribution: Array<{ store_id: number | null; store_name: string; count: number }>;
+  filters: { status?: string; store_id?: number; available_only?: boolean };
+  barcodes: Array<{
+    id: number;
+    barcode: string;
+    current_store: { id: number; name: string } | null;
+    current_status: string;
+    status_label: string;
+    is_active: boolean;
+    is_defective: boolean;
+    is_available_for_sale: boolean;
+    location_updated_at: string;
+
+    // optional fields your backend may have:
+    metadata?: any;
+    meta?: any;
+  }>;
+};
+
+export default function LookupPage() {
+  // Layout
   const [darkMode, setDarkMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<'customer' | 'order'>('customer');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // Tabs
+  const [activeTab, setActiveTab] = useState<LookupTab>('customer');
+
+  // Shared UI
+  const [error, setError] = useState('');
+
+  // =========================
+  // CUSTOMER LOOKUP
+  // =========================
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [orderNumber, setOrderNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [orders, setOrders] = useState<CustomerOrder[]>([]);
-  const [singleOrder, setSingleOrder] = useState<CustomerOrder | null>(null);
-  const [error, setError] = useState('');
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [suggestions, setSuggestions] = useState<Customer[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
+
+  // ======================
+  // ORDER LOOKUP
+  // ======================
+  const [orderNumber, setOrderNumber] = useState('');
+  const [singleOrder, setSingleOrder] = useState<CustomerOrder | null>(null);
   const [orderSuggestions, setOrderSuggestions] = useState<CustomerOrder[]>([]);
   const [showOrderSuggestions, setShowOrderSuggestions] = useState(false);
   const [orderSearchLoading, setOrderSearchLoading] = useState(false);
 
-  const formatPhoneNumber = (phone: string) => {
-    // Remove all non-numeric characters
-    return phone.replace(/\D/g, '');
+  // ======================
+  // BARCODE LOOKUP
+  // ======================
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const [barcodeLoading, setBarcodeLoading] = useState(false);
+  const [barcodeData, setBarcodeData] = useState<BarcodeHistoryData | null>(null);
+
+  // Cache to resolve order/customer for barcode history + current_location
+  const [orderMetaCache, setOrderMetaCache] = useState<
+    Record<number, { order_number?: string; customer?: { name?: string; phone?: string } }>
+  >({});
+  const [orderMetaLoading, setOrderMetaLoading] = useState(false);
+
+  // ======================
+  // BATCH LOOKUP
+  // ======================
+  const [batchQuery, setBatchQuery] = useState('');
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchData, setBatchData] = useState<BatchLookupData | null>(null);
+
+  const [batchSuggestions, setBatchSuggestions] = useState<Batch[]>([]);
+  const [showBatchSuggestions, setShowBatchSuggestions] = useState(false);
+  const [batchSearchLoading, setBatchSearchLoading] = useState(false);
+  const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
+
+  // Batch → click barcode → show details + order info (modal)
+  const [batchBarcodeModalOpen, setBatchBarcodeModalOpen] = useState(false);
+  const [batchSelectedBarcode, setBatchSelectedBarcode] = useState<string | null>(null);
+  const [batchBarcodeLoading, setBatchBarcodeLoading] = useState(false);
+  const [batchBarcodeData, setBatchBarcodeData] = useState<BarcodeHistoryData | null>(null);
+  const [batchResolvedOrder, setBatchResolvedOrder] = useState<{
+    orderId?: number | null;
+    orderNumber?: string | null;
+    customer?: any;
+  } | null>(null);
+
+  // -----------------------
+  // Helpers
+  // -----------------------
+  const formatPhoneNumber = (phone: string) => phone.replace(/\D/g, '');
+
+  const safeNum = (v: any) => {
+    const n = typeof v === 'number' ? v : v != null ? parseFloat(String(v)) : NaN;
+    return Number.isFinite(n) ? n : 0;
   };
 
-  // Real-time search for suggestions
+  const formatCurrency = (amount: string | number) => {
+    const numAmount = safeNum(amount);
+    return new Intl.NumberFormat('en-BD', {
+      style: 'currency',
+      currency: 'BDT',
+      minimumFractionDigits: 0,
+    }).format(numAmount);
+  };
+
+  const formatDate = (dateString: string) => {
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return dateString;
+    }
+  };
+
+  const formatOrderType = (order: CustomerOrder) => {
+    if ((order as any).order_type_label) return (order as any).order_type_label;
+    if (order.order_type) {
+      return order.order_type
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+    }
+    return 'N/A';
+  };
+
+  const getStatusBadge = (status?: string | null) => {
+    if (!status) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-300">
+          Unknown
+        </span>
+      );
+    }
+
+    const statusConfig: { [key: string]: { bg: string; text: string } } = {
+      paid: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-800 dark:text-green-300' },
+      partial: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-800 dark:text-yellow-300' },
+      partially_paid: { bg: 'bg-yellow-100 dark:bg-yellow-900/30', text: 'text-yellow-800 dark:text-yellow-300' },
+      pending: { bg: 'bg-orange-100 dark:bg-orange-900/30', text: 'text-orange-800 dark:text-orange-300' },
+      failed: { bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-800 dark:text-red-300' },
+      completed: { bg: 'bg-green-100 dark:bg-green-900/30', text: 'text-green-800 dark:text-green-300' },
+    };
+
+    const key = status.toLowerCase();
+    const config = statusConfig[key] || statusConfig['pending'];
+
+    return (
+      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${config.bg} ${config.text}`}>
+        {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
+      </span>
+    );
+  };
+
+  const toggleOrderDetails = (orderId: number) => {
+    setExpandedOrderId(expandedOrderId === orderId ? null : orderId);
+  };
+
+  // ---------- Order + Barcode linking helpers ----------
+  const isOrderRef = (refType?: string | null) => (refType || '').toLowerCase().includes('order');
+
+  const isSoldLike = (h: any) => {
+    const t = String(h?.movement_type || '').toLowerCase();
+    const after = String(h?.status_after || '').toLowerCase();
+    return (
+      t.includes('sold') ||
+      t.includes('sale') ||
+      t.includes('sell') ||
+      t.includes('fulfilled') ||
+      t.includes('dispatch') ||
+      t.includes('delivered') ||
+      after.includes('sold')
+    );
+  };
+
+  const readMeta = (x: any) => x?.metadata ?? x?.meta ?? {};
+
+  const extractOrderIdLoose = (x: any): number | null => {
+    const meta = readMeta(x);
+    const raw = meta.order_id ?? x?.order_id ?? (isOrderRef(x?.reference_type) ? x?.reference_id : null);
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
+
+  const extractOrderNumberLoose = (x: any): string | null => {
+    const meta = readMeta(x);
+    const v = x?.order_number ?? meta?.order_number ?? meta?.orderNo ?? meta?.order ?? null;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  };
+
+  const extractSoldViaLoose = (x: any): string | null => {
+    const meta = readMeta(x);
+    const v = meta?.sold_via ?? meta?.soldVia ?? null;
+    return typeof v === 'string' && v.trim() ? v.trim() : null;
+  };
+
+  const normalizeStatusKey = (s: any) =>
+    String(s || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '_');
+
+  const statusLabelFromKey = (key: string) => {
+    const k = normalizeStatusKey(key);
+    const map: Record<string, string> = {
+      sold: 'Sold',
+      in_warehouse: 'In Warehouse',
+      inwarehouse: 'In Warehouse',
+      warehouse: 'In Warehouse',
+      available: 'Available',
+      available_for_sale: 'Available',
+      defective: 'Defective',
+      inactive: 'Inactive',
+      returned: 'Returned',
+      exchanged: 'Exchanged',
+    };
+    return map[k] || (key ? String(key) : 'Unknown Status');
+  };
+
+  const isSoldFromCurrentLocation = (loc: any, history?: any[]) => {
+    const key = normalizeStatusKey(loc?.current_status ?? loc?.status ?? loc?.status_key ?? loc?.status_label);
+    if (key === 'sold') return true;
+    const meta = readMeta(loc);
+    if (String(loc?.status_label || '').toLowerCase().includes('sold')) return true;
+    if (String(loc?.current_status || '').toLowerCase() === 'sold') return true;
+    if (extractSoldViaLoose(loc) === 'order') return true;
+    if (extractSoldViaLoose(loc) === 'pos') return true;
+    // sometimes sold means inactive + has sold meta
+    if (loc?.is_active === false && (meta?.order_number || meta?.order_id || meta?.sold_via)) {
+      // only treat as sold if meta hints order/pos
+      if (String(meta?.sold_via || '').toLowerCase().includes('order') || String(meta?.sold_via || '').toLowerCase().includes('pos')) {
+        return true;
+      }
+    }
+    // fallback: any history movement indicates sold
+    if (Array.isArray(history) && history.some((h) => isSoldLike(h))) return true;
+    return false;
+  };
+
+  const getCurrentStatusLabel = (loc: any, history?: any[]) => {
+    if (!loc) return 'Unknown Status';
+    // prefer sold detection
+    if (isSoldFromCurrentLocation(loc, history)) return 'Sold';
+
+    const label = loc?.status_label;
+    if (label) return String(label);
+
+    const key = loc?.current_status ?? loc?.status ?? loc?.status_key;
+    return statusLabelFromKey(String(key || 'Unknown Status'));
+  };
+
+  // ---------- Normalize backend Order -> CustomerOrder ----------
+  const normalizeOrderToCustomerOrder = (o: any): CustomerOrder => {
+    const items = Array.isArray(o?.items) ? o.items : [];
+    return {
+      id: o.id,
+      order_number: o.order_number,
+      order_date: o.order_date || o.created_at || new Date().toISOString(),
+      order_type: o.order_type || o.orderType || 'unknown',
+      order_type_label: o.order_type_label || o.orderTypeLabel || o.order_type || 'Unknown',
+      total_amount: String(o.total_amount ?? '0'),
+      paid_amount: String(o.paid_amount ?? '0'),
+      outstanding_amount: String(o.outstanding_amount ?? '0'),
+      payment_status: String(o.payment_status ?? 'pending'),
+      status: String(o.status ?? 'pending'),
+      store: o.store || { id: 0, name: '—' },
+      items: items.map((it: any) => {
+        const barcodes: string[] = Array.isArray(it.barcodes) ? it.barcodes : it.barcode ? [it.barcode] : [];
+        return {
+          id: it.id,
+          product_name: it.product_name,
+          product_sku: it.product_sku,
+          quantity: Number(it.quantity ?? 0),
+          unit_price: String(it.unit_price ?? '0'),
+          discount_amount: String(it.discount_amount ?? '0'),
+          total_amount: String(it.total_amount ?? '0'),
+          ...(barcodes.length ? { barcodes } : {}),
+        } as any;
+      }),
+      shipping_address: o.shipping_address,
+      notes: o.notes,
+    };
+  };
+
+  // -----------------------
+  // QZ single barcode print helper (reprint)
+  // -----------------------
+  const printSingleBarcodeLabel = async (params: { barcode: string; productName?: string; price?: string | number }) => {
+    try {
+      setError('');
+      await connectQZ();
+
+      const qz = (window as any)?.qz;
+      if (!qz) throw new Error('QZ Tray not available');
+
+      const printer = await getDefaultPrinter();
+      if (!printer) throw new Error('No default printer found. Set a default printer and try again.');
+
+      const config = qz.configs.create(printer);
+
+      const safeId = params.barcode.replace(/[^a-zA-Z0-9]/g, '');
+      const productName = (params.productName || 'Product').substring(0, 25);
+
+      const priceNum = safeNum(params.price);
+      const showPrice = Number.isFinite(priceNum) && priceNum > 0;
+      const priceText = showPrice ? `৳${Number(priceNum).toLocaleString('en-BD')}` : '';
+
+      const data: any[] = [
+        {
+          type: 'html',
+          format: 'plain',
+          data: `
+            <html>
+              <head>
+                <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+                <style>
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  @page { size: 40mm 28mm; margin: 0; }
+                  body {
+                    width: 40mm; height: 28mm; margin: 0; padding: 0.5mm 1mm;
+                    font-family: Arial, sans-serif; display: flex; flex-direction: column;
+                    justify-content: space-between; align-items: center;
+                  }
+                  .barcode-container {
+                    width: 100%; text-align: center; display:flex; flex-direction:column;
+                    align-items:center; justify-content:center;
+                  }
+                  .product-name {
+                    font-weight: bold; font-size: 7pt; line-height: 1; margin-bottom: 0.5mm;
+                    max-width: 38mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                  }
+                  .price { font-size: 9pt; font-weight: bold; color: #000; margin-bottom: 0.5mm; line-height: 1; }
+                  svg { max-width: 38mm; height: auto; display: block; }
+                </style>
+              </head>
+              <body>
+                <div class="barcode-container">
+                  <div class="product-name">${productName}</div>
+                  ${showPrice ? `<div class="price">${priceText}</div>` : ``}
+                  <svg id="barcode-${safeId}"></svg>
+                </div>
+                <script>
+                  JsBarcode("#barcode-${safeId}", "${params.barcode}", {
+                    format: "CODE128",
+                    width: 1.3,
+                    height: 30,
+                    displayValue: true,
+                    fontSize: 9,
+                    margin: 0,
+                    marginTop: 1,
+                    marginBottom: 1,
+                    textMargin: 1
+                  });
+                </script>
+              </body>
+            </html>
+          `,
+        },
+      ];
+
+      await qz.print(config, data);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to print barcode');
+    }
+  };
+
+  // -----------------------
+  // Open order by ID (ensures barcodes are fetched)
+  // -----------------------
+  const openOrderById = async (orderId: number) => {
+    setLoading(true);
+    setError('');
+    setSingleOrder(null);
+    setCustomer(null);
+    setOrders([]);
+
+    try {
+      const orderWithBarcodes: any = await barcodeOrderMapper.getOrderWithBarcodes(orderId);
+      const orderData = normalizeOrderToCustomerOrder(orderWithBarcodes);
+
+      setOrderNumber(orderWithBarcodes.order_number || `#${orderId}`);
+      setSingleOrder(orderData);
+
+      if (orderWithBarcodes.customer) {
+        const customerData: Customer = {
+          id: orderWithBarcodes.customer.id,
+          customer_code: orderWithBarcodes.customer.customer_code,
+          name: orderWithBarcodes.customer.name,
+          phone: orderWithBarcodes.customer.phone,
+          email: orderWithBarcodes.customer.email,
+          customer_type: orderWithBarcodes.customer.customer_type || 'unknown',
+          status: 'active',
+          tags: orderWithBarcodes.customer.tags,
+          total_orders: orderWithBarcodes.customer.total_orders,
+          total_purchases: orderWithBarcodes.customer.total_purchases,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        setCustomer(customerData);
+      }
+    } catch (err: any) {
+      setError(err.message || 'An error occurred while loading order data');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openOrderByNumber = async (orderNo: string) => {
+    const clean = orderNo.trim();
+    if (!clean) return;
+
+    setLoading(true);
+    setError('');
+
+    try {
+      const res: any = await orderService.getAll({ search: clean.replace(/^#/, ''), per_page: 50 });
+      const list = res?.data || [];
+      const exact = list.find((o: any) => String(o.order_number).toLowerCase() === clean.toLowerCase())
+        || list.find((o: any) => String(o.order_number).toLowerCase().includes(clean.toLowerCase()))
+        || list[0];
+
+      if (!exact?.id) throw new Error(`Order not found: ${clean}`);
+      await openOrderById(exact.id);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to open order');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // -----------------------
+  // CUSTOMER suggestions
+  // -----------------------
   const fetchSuggestions = async (searchTerm: string) => {
     if (searchTerm.length < 3) {
       setSuggestions([]);
       setShowSuggestions(false);
       return;
     }
-
     setSearchLoading(true);
     try {
       const formattedSearch = formatPhoneNumber(searchTerm);
-      
-      const searchResults = await customerService.search({
-        phone: formattedSearch,
-        per_page: 10
+      const searchResults = await customerService.search({ phone: formattedSearch, per_page: 10 });
+
+      const matching = searchResults.data.filter((c) => {
+        const cPhone = c.phone.replace(/\D/g, '');
+        return cPhone.startsWith(formattedSearch);
       });
 
-      // Filter to only show customers whose phone starts with the search term
-      const matchingSuggestions = searchResults.data.filter(customer => {
-        const customerPhone = customer.phone.replace(/\D/g, '');
-        return customerPhone.startsWith(formattedSearch);
-      });
-
-      setSuggestions(matchingSuggestions);
-      setShowSuggestions(matchingSuggestions.length > 0);
-    } catch (err) {
-      console.error('Suggestions error:', err);
+      setSuggestions(matching);
+      setShowSuggestions(matching.length > 0);
+    } catch {
       setSuggestions([]);
     } finally {
       setSearchLoading(false);
     }
   };
 
-  // Real-time search for order suggestions
+  // -----------------------
+  // ORDER suggestions
+  // -----------------------
   const fetchOrderSuggestions = async (searchTerm: string) => {
     if (searchTerm.length < 3) {
       setOrderSuggestions([]);
       setShowOrderSuggestions(false);
       return;
     }
-
     setOrderSearchLoading(true);
     try {
-      // Remove # symbol if present
       const cleanSearch = searchTerm.trim().replace(/^#/, '');
-      
+
       const searchResults = await orderService.getAll({
         search: cleanSearch,
-        per_page: 10
+        per_page: 10,
       });
 
-      // Filter to only show orders whose order_number starts with the search term
-      // And convert Order type to CustomerOrder type
-      const matchingSuggestions: CustomerOrder[] = searchResults.data
-        .filter(order => {
+      const matching: CustomerOrder[] = searchResults.data
+        .filter((order: any) => {
           const orderNum = order.order_number.replace(/^#/, '');
           const searchNum = cleanSearch.replace(/^#/, '');
           return orderNum.toLowerCase().startsWith(searchNum.toLowerCase());
         })
-        .map(order => ({
+        .map((order: any) => ({
           id: order.id,
           order_number: order.order_number,
           order_date: order.order_date,
@@ -102,137 +561,255 @@ export default function CustomerLookup() {
           store: order.store,
           items: order.items || [],
           shipping_address: order.shipping_address,
-          notes: order.notes
+          notes: order.notes,
         }));
 
-      setOrderSuggestions(matchingSuggestions);
-      setShowOrderSuggestions(matchingSuggestions.length > 0);
-    } catch (err) {
-      console.error('Order suggestions error:', err);
+      setOrderSuggestions(matching);
+      setShowOrderSuggestions(matching.length > 0);
+    } catch {
       setOrderSuggestions([]);
     } finally {
       setOrderSearchLoading(false);
     }
   };
 
-  // Debounce the suggestions search
+  // -----------------------
+  // BATCH suggestions
+  // -----------------------
+  const fetchBatchSuggestions = async (term: string) => {
+    if (term.trim().length < 2) {
+      setBatchSuggestions([]);
+      setShowBatchSuggestions(false);
+      return;
+    }
+    setBatchSearchLoading(true);
+    try {
+      const res = await batchService.getBatchesArray({
+        search: term.trim(),
+        per_page: 10,
+      });
+
+      const t = term.trim().toLowerCase();
+      const filtered = res.filter((b) => (b.batch_number || '').toLowerCase().includes(t));
+
+      setBatchSuggestions(filtered);
+      setShowBatchSuggestions(filtered.length > 0);
+    } catch {
+      setBatchSuggestions([]);
+    } finally {
+      setBatchSearchLoading(false);
+    }
+  };
+
+  // -----------------------
+  // Effects: debounce inputs
+  // -----------------------
   React.useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (phoneNumber.trim()) {
-        fetchSuggestions(phoneNumber);
-      } else {
+    const id = setTimeout(() => {
+      if (phoneNumber.trim() && activeTab === 'customer') fetchSuggestions(phoneNumber);
+      else {
         setSuggestions([]);
         setShowSuggestions(false);
       }
-    }, 300); // 300ms debounce
+    }, 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phoneNumber, activeTab]);
 
-    return () => clearTimeout(timeoutId);
-  }, [phoneNumber]);
-
-  // Debounce the order suggestions search
   React.useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (orderNumber.trim()) {
-        fetchOrderSuggestions(orderNumber);
-      } else {
+    const id = setTimeout(() => {
+      if (orderNumber.trim() && activeTab === 'order') fetchOrderSuggestions(orderNumber);
+      else {
         setOrderSuggestions([]);
         setShowOrderSuggestions(false);
       }
-    }, 300); // 300ms debounce
+    }, 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderNumber, activeTab]);
 
-    return () => clearTimeout(timeoutId);
-  }, [orderNumber]);
+  React.useEffect(() => {
+    const id = setTimeout(() => {
+      if (batchQuery.trim() && activeTab === 'batch') fetchBatchSuggestions(batchQuery);
+      else {
+        setBatchSuggestions([]);
+        setShowBatchSuggestions(false);
+      }
+    }, 300);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchQuery, activeTab]);
 
-  // Click outside to close suggestions
+  // Click outside close dropdowns
   React.useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
-      if (!target.closest('.search-container')) {
-        setShowSuggestions(false);
-      }
-      if (!target.closest('.order-search-container')) {
-        setShowOrderSuggestions(false);
-      }
+      if (!target.closest('.search-container')) setShowSuggestions(false);
+      if (!target.closest('.order-search-container')) setShowOrderSuggestions(false);
+      if (!target.closest('.batch-search-container')) setShowBatchSuggestions(false);
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  // -----------------------
+  // Enrich barcode history (and current_location) with order/customer data
+  // -----------------------
+  React.useEffect(() => {
+    const run = async () => {
+      if (!barcodeData) return;
+
+      // collect order IDs from:
+      // - history entries
+      // - current_location metadata
+      const idsFromHistory =
+        barcodeData.history?.map(extractOrderIdLoose).filter((x: any) => typeof x === 'number' && x) || [];
+
+      const currentLoc = barcodeData.current_location;
+      const idFromLoc = extractOrderIdLoose(currentLoc);
+
+      const ids = Array.from(new Set([...(idsFromHistory as number[]), ...(idFromLoc ? [idFromLoc] : [])]));
+
+      const missing = ids.filter((id) => !orderMetaCache[id]);
+      if (missing.length === 0) return;
+
+      setOrderMetaLoading(true);
+      try {
+        const results = await Promise.all(
+          missing.map(async (id) => {
+            // try to pick from history first
+            const fromHistory = (barcodeData.history || []).find((h: any) => Number(extractOrderIdLoose(h)) === id);
+
+            const historyOrderNumber = extractOrderNumberLoose(fromHistory) || extractOrderNumberLoose(currentLoc);
+            const historyCustomer =
+              fromHistory?.customer ||
+              readMeta(fromHistory)?.customer ||
+              readMeta(currentLoc)?.customer ||
+              currentLoc?.customer;
+
+            try {
+              const o: any = await orderService.getById(id);
+              return [
+                id,
+                {
+                  order_number: historyOrderNumber || o?.order_number || `#${id}`,
+                  customer: historyCustomer || o?.customer,
+                },
+              ] as const;
+            } catch {
+              return [
+                id,
+                {
+                  order_number: historyOrderNumber || `#${id}`,
+                  customer: historyCustomer || undefined,
+                },
+              ] as const;
+            }
+          })
+        );
+
+        setOrderMetaCache((prev) => {
+          const next = { ...prev };
+          for (const [id, meta] of results) next[id] = meta as any;
+          return next;
+        });
+      } finally {
+        setOrderMetaLoading(false);
+      }
+    };
+
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [barcodeData]);
+
+  // -----------------------
+  // Customer handlers
+  // -----------------------
   const handleSelectSuggestion = async (selectedCustomer: Customer) => {
     setPhoneNumber(selectedCustomer.phone);
     setShowSuggestions(false);
     setSuggestions([]);
-    
-    // Load the selected customer's data
+
     setLoading(true);
     setError('');
     setCustomer(null);
     setOrders([]);
+    setSingleOrder(null);
 
     try {
       setCustomer(selectedCustomer);
-      
-      console.log('Customer selected:', selectedCustomer);
-      
-      // Fetch customer's orders
+
       const ordersResponse = await customerService.getOrderHistory(selectedCustomer.id, {
         per_page: 100,
-        page: 1
+        page: 1,
       });
 
-      console.log('Orders fetched:', ordersResponse);
-
       setOrders(ordersResponse.data || []);
-
     } catch (err: any) {
-      console.error('Load customer error:', err);
       setError(err.message || 'An error occurred while loading customer data');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSelectOrderSuggestion = async (selectedOrder: CustomerOrder) => {
-    setOrderNumber(selectedOrder.order_number);
-    setShowOrderSuggestions(false);
-    setOrderSuggestions([]);
-    
-    // Load the selected order's data
+  const handleSearchCustomer = async () => {
+    if (!phoneNumber.trim()) {
+      setError('Please enter a phone number');
+      return;
+    }
+
+    setShowSuggestions(false);
+    setSuggestions([]);
+
     setLoading(true);
     setError('');
     setCustomer(null);
+    setOrders([]);
     setSingleOrder(null);
 
     try {
-      setSingleOrder(selectedOrder);
-      console.log('Order selected:', selectedOrder);
-      
-      // Fetch full order details to get customer info
-      const fullOrder = await orderService.getById(selectedOrder.id);
-      
-      // Set customer info
-      if (fullOrder.customer) {
-        const customerData: Customer = {
-          id: fullOrder.customer.id,
-          customer_code: fullOrder.customer.customer_code,
-          name: fullOrder.customer.name,
-          phone: fullOrder.customer.phone,
-          email: fullOrder.customer.email,
-          customer_type: 'retail',
-          status: 'active',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        setCustomer(customerData);
+      const formattedPhone = formatPhoneNumber(phoneNumber);
+
+      const searchResults = await customerService.search({
+        phone: formattedPhone,
+        per_page: 10,
+      });
+
+      if (!searchResults.data || searchResults.data.length === 0) {
+        setError('No customer found with this phone number');
+        return;
       }
 
+      const exact = searchResults.data.find((c) => c.phone.replace(/\D/g, '') === formattedPhone);
+      if (!exact) {
+        setError(`No customer found with phone number: ${phoneNumber}`);
+        return;
+      }
+
+      setCustomer(exact);
+
+      const ordersResponse = await customerService.getOrderHistory(exact.id, {
+        per_page: 100,
+        page: 1,
+      });
+      setOrders(ordersResponse.data || []);
     } catch (err: any) {
-      console.error('Load order error:', err);
-      setError(err.message || 'An error occurred while loading order data');
+      setError(err.message || 'An error occurred while searching');
     } finally {
       setLoading(false);
     }
+  };
+
+  // -----------------------
+  // Order handlers
+  // -----------------------
+  const handleSelectOrderSuggestion = async (selected: CustomerOrder) => {
+    setOrderNumber(selected.order_number);
+    setShowOrderSuggestions(false);
+    setOrderSuggestions([]);
+
+    await openOrderById(selected.id);
   };
 
   const handleSearchOrder = async () => {
@@ -245,274 +822,271 @@ export default function CustomerLookup() {
     setError('');
     setSingleOrder(null);
     setCustomer(null);
+    setOrders([]);
 
     try {
-      // Remove # symbol if present and trim
       const cleanOrderNumber = orderNumber.trim().replace(/^#/, '');
-      
-      console.log('Searching for order:', cleanOrderNumber);
-      console.log('Original input:', orderNumber);
-      
-      // Try searching with the clean order number
-      const ordersResponse = await orderService.getAll({
-        search: cleanOrderNumber,
-        per_page: 50
-      });
 
-      console.log('Order search results:', ordersResponse);
-      console.log('Number of results:', ordersResponse.data?.length);
+      const ordersResponse: any = await orderService.getAll({
+        search: cleanOrderNumber,
+        per_page: 50,
+      });
 
       if (!ordersResponse.data || ordersResponse.data.length === 0) {
         setError(`No order found with number: ${cleanOrderNumber}`);
         return;
       }
 
-      // Find exact match for order number (case-insensitive)
-      let foundOrder = ordersResponse.data.find(order => 
-        order.order_number.toLowerCase() === cleanOrderNumber.toLowerCase()
-      );
+      let found = ordersResponse.data.find((o: any) => o.order_number.toLowerCase() === cleanOrderNumber.toLowerCase());
+      if (!found) found = ordersResponse.data.find((o: any) => o.order_number.toLowerCase().includes(cleanOrderNumber.toLowerCase()));
+      if (!found) found = ordersResponse.data[0];
 
-      // If no exact match, try partial match
-      if (!foundOrder) {
-        foundOrder = ordersResponse.data.find(order => 
-          order.order_number.toLowerCase().includes(cleanOrderNumber.toLowerCase())
-        );
-      }
-
-      // Fall back to first result
-      if (!foundOrder) {
-        foundOrder = ordersResponse.data[0];
-      }
-
-      console.log('Found order:', foundOrder);
-      console.log('Order number match:', foundOrder.order_number);
-
-      // Convert to CustomerOrder format
-      const orderData: CustomerOrder = {
-        id: foundOrder.id,
-        order_number: foundOrder.order_number,
-        order_date: foundOrder.order_date,
-        order_type: foundOrder.order_type,
-        order_type_label: foundOrder.order_type_label || foundOrder.order_type,
-        total_amount: foundOrder.total_amount,
-        paid_amount: foundOrder.paid_amount,
-        outstanding_amount: foundOrder.outstanding_amount,
-        payment_status: foundOrder.payment_status,
-        status: foundOrder.status,
-        store: foundOrder.store,
-        items: foundOrder.items || [],
-        shipping_address: foundOrder.shipping_address,
-        notes: foundOrder.notes
-      };
-
-      setSingleOrder(orderData);
-      console.log('Order data set:', orderData);
-
-      // Also fetch and set customer info
-      if (foundOrder.customer) {
-        const customerData: Customer = {
-          id: foundOrder.customer.id,
-          customer_code: foundOrder.customer.customer_code,
-          name: foundOrder.customer.name,
-          phone: foundOrder.customer.phone,
-          email: foundOrder.customer.email,
-          customer_type: 'retail',
-          status: 'active',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        };
-        setCustomer(customerData);
-        console.log('Customer data set:', customerData);
-      }
-
+      await openOrderById(found.id);
     } catch (err: any) {
-      console.error('Search order error:', err);
-      console.error('Error response:', err.response);
-      console.error('Error data:', err.response?.data);
       setError(err.response?.data?.message || err.message || 'An error occurred while searching for the order');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleSearch = async () => {
-    if (!phoneNumber.trim()) {
-      setError('Please enter a phone number');
+  // -----------------------
+  // Barcode handlers
+  // -----------------------
+  const handleSearchBarcode = async () => {
+    const code = barcodeInput.trim();
+    if (!code) {
+      setError('Please enter a barcode');
       return;
     }
 
-    // Close suggestions
-    setShowSuggestions(false);
-    setSuggestions([]);
-
-    setLoading(true);
+    setBarcodeLoading(true);
     setError('');
-    setCustomer(null);
-    setOrders([]);
+    setBarcodeData(null);
 
     try {
-      const formattedPhone = formatPhoneNumber(phoneNumber);
-      
-      console.log('Searching for phone:', formattedPhone);
-      
-      // Use customerService to search by phone
-      const searchResults = await customerService.search({
-        phone: formattedPhone,
-        per_page: 10 // Get more results to filter
-      });
-      
-      console.log('Search results:', searchResults);
-      
-      if (!searchResults.data || searchResults.data.length === 0) {
-        setError('No customer found with this phone number');
+      const res = await barcodeTrackingService.getBarcodeHistory(code);
+      if (!res?.success) {
+        setError('Barcode not found');
         return;
       }
-
-      // Find EXACT match for the phone number
-      const exactMatch = searchResults.data.find(customer => {
-        const customerPhone = customer.phone.replace(/\D/g, '');
-        return customerPhone === formattedPhone;
-      });
-
-      if (!exactMatch) {
-        setError(`No customer found with phone number: ${phoneNumber}`);
-        return;
-      }
-
-      const customerData = exactMatch;
-      
-      // Set customer data
-      setCustomer(customerData);
-      
-      console.log('Customer found:', customerData);
-      
-      // Fetch customer's orders using customerService
-      const ordersResponse = await customerService.getOrderHistory(customerData.id, {
-        per_page: 100,
-        page: 1
-      });
-
-      console.log('Orders fetched:', ordersResponse);
-
-      setOrders(ordersResponse.data || []);
-
+      setBarcodeData(res.data as any);
     } catch (err: any) {
-      console.error('Search error:', err);
-      setError(err.message || 'An error occurred while searching');
+      setError(err.message || 'Failed to fetch barcode history');
     } finally {
-      setLoading(false);
+      setBarcodeLoading(false);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      handleSearch();
-    }
+  // -----------------------
+  // Batch handlers
+  // -----------------------
+  const handleSelectBatchSuggestion = async (b: Batch) => {
+    setBatchQuery(b.batch_number);
+    setSelectedBatchId(b.id);
+    setShowBatchSuggestions(false);
+    setBatchSuggestions([]);
+
+    await handleSearchBatch(b.id);
   };
 
-  const formatOrderType = (order: CustomerOrder) => {
-    if (order.order_type_label) {
-      return order.order_type_label;
-    }
-    // Fallback: format order_type to readable text
-    if (order.order_type) {
-      return order.order_type
-        .split('_')
-        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
-    }
-    return 'N/A';
-  };
+  const handleSearchBatch = async (forcedBatchId?: number) => {
+    const batchId = forcedBatchId || selectedBatchId;
 
-  const formatCurrency = (amount: string | number) => {
-    const numAmount = typeof amount === 'string' ? parseFloat(amount) : amount;
-    return new Intl.NumberFormat('en-BD', {
-      style: 'currency',
-      currency: 'BDT',
-      minimumFractionDigits: 0
-    }).format(numAmount);
-  };
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getStatusBadge = (status?: string | null) => {
-    if (!status) {
-      return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-300">
-          Unknown
-        </span>
-      );
+    let finalBatchId: number | null = batchId ?? null;
+    if (!finalBatchId) {
+      const maybe = Number(batchQuery.trim());
+      if (!Number.isNaN(maybe) && maybe > 0) finalBatchId = maybe;
     }
 
-    const statusConfig: { [key: string]: { bg: string; text: string } } = {
-      'paid': { 
-        bg: 'bg-green-100 dark:bg-green-900/30', 
-        text: 'text-green-800 dark:text-green-300'
-      },
-      'partial': { 
-        bg: 'bg-yellow-100 dark:bg-yellow-900/30', 
-        text: 'text-yellow-800 dark:text-yellow-300'
-      },
-      'partially_paid': { 
-        bg: 'bg-yellow-100 dark:bg-yellow-900/30', 
-        text: 'text-yellow-800 dark:text-yellow-300'
-      },
-      'pending': { 
-        bg: 'bg-orange-100 dark:bg-orange-900/30', 
-        text: 'text-orange-800 dark:text-orange-300'
-      },
-      'failed': { 
-        bg: 'bg-red-100 dark:bg-red-900/30', 
-        text: 'text-red-800 dark:text-red-300'
+    if (!finalBatchId) {
+      setError('Select a batch from suggestions or enter a batch ID');
+      return;
+    }
+
+    setBatchLoading(true);
+    setError('');
+    setBatchData(null);
+
+    try {
+      const res = await barcodeTrackingService.getBatchBarcodes(finalBatchId);
+      if (!res?.success) {
+        setError('Batch not found');
+        return;
       }
+      setBatchData(res.data as any);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch batch history');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
+  // -----------------------
+  // Batch row -> modal details (includes order info)
+  // -----------------------
+  const resolveOrderFromBarcodeData = async (bd: BarcodeHistoryData) => {
+    const loc = bd?.current_location;
+    const idFromLoc = extractOrderIdLoose(loc);
+    const noFromLoc = extractOrderNumberLoose(loc);
+    const fromHistorySold = (bd?.history || []).find((h: any) => isSoldLike(h) || isOrderRef(h.reference_type));
+
+    const idFromHistory = extractOrderIdLoose(fromHistorySold);
+    const noFromHistory = extractOrderNumberLoose(fromHistorySold);
+
+    const orderId = idFromLoc || idFromHistory || null;
+    const orderNo = noFromLoc || noFromHistory || null;
+
+    // best effort fetch customer/order_number if orderId exists
+    if (orderId) {
+      try {
+        const o: any = await orderService.getById(orderId);
+        return {
+          orderId,
+          orderNumber: orderNo || o?.order_number || `#${orderId}`,
+          customer: o?.customer || readMeta(fromHistorySold)?.customer || readMeta(loc)?.customer,
+        };
+      } catch {
+        return { orderId, orderNumber: orderNo || `#${orderId}`, customer: readMeta(loc)?.customer || readMeta(fromHistorySold)?.customer };
+      }
+    }
+
+    // no id: keep whatever order number exists
+    if (orderNo) return { orderId: null, orderNumber: orderNo, customer: readMeta(loc)?.customer || readMeta(fromHistorySold)?.customer };
+
+    return null;
+  };
+
+  const openBatchBarcodeModal = async (barcode: string) => {
+    setBatchSelectedBarcode(barcode);
+    setBatchBarcodeModalOpen(true);
+    setBatchBarcodeLoading(true);
+    setBatchBarcodeData(null);
+    setBatchResolvedOrder(null);
+    setError('');
+
+    try {
+      const res = await barcodeTrackingService.getBarcodeHistory(barcode);
+      if (!res?.success) {
+        setError('Barcode not found');
+        return;
+      }
+      const bd = res.data as any;
+      setBatchBarcodeData(bd);
+
+      const ord = await resolveOrderFromBarcodeData(bd);
+      setBatchResolvedOrder(ord);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to load barcode details');
+    } finally {
+      setBatchBarcodeLoading(false);
+    }
+  };
+
+  // -----------------------
+  // Batch computed summary fix (frontend override)
+  // -----------------------
+  const computeBatchSummary = (bd: BatchLookupData) => {
+    const list = bd?.barcodes || [];
+    const sold = list.filter((b) => normalizeStatusKey(b.current_status) === 'sold' || String(b.status_label || '').toLowerCase().includes('sold')).length;
+    const defective = list.filter((b) => b.is_defective).length;
+    const available = list.filter((b) => b.is_available_for_sale && normalizeStatusKey(b.current_status) !== 'sold').length;
+    const active = list.filter((b) => b.is_active && normalizeStatusKey(b.current_status) !== 'sold').length;
+
+    return {
+      total_units: list.length,
+      active,
+      available_for_sale: available,
+      sold,
+      defective,
     };
-
-    const config = statusConfig[status.toLowerCase()] || statusConfig['pending'];
-
-    return (
-      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${config.bg} ${config.text}`}>
-        {status.charAt(0).toUpperCase() + status.slice(1).replace('_', ' ')}
-      </span>
-    );
   };
 
-  const toggleOrderDetails = (orderId: number) => {
-    setExpandedOrderId(expandedOrderId === orderId ? null : orderId);
+  const isSoldBarcodeRow = (b: any) =>
+    normalizeStatusKey(b?.current_status) === 'sold' || String(b?.status_label || '').toLowerCase().includes('sold');
+
+  const getBatchRowStatusLabel = (b: any) => {
+    if (isSoldBarcodeRow(b)) return 'Sold';
+    const label = b?.status_label;
+    if (label) return label;
+    return statusLabelFromKey(b?.current_status);
   };
+
+  const getStatusPill = (label: string) => {
+    const k = normalizeStatusKey(label);
+    if (k === 'sold') {
+      return <span className="text-[9px] px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">sold</span>;
+    }
+    if (k.includes('warehouse')) {
+      return <span className="text-[9px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">warehouse</span>;
+    }
+    if (k.includes('available')) {
+      return <span className="text-[9px] px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">available</span>;
+    }
+    if (k.includes('defect')) {
+      return <span className="text-[9px] px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">defective</span>;
+    }
+    if (k.includes('inactive')) {
+      return <span className="text-[9px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">inactive</span>;
+    }
+    return <span className="text-[9px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">{label || 'unknown'}</span>;
+  };
+
+  // Tab switch reset
+  const switchTab = (tab: LookupTab) => {
+    setActiveTab(tab);
+    setError('');
+    setExpandedOrderId(null);
+
+    if (tab === 'customer') {
+      setSingleOrder(null);
+    }
+    if (tab === 'order') {
+      setOrders([]);
+    }
+    if (tab === 'barcode') {
+      setBarcodeData(null);
+    }
+    if (tab === 'batch') {
+      setBatchData(null);
+    }
+  };
+
+  // -----------------------
+  // BARCODE: quick "sold/order info" section even if history is empty
+  // -----------------------
+  const getBarcodeSaleInfo = (bd: BarcodeHistoryData | null) => {
+    if (!bd) return null;
+    const loc = bd.current_location;
+    const sold = isSoldFromCurrentLocation(loc, bd.history);
+    if (!sold) return null;
+
+    const orderId = extractOrderIdLoose(loc) || extractOrderIdLoose((bd.history || []).find((h: any) => isSoldLike(h) || isOrderRef(h.reference_type)));
+    const orderNo = extractOrderNumberLoose(loc) || extractOrderNumberLoose((bd.history || []).find((h: any) => isSoldLike(h) || isOrderRef(h.reference_type)));
+    const soldVia = extractSoldViaLoose(loc) || extractSoldViaLoose((bd.history || []).find((h: any) => isSoldLike(h)));
+
+    return { orderId, orderNo, soldVia };
+  };
+
+  const barcodeSaleInfo = getBarcodeSaleInfo(barcodeData);
 
   return (
     <div className={darkMode ? 'dark' : ''}>
       <div className="flex h-screen bg-white dark:bg-black">
-        <Sidebar />
+        <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header darkMode={darkMode} setDarkMode={setDarkMode} />
+          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
           <main className="flex-1 overflow-auto bg-white dark:bg-black">
-            {/* Compact Header with Tabs */}
+            {/* Header + Tabs */}
             <div className="border-b border-gray-200 dark:border-gray-800">
               <div className="px-4 py-2">
                 <div className="max-w-7xl mx-auto">
                   <h1 className="text-base font-semibold text-black dark:text-white leading-none mb-2">Lookup</h1>
-                  
-                  {/* Tabs */}
-                  <div className="flex gap-1">
+
+                  <div className="flex gap-1 flex-wrap">
                     <button
-                      onClick={() => {
-                        setActiveTab('customer');
-                        setError('');
-                        setCustomer(null);
-                        setOrders([]);
-                        setSingleOrder(null);
-                        setPhoneNumber('');
-                      }}
+                      onClick={() => switchTab('customer')}
                       className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
                         activeTab === 'customer'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
@@ -521,15 +1095,9 @@ export default function CustomerLookup() {
                     >
                       Customer Lookup
                     </button>
+
                     <button
-                      onClick={() => {
-                        setActiveTab('order');
-                        setError('');
-                        setCustomer(null);
-                        setOrders([]);
-                        setSingleOrder(null);
-                        setOrderNumber('');
-                      }}
+                      onClick={() => switchTab('order')}
                       className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
                         activeTab === 'order'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
@@ -538,6 +1106,28 @@ export default function CustomerLookup() {
                     >
                       Order Lookup
                     </button>
+
+                    <button
+                      onClick={() => switchTab('barcode')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                        activeTab === 'barcode'
+                          ? 'bg-black dark:bg-white text-white dark:text-black'
+                          : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      Barcode History
+                    </button>
+
+                    <button
+                      onClick={() => switchTab('batch')}
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                        activeTab === 'batch'
+                          ? 'bg-black dark:bg-white text-white dark:text-black'
+                          : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      Batch History
+                    </button>
                   </div>
                 </div>
               </div>
@@ -545,9 +1135,14 @@ export default function CustomerLookup() {
 
             {/* Main Content */}
             <div className="max-w-6xl mx-auto px-4 py-4">
-              {activeTab === 'customer' ? (
+              {/* Error */}
+              {error && <p className="mb-3 text-xs text-red-600 dark:text-red-400">{error}</p>}
+
+              {/* =========================
+                  CUSTOMER PANEL
+                  ========================= */}
+              {activeTab === 'customer' && (
                 <>
-                  {/* Customer Search Bar */}
                   <div className="mb-4">
                     <div className="relative max-w-xl mx-auto search-container">
                       <div className="relative">
@@ -555,7 +1150,9 @@ export default function CustomerLookup() {
                           type="text"
                           value={phoneNumber}
                           onChange={(e) => setPhoneNumber(e.target.value)}
-                          onKeyPress={handleKeyPress}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter') handleSearchCustomer();
+                          }}
                           onFocus={() => {
                             if (suggestions.length > 0) setShowSuggestions(true);
                           }}
@@ -563,14 +1160,13 @@ export default function CustomerLookup() {
                           className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
                         />
                         <button
-                          onClick={handleSearch}
+                          onClick={handleSearchCustomer}
                           disabled={loading}
                           className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
                         >
                           {loading ? 'Searching...' : 'Search'}
                         </button>
 
-                        {/* Autocomplete Suggestions */}
                         {showSuggestions && suggestions.length > 0 && (
                           <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-md shadow-xl max-h-80 overflow-y-auto z-50">
                             {searchLoading && (
@@ -578,25 +1174,22 @@ export default function CustomerLookup() {
                                 <div className="w-4 h-4 border-2 border-gray-300 dark:border-gray-700 border-t-black dark:border-t-white rounded-full animate-spin mx-auto"></div>
                               </div>
                             )}
-                            {suggestions.map((suggestion, index) => (
+
+                            {suggestions.map((s, index) => (
                               <button
-                                key={suggestion.id}
-                                onClick={() => handleSelectSuggestion(suggestion)}
+                                key={s.id}
+                                onClick={() => handleSelectSuggestion(s)}
                                 className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
                                   index !== suggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
                                 }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-black dark:text-white mb-0.5">
-                                      {suggestion.phone}
-                                    </p>
-                                    <p className="text-xs text-gray-600 dark:text-gray-400 truncate">
-                                      {suggestion.name}
-                                    </p>
+                                    <p className="text-sm font-medium text-black dark:text-white mb-0.5">{s.phone}</p>
+                                    <p className="text-xs text-gray-600 dark:text-gray-400 truncate">{s.name}</p>
                                   </div>
                                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-black dark:bg-white text-white dark:text-black font-medium uppercase">
-                                    {suggestion.customer_type}
+                                    {s.customer_type}
                                   </span>
                                 </div>
                               </button>
@@ -604,237 +1197,75 @@ export default function CustomerLookup() {
                           </div>
                         )}
                       </div>
-                      {error && (
-                        <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">
-                          {error}
-                        </p>
-                      )}
                     </div>
                   </div>
-                </>
-              ) : (
-                <>
-                  {/* Order Search Bar */}
-                  <div className="mb-4">
-                    <div className="relative max-w-xl mx-auto order-search-container">
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={orderNumber}
-                          onChange={(e) => setOrderNumber(e.target.value)}
-                          onKeyPress={(e) => {
-                            if (e.key === 'Enter') {
-                              handleSearchOrder();
+
+                  {customer && (
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3 mb-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-xs font-semibold text-black dark:text-white">{customer.name}</p>
+                          <p className="text-xs text-gray-600 dark:text-gray-400">{customer.phone}</p>
+                          {customer.customer_code && (
+                            <p className="text-[10px] text-gray-500 dark:text-gray-500">Code: {customer.customer_code}</p>
+                          )}
+                          {/* Customer Tags (view + manage) */}
+                          <CustomerTagManager
+                            customerId={(customer as any).id}
+                            initialTags={Array.isArray((customer as any).tags) ? (customer as any).tags : []}
+                            compact
+                            onTagsChange={(next) =>
+                              setCustomer((prev) => (prev ? ({ ...(prev as any), tags: next } as any) : prev))
                             }
-                          }}
-                          onFocus={() => {
-                            if (orderSuggestions.length > 0) setShowOrderSuggestions(true);
-                          }}
-                          placeholder="Type order number..."
-                          className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
-                        />
-                        <button
-                          onClick={handleSearchOrder}
-                          disabled={loading}
-                          className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
-                        >
-                          {loading ? 'Searching...' : 'Search'}
-                        </button>
-
-                        {/* Order Autocomplete Suggestions */}
-                        {showOrderSuggestions && orderSuggestions.length > 0 && (
-                          <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-md shadow-xl max-h-80 overflow-y-auto z-50">
-                            {orderSearchLoading && (
-                              <div className="px-3 py-2 text-center">
-                                <div className="w-4 h-4 border-2 border-gray-300 dark:border-gray-700 border-t-black dark:border-t-white rounded-full animate-spin mx-auto"></div>
-                              </div>
-                            )}
-                            {orderSuggestions.map((suggestion, index) => (
-                              <button
-                                key={suggestion.id}
-                                onClick={() => handleSelectOrderSuggestion(suggestion)}
-                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
-                                  index !== orderSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
-                                }`}
-                              >
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium text-black dark:text-white mb-0.5">
-                                      {suggestion.order_number}
-                                    </p>
-                                    <div className="flex items-center gap-2 text-xs">
-                                      <span className="text-gray-600 dark:text-gray-400">
-                                        {formatDate(suggestion.order_date)}
-                                      </span>
-                                      <span className="text-gray-400">•</span>
-                                      <span className="font-medium text-gray-600 dark:text-gray-400">
-                                        {formatCurrency(suggestion.total_amount)}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                    {getStatusBadge(suggestion.payment_status)}
-                                  </div>
-                                </div>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      {error && (
-                        <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">
-                          {error}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Customer Details */}
-              {customer && (
-                <div className="space-y-3">
-                  {/* Compact Customer Info Card */}
-                  <div className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden">
-                    <div className="bg-gray-50 dark:bg-gray-900 px-3 py-2 border-b border-gray-200 dark:border-gray-800">
-                      <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">Customer Information</h2>
-                    </div>
-                    <div className="p-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {/* Left Column */}
-                        <div className="space-y-3">
-                          <div>
-                            <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Name</p>
-                            <p className="text-sm font-medium text-black dark:text-white">{customer.name}</p>
-                          </div>
-
-                          <div>
-                            <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Phone</p>
-                            <p className="text-sm font-medium text-black dark:text-white">{customer.phone}</p>
-                          </div>
-
-                          {customer.email && (
-                            <div>
-                              <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Email</p>
-                              <p className="text-sm text-black dark:text-white">{customer.email}</p>
-                            </div>
-                          )}
+                          />
                         </div>
-
-                        {/* Right Column */}
-                        <div className="space-y-3">
-                          {customer.created_at && (
-                            <div>
-                              <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Customer Since</p>
-                              <p className="text-sm font-medium text-black dark:text-white">{formatDate(customer.created_at)}</p>
-                            </div>
-                          )}
-
-                          {activeTab === 'customer' && (
-                            <div>
-                              <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Total Orders</p>
-                              <p className="text-sm font-medium text-black dark:text-white">{orders.length}</p>
-                            </div>
-                          )}
-
-                          <div>
-                            <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Status</p>
-                            <p className="text-sm font-medium text-black dark:text-white capitalize">{customer.status || 'Active'}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Address - Full Width */}
-                      {customer.address && (
-                        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-800">
-                          <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Address</p>
-                          <p className="text-sm text-black dark:text-white">{customer.address}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Compact Stats - Only for Customer Tab */}
-                  {activeTab === 'customer' && orders.length > 0 && (
-                    <div className="grid grid-cols-4 gap-2">
-                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-2.5">
-                        <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-1">Orders</p>
-                        <p className="text-xl font-semibold text-black dark:text-white">{orders.length}</p>
-                      </div>
-
-                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-2.5">
-                        <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-1">Spent</p>
-                        <p className="text-xl font-semibold text-black dark:text-white">
-                          ৳{(orders.reduce((sum, order) => sum + parseFloat(order.total_amount), 0) / 1000).toFixed(1)}k
-                        </p>
-                      </div>
-
-                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-2.5">
-                        <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-1">Avg</p>
-                        <p className="text-xl font-semibold text-black dark:text-white">
-                          ৳{orders.length > 0 ? (orders.reduce((sum, order) => sum + parseFloat(order.total_amount), 0) / orders.length / 1000).toFixed(1) : 0}k
-                        </p>
-                      </div>
-
-                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-2.5">
-                        <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-1">Due</p>
-                        <p className="text-xl font-semibold text-black dark:text-white">
-                          ৳{(orders.reduce((sum, order) => sum + parseFloat(order.outstanding_amount), 0) / 1000).toFixed(1)}k
-                        </p>
+                        <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                          {orders.length} orders
+                        </span>
                       </div>
                     </div>
                   )}
 
-                  {/* Compact Order History */}
-                  {((activeTab === 'customer' && orders.length > 0) || (activeTab === 'order' && singleOrder)) && (
+                  {orders.length > 0 && (
                     <div className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden">
                       <div className="bg-gray-50 dark:bg-gray-900 px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-                        <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">
-                          {activeTab === 'customer' ? 'Order History' : 'Order Details'}
-                        </h2>
+                        <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">Order History</h2>
                         <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">
-                          {activeTab === 'customer' ? orders.length : 1}
+                          {orders.length}
                         </span>
                       </div>
 
                       <div className="divide-y divide-gray-200 dark:divide-gray-800">
-                        {(activeTab === 'customer' ? orders : [singleOrder!]).map((order) => (
+                        {orders.map((order) => (
                           <div key={order.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
-                            <div 
-                              className="p-3 cursor-pointer"
-                              onClick={() => toggleOrderDetails(order.id)}
-                            >
-                              <div className="flex items-center justify-between">
-                                <div className="flex-1 grid grid-cols-5 gap-3">
-                                  <div>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Order #</p>
-                                    <p className="text-xs font-medium text-black dark:text-white">{order.order_number}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Date</p>
-                                    <p className="text-xs text-black dark:text-white">{formatDate(order.order_date)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Type</p>
-                                    <p className="text-xs text-black dark:text-white">{formatOrderType(order)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Total</p>
-                                    <p className="text-xs font-medium text-black dark:text-white">{formatCurrency(order.total_amount)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Payment</p>
-                                    {getStatusBadge(order.payment_status)}
-                                  </div>
+                            <div className="p-3 cursor-pointer" onClick={() => toggleOrderDetails(order.id)}>
+                              <div className="grid grid-cols-5 gap-3">
+                                <div>
+                                  <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Order #</p>
+                                  <p className="text-xs font-medium text-black dark:text-white">{order.order_number}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Date</p>
+                                  <p className="text-xs text-black dark:text-white">{formatDate(order.order_date)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Type</p>
+                                  <p className="text-xs text-black dark:text-white">{formatOrderType(order)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Total</p>
+                                  <p className="text-xs font-medium text-black dark:text-white">{formatCurrency(order.total_amount)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Payment</p>
+                                  {getStatusBadge(order.payment_status)}
                                 </div>
                               </div>
                             </div>
 
-                            {/* Compact Expanded Order Details */}
                             {expandedOrderId === order.id && (
                               <div className="px-3 pb-3 border-t border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900/50">
                                 <div className="pt-3 space-y-2">
-                                  {/* Order Items */}
                                   <div>
                                     <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1.5">Items</p>
                                     <div className="bg-white dark:bg-black rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
@@ -861,9 +1292,20 @@ export default function CustomerLookup() {
                                         </tbody>
                                       </table>
                                     </div>
+                                    <div className="mt-2">
+                                      <button
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          setActiveTab('order');
+                                          await openOrderById(order.id);
+                                        }}
+                                        className="text-[10px] px-3 py-1.5 rounded bg-black dark:bg-white text-white dark:text-black hover:opacity-90"
+                                      >
+                                        Open in Order Lookup (Barcodes)
+                                      </button>
+                                    </div>
                                   </div>
 
-                                  {/* Payment Summary & Store */}
                                   <div className="grid grid-cols-2 gap-2">
                                     <div>
                                       <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Store</p>
@@ -888,7 +1330,6 @@ export default function CustomerLookup() {
                                     </div>
                                   </div>
 
-                                  {/* Notes */}
                                   {order.notes && (
                                     <div>
                                       <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Notes</p>
@@ -903,7 +1344,768 @@ export default function CustomerLookup() {
                       </div>
                     </div>
                   )}
-                </div>
+                </>
+              )}
+
+              {/* ======================
+                  ORDER PANEL (barcodes + reprint)
+                  ====================== */}
+              {activeTab === 'order' && (
+                <>
+                  <div className="mb-4">
+                    <div className="relative max-w-xl mx-auto order-search-container">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={orderNumber}
+                          onChange={(e) => setOrderNumber(e.target.value)}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter') handleSearchOrder();
+                          }}
+                          onFocus={() => {
+                            if (orderSuggestions.length > 0) setShowOrderSuggestions(true);
+                          }}
+                          placeholder="Type order number..."
+                          className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                        />
+                        <button
+                          onClick={handleSearchOrder}
+                          disabled={loading}
+                          className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
+                        >
+                          {loading ? 'Searching...' : 'Search'}
+                        </button>
+
+                        {showOrderSuggestions && orderSuggestions.length > 0 && (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-md shadow-xl max-h-80 overflow-y-auto z-50">
+                            {orderSearchLoading && (
+                              <div className="px-3 py-2 text-center">
+                                <div className="w-4 h-4 border-2 border-gray-300 dark:border-gray-700 border-t-black dark:border-t-white rounded-full animate-spin mx-auto"></div>
+                              </div>
+                            )}
+                            {orderSuggestions.map((s, index) => (
+                              <button
+                                key={s.id}
+                                onClick={() => handleSelectOrderSuggestion(s)}
+                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
+                                  index !== orderSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-black dark:text-white mb-0.5">{s.order_number}</p>
+                                    <div className="flex items-center gap-2 text-xs">
+                                      <span className="text-gray-600 dark:text-gray-400">{formatDate(s.order_date)}</span>
+                                      <span className="text-gray-400">•</span>
+                                      <span className="font-medium text-gray-600 dark:text-gray-400">{formatCurrency(s.total_amount)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">{getStatusBadge(s.payment_status)}</div>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {singleOrder && (
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden">
+                      <div className="bg-gray-50 dark:bg-gray-900 px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                        <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">Order Details (with Barcodes)</h2>
+                        <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">1</span>
+                      </div>
+
+                      <div className="p-3">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Order #</p>
+                            <p className="text-sm font-semibold text-black dark:text-white">{singleOrder.order_number}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Date</p>
+                            <p className="text-sm text-black dark:text-white">{formatDate(singleOrder.order_date)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Total</p>
+                            <p className="text-sm font-semibold text-black dark:text-white">{formatCurrency(singleOrder.total_amount)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Payment</p>
+                            {getStatusBadge(singleOrder.payment_status)}
+                          </div>
+                        </div>
+
+                        <div className="bg-white dark:bg-black rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-gray-50 dark:bg-gray-900">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Product</th>
+                                <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Qty</th>
+                                <th className="px-2 py-1.5 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Barcodes</th>
+                                <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                              {singleOrder.items.map((item: any) => {
+                                const barcodes: string[] = Array.isArray(item?.barcodes) ? item.barcodes : item?.barcode ? [item.barcode] : [];
+
+                                return (
+                                  <tr key={item.id}>
+                                    <td className="px-2 py-1.5 font-medium text-black dark:text-white">
+                                      {item.product_name}
+                                      <div className="text-[9px] text-gray-500">{item.product_sku}</div>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-right text-black dark:text-white">{item.quantity}</td>
+
+                                    <td className="px-2 py-1.5">
+                                      {barcodes.length > 0 ? (
+                                        <div className="flex flex-col gap-1">
+                                          {barcodes.slice(0, 12).map((code: string) => (
+                                            <div key={code} className="flex items-center gap-2">
+                                              <button
+                                                onClick={() => {
+                                                  setActiveTab('barcode');
+                                                  setBarcodeInput(code);
+                                                  setBarcodeData(null);
+                                                  setError('');
+                                                  setTimeout(() => handleSearchBarcode(), 0);
+                                                }}
+                                                className="text-[10px] font-semibold text-black dark:text-white hover:underline"
+                                                title="Open barcode history"
+                                              >
+                                                {code}
+                                              </button>
+                                              <button
+                                                onClick={() =>
+                                                  printSingleBarcodeLabel({
+                                                    barcode: code,
+                                                    productName: item.product_name,
+                                                    price: item.unit_price,
+                                                  })
+                                                }
+                                                className="text-[10px] px-2 py-0.5 rounded bg-black dark:bg-white text-white dark:text-black hover:opacity-90"
+                                                title="Reprint this barcode"
+                                              >
+                                                Reprint
+                                              </button>
+                                            </div>
+                                          ))}
+                                          {barcodes.length > 12 && <span className="text-[10px] text-gray-500">+{barcodes.length - 12} more…</span>}
+                                        </div>
+                                      ) : (
+                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">No barcodes</span>
+                                      )}
+                                    </td>
+
+                                    <td className="px-2 py-1.5 text-right font-semibold text-black dark:text-white">{formatCurrency(item.total_amount)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {singleOrder.notes && (
+                          <div className="mt-3">
+                            <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Notes</p>
+                            <p className="text-[10px] text-gray-600 dark:text-gray-400">{singleOrder.notes}</p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ======================
+                  BARCODE PANEL (FIXED: Sold + Order info + Batch prices)
+                  ====================== */}
+              {activeTab === 'barcode' && (
+                <>
+                  <div className="mb-4">
+                    <div className="relative max-w-xl mx-auto">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={barcodeInput}
+                          onChange={(e) => setBarcodeInput(e.target.value)}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter') handleSearchBarcode();
+                          }}
+                          placeholder="Type barcode..."
+                          className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                        />
+                        <button
+                          onClick={handleSearchBarcode}
+                          disabled={barcodeLoading}
+                          className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
+                        >
+                          {barcodeLoading ? 'Loading...' : 'Search'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {barcodeData && (
+                    <div className="space-y-3">
+                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold text-black dark:text-white">
+                              {barcodeData.product.name}{' '}
+                              <span className="text-gray-500 text-[10px]">{barcodeData.product.sku ? `(${barcodeData.product.sku})` : ''}</span>
+                            </p>
+                            <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                              Barcode: <span className="font-semibold">{barcodeData.barcode}</span>
+                            </p>
+                          </div>
+                          <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                            {barcodeData.total_movements} movements
+                          </span>
+                        </div>
+
+                        {/* Current location */}
+                        {barcodeData.current_location && (
+                          <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Status</p>
+                              <p className="text-xs font-semibold text-black dark:text-white">
+                                {getCurrentStatusLabel(barcodeData.current_location, barcodeData.history)}
+                              </p>
+                            </div>
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Current Store</p>
+                              <p className="text-xs text-black dark:text-white">{barcodeData.current_location.current_store?.name || '—'}</p>
+                            </div>
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Batch</p>
+                              <p className="text-xs text-black dark:text-white">{barcodeData.current_location.batch?.batch_number || '—'}</p>
+                            </div>
+
+                            {/* Batch pricing (best effort) */}
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Batch Prices</p>
+                              <p className="text-[10px] text-black dark:text-white">
+                                Cost:{' '}
+                                <span className="font-semibold">
+                                  {barcodeData.current_location.batch?.cost_price != null
+                                    ? formatCurrency(barcodeData.current_location.batch?.cost_price)
+                                    : '—'}
+                                </span>
+                              </p>
+                              <p className="text-[10px] text-black dark:text-white">
+                                Sell:{' '}
+                                <span className="font-semibold">
+                                  {barcodeData.current_location.batch?.selling_price != null
+                                    ? formatCurrency(barcodeData.current_location.batch?.selling_price)
+                                    : '—'}
+                                </span>
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* SOLD / ORDER INFO (works even if movement history is empty, if backend sends meta) */}
+                        {barcodeSaleInfo && (
+                          <div className="mt-3 border border-gray-200 dark:border-gray-800 rounded p-2 bg-gray-50 dark:bg-gray-900/40">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div>
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Sale / Order</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">
+                                  Sold{barcodeSaleInfo.soldVia ? ` via ${barcodeSaleInfo.soldVia}` : ''}
+                                </p>
+                                <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                                  Order:{' '}
+                                  <span className="font-semibold text-black dark:text-white">
+                                    {barcodeSaleInfo.orderNo || (barcodeSaleInfo.orderId ? `#${barcodeSaleInfo.orderId}` : '—')}
+                                  </span>
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                {(barcodeSaleInfo.orderId || barcodeSaleInfo.orderNo) && (
+                                  <button
+                                    onClick={async () => {
+                                      setActiveTab('order');
+                                      if (barcodeSaleInfo.orderId) await openOrderById(barcodeSaleInfo.orderId);
+                                      else if (barcodeSaleInfo.orderNo) await openOrderByNumber(barcodeSaleInfo.orderNo);
+                                    }}
+                                    className="text-[10px] px-3 py-1.5 rounded bg-black dark:bg-white text-white dark:text-black hover:opacity-90"
+                                  >
+                                    Open Order
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Movement History Table */}
+                      <div className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden">
+                        <div className="bg-gray-50 dark:bg-gray-900 px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                          <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">Barcode Movement History</h2>
+                          <div className="flex items-center gap-2">
+                            {orderMetaLoading && <span className="text-[10px] text-gray-500 dark:text-gray-400">loading order/customer…</span>}
+                            <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">
+                              {barcodeData.history?.length || 0}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-white dark:bg-black">
+                              <tr className="border-b border-gray-200 dark:border-gray-800">
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Date</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Type</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">From</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">To</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Status</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Order #</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Customer</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">By</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Ref</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                              {(barcodeData.history || []).map((h: any) => {
+                                const orderId = extractOrderIdLoose(h);
+                                const meta = orderId ? orderMetaCache[orderId] : null;
+
+                                const show = Boolean(orderId) && (isSoldLike(h) || isOrderRef(h.reference_type));
+                                const orderNoFromRow = extractOrderNumberLoose(h);
+
+                                return (
+                                  <tr key={h.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40">
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{formatDate(h.date)}</td>
+                                    <td className="px-2 py-2 font-semibold text-black dark:text-white">{h.movement_type || '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{h.from_store || '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{h.to_store || '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{(h.status_before || '—') + ' → ' + (h.status_after || '—')}</td>
+
+                                    {/* Order # */}
+                                    <td className="px-2 py-2">
+                                      {show && orderId ? (
+                                        <button
+                                          onClick={async () => {
+                                            setActiveTab('order');
+                                            await openOrderById(orderId);
+                                          }}
+                                          className="text-[10px] font-semibold text-black dark:text-white hover:underline"
+                                          title="Open order lookup"
+                                        >
+                                          {meta?.order_number || orderNoFromRow || `#${orderId}`}
+                                        </button>
+                                      ) : orderNoFromRow ? (
+                                        <button
+                                          onClick={async () => {
+                                            setActiveTab('order');
+                                            await openOrderByNumber(orderNoFromRow);
+                                          }}
+                                          className="text-[10px] font-semibold text-black dark:text-white hover:underline"
+                                        >
+                                          {orderNoFromRow}
+                                        </button>
+                                      ) : (
+                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">—</span>
+                                      )}
+                                    </td>
+
+                                    {/* Customer */}
+                                    <td className="px-2 py-2">
+                                      {(show && meta?.customer) || readMeta(h)?.customer ? (
+                                        <span className="text-[10px] text-black dark:text-white">
+                                          <span className="font-semibold">{(meta?.customer || readMeta(h)?.customer)?.name || 'Customer'}</span>
+                                          {(meta?.customer || readMeta(h)?.customer)?.phone ? (
+                                            <span className="text-gray-500 dark:text-gray-400"> • {(meta?.customer || readMeta(h)?.customer)?.phone}</span>
+                                          ) : null}
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">—</span>
+                                      )}
+                                    </td>
+
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{h.performed_by || '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">
+                                      {h.reference_type ? `${h.reference_type}#${h.reference_id ?? ''}` : '—'}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {!barcodeData.history?.length && (
+                                <tr>
+                                  <td colSpan={9} className="px-3 py-6 text-center text-xs text-gray-500 dark:text-gray-400">
+                                    No movement history found for this barcode. (If it’s sold but history is empty, the backend history endpoint is not returning movements — this UI still shows Sold + Order if metadata exists.)
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* ======================
+                  BATCH PANEL (FIXED: sold vs inactive + click sold shows order details)
+                  ====================== */}
+              {activeTab === 'batch' && (
+                <>
+                  <div className="mb-4">
+                    <div className="relative max-w-xl mx-auto batch-search-container">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={batchQuery}
+                          onChange={(e) => {
+                            setBatchQuery(e.target.value);
+                            setSelectedBatchId(null);
+                          }}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter') handleSearchBatch();
+                          }}
+                          onFocus={() => {
+                            if (batchSuggestions.length > 0) setShowBatchSuggestions(true);
+                          }}
+                          placeholder="Type batch number (or batch ID)..."
+                          className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                        />
+                        <button
+                          onClick={() => handleSearchBatch()}
+                          disabled={batchLoading}
+                          className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
+                        >
+                          {batchLoading ? 'Loading...' : 'Search'}
+                        </button>
+
+                        {showBatchSuggestions && batchSuggestions.length > 0 && (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-md shadow-xl max-h-80 overflow-y-auto z-50">
+                            {batchSearchLoading && (
+                              <div className="px-3 py-2 text-center">
+                                <div className="w-4 h-4 border-2 border-gray-300 dark:border-gray-700 border-t-black dark:border-t-white rounded-full animate-spin mx-auto"></div>
+                              </div>
+                            )}
+
+                            {batchSuggestions.map((b, index) => (
+                              <button
+                                key={b.id}
+                                onClick={() => handleSelectBatchSuggestion(b)}
+                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
+                                  index !== batchSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-black dark:text-white mb-0.5">{b.batch_number}</p>
+                                    <p className="text-xs text-gray-600 dark:text-gray-400 truncate">
+                                      {b.product?.name} {b.product?.sku ? `(${b.product.sku})` : ''} • {b.store?.name}
+                                    </p>
+                                  </div>
+                                  <span className="text-[9px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 font-semibold">
+                                    ID: {b.id}
+                                  </span>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {batchData && (
+                    <div className="space-y-3">
+                      <div className="border border-gray-200 dark:border-gray-800 rounded-md p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold text-black dark:text-white">
+                              Batch: {batchData.batch.batch_number} <span className="text-gray-500 text-[10px]"> (ID: {batchData.batch.id})</span>
+                            </p>
+                            <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                              Product: <span className="font-semibold">{batchData.batch.product.name}</span>{' '}
+                              {batchData.batch.product.sku ? `(${batchData.batch.product.sku})` : ''}
+                            </p>
+
+                            {/* Batch price (if backend provides) */}
+                            <div className="mt-1 text-[10px] text-gray-600 dark:text-gray-400">
+                              Cost: <span className="font-semibold text-black dark:text-white">{batchData.batch.cost_price != null ? formatCurrency(batchData.batch.cost_price) : '—'}</span>
+                              <span className="mx-2">•</span>
+                              Sell: <span className="font-semibold text-black dark:text-white">{batchData.batch.selling_price != null ? formatCurrency(batchData.batch.selling_price) : '—'}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Use computed summary to fix “sold shows inactive” mismatch */}
+                        {(() => {
+                          const computed = computeBatchSummary(batchData);
+                          return (
+                            <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Total</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.total_units}</p>
+                              </div>
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Active</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.active}</p>
+                              </div>
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Available</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.available_for_sale}</p>
+                              </div>
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Sold</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.sold}</p>
+                              </div>
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Defective</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.defective}</p>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Barcodes Table */}
+                      <div className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden">
+                        <div className="bg-gray-50 dark:bg-gray-900 px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                          <h2 className="text-xs font-semibold text-black dark:text-white uppercase tracking-wide">Batch Units (Barcodes)</h2>
+                          <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">
+                            {batchData.barcodes.length}
+                          </span>
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-[10px]">
+                            <thead className="bg-white dark:bg-black">
+                              <tr className="border-b border-gray-200 dark:border-gray-800">
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Barcode</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Status</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Store</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Updated</th>
+                                <th className="px-2 py-2 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Flags</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                              {batchData.barcodes.map((b) => {
+                                const sold = isSoldBarcodeRow(b);
+                                const statusLabel = getBatchRowStatusLabel(b);
+
+                                return (
+                                  <tr key={b.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40">
+                                    <td className="px-2 py-2">
+                                      <button
+                                        onClick={() => openBatchBarcodeModal(b.barcode)}
+                                        className="text-black dark:text-white font-semibold hover:underline"
+                                        title="Open details (shows order if sold)"
+                                      >
+                                        {b.barcode}
+                                      </button>
+                                    </td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{statusLabel}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{b.current_store?.name || '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{b.location_updated_at ? formatDate(b.location_updated_at) : '—'}</td>
+                                    <td className="px-2 py-2 text-gray-700 dark:text-gray-300">
+                                      <div className="flex gap-1 flex-wrap">
+                                        {/* show SOLD first if sold */}
+                                        {sold && getStatusPill('sold')}
+
+                                        {/* only show inactive if NOT sold */}
+                                        {!sold && !b.is_active && <span className="text-[9px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800">inactive</span>}
+
+                                        {b.is_defective && (
+                                          <span className="text-[9px] px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">defective</span>
+                                        )}
+
+                                        {/* sale means available for sale */}
+                                        {b.is_available_for_sale && !sold && (
+                                          <span className="text-[9px] px-2 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300">sale</span>
+                                        )}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {!batchData.barcodes.length && (
+                                <tr>
+                                  <td colSpan={5} className="px-3 py-6 text-center text-xs text-gray-500 dark:text-gray-400">
+                                    No units found for this batch.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Batch Barcode Modal */}
+                  {batchBarcodeModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center">
+                      <div
+                        className="absolute inset-0 bg-black/40"
+                        onClick={() => {
+                          setBatchBarcodeModalOpen(false);
+                          setBatchSelectedBarcode(null);
+                          setBatchBarcodeData(null);
+                          setBatchResolvedOrder(null);
+                        }}
+                      />
+                      <div className="relative w-full max-w-2xl mx-4 bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl overflow-hidden">
+                        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                          <div>
+                            <p className="text-xs font-semibold text-black dark:text-white">Barcode Details</p>
+                            <p className="text-[10px] text-gray-600 dark:text-gray-400">{batchSelectedBarcode}</p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setBatchBarcodeModalOpen(false);
+                              setBatchSelectedBarcode(null);
+                              setBatchBarcodeData(null);
+                              setBatchResolvedOrder(null);
+                            }}
+                            className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90"
+                          >
+                            Close
+                          </button>
+                        </div>
+
+                        <div className="p-4">
+                          {batchBarcodeLoading ? (
+                            <div className="text-center py-10">
+                              <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-700 border-t-black dark:border-t-white rounded-full animate-spin mx-auto"></div>
+                              <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">Loading…</p>
+                            </div>
+                          ) : batchBarcodeData ? (
+                            <div className="space-y-3">
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-xs font-semibold text-black dark:text-white">
+                                      {batchBarcodeData.product?.name}{' '}
+                                      <span className="text-gray-500 text-[10px]">
+                                        {batchBarcodeData.product?.sku ? `(${batchBarcodeData.product.sku})` : ''}
+                                      </span>
+                                    </p>
+                                    <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                                      Barcode: <span className="font-semibold text-black dark:text-white">{batchBarcodeData.barcode}</span>
+                                    </p>
+                                  </div>
+                                  <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                                    {batchBarcodeData.total_movements} movements
+                                  </span>
+                                </div>
+
+                                {batchBarcodeData.current_location && (
+                                  <div className="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                                    <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                      <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Status</p>
+                                      <p className="text-xs font-semibold text-black dark:text-white">
+                                        {getCurrentStatusLabel(batchBarcodeData.current_location, batchBarcodeData.history)}
+                                      </p>
+                                    </div>
+                                    <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                      <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Store</p>
+                                      <p className="text-xs text-black dark:text-white">
+                                        {batchBarcodeData.current_location.current_store?.name || '—'}
+                                      </p>
+                                    </div>
+                                    <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                      <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Batch</p>
+                                      <p className="text-xs text-black dark:text-white">
+                                        {batchBarcodeData.current_location.batch?.batch_number || '—'}
+                                      </p>
+                                    </div>
+                                    <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                      <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Batch Prices</p>
+                                      <p className="text-[10px] text-black dark:text-white">
+                                        Cost:{' '}
+                                        <span className="font-semibold">
+                                          {batchBarcodeData.current_location.batch?.cost_price != null
+                                            ? formatCurrency(batchBarcodeData.current_location.batch?.cost_price)
+                                            : '—'}
+                                        </span>
+                                      </p>
+                                      <p className="text-[10px] text-black dark:text-white">
+                                        Sell:{' '}
+                                        <span className="font-semibold">
+                                          {batchBarcodeData.current_location.batch?.selling_price != null
+                                            ? formatCurrency(batchBarcodeData.current_location.batch?.selling_price)
+                                            : '—'}
+                                        </span>
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Order details if sold */}
+                              {batchResolvedOrder && (
+                                <div className="border border-gray-200 dark:border-gray-800 rounded p-3 bg-gray-50 dark:bg-gray-900/40">
+                                  <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Order Details</p>
+                                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <div>
+                                      <p className="text-xs font-semibold text-black dark:text-white">
+                                        {batchResolvedOrder.orderNumber || (batchResolvedOrder.orderId ? `#${batchResolvedOrder.orderId}` : '—')}
+                                      </p>
+                                      {batchResolvedOrder.customer && (
+                                        <p className="text-[10px] text-gray-600 dark:text-gray-400">
+                                          {batchResolvedOrder.customer?.name || 'Customer'}
+                                          {batchResolvedOrder.customer?.phone ? ` • ${batchResolvedOrder.customer.phone}` : ''}
+                                        </p>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => {
+                                          setActiveTab('barcode');
+                                          setBarcodeInput(batchBarcodeData?.barcode || '');
+                                          setBarcodeData(batchBarcodeData);
+                                          setBatchBarcodeModalOpen(false);
+                                        }}
+                                        className="text-[10px] px-3 py-1.5 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90"
+                                      >
+                                        Open in Barcode Tab
+                                      </button>
+
+                                      {(batchResolvedOrder.orderId || batchResolvedOrder.orderNumber) && (
+                                        <button
+                                          onClick={async () => {
+                                            setBatchBarcodeModalOpen(false);
+                                            setActiveTab('order');
+                                            if (batchResolvedOrder.orderId) await openOrderById(batchResolvedOrder.orderId);
+                                            else if (batchResolvedOrder.orderNumber) await openOrderByNumber(batchResolvedOrder.orderNumber);
+                                          }}
+                                          className="text-[10px] px-3 py-1.5 rounded bg-black dark:bg-white text-white dark:text-black hover:opacity-90"
+                                        >
+                                          Open Order
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* small note if sold but not resolved */}
+                              {!batchResolvedOrder && isSoldFromCurrentLocation(batchBarcodeData?.current_location, batchBarcodeData?.history) && (
+                                <div className="text-[10px] text-gray-600 dark:text-gray-400">
+                                  This barcode looks **Sold**, but order reference wasn’t found in the history/metadata returned by the API.
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="text-center py-10 text-xs text-gray-600 dark:text-gray-400">No data.</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </main>

@@ -1,14 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, X, Globe, AlertCircle } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Package } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import CustomerTagManager from '@/components/customers/CustomerTagManager';
 import axios from '@/lib/axios';
 import storeService from '@/services/storeService';
 import productImageService from '@/services/productImageService';
 import batchService from '@/services/batchService';
-import defectIntegrationService from '@/services/defectIntegrationService';
 
 interface DefectItem {
   id: string;
@@ -31,6 +31,8 @@ interface CartProduct {
   amount: number;
   isDefective?: boolean;
   defectId?: string;
+  store_id: number;
+  store_name: string;
 }
 
 // Pathao types
@@ -47,11 +49,28 @@ interface PathaoArea {
   area_name: string;
 }
 
+interface ProductBatchInfo {
+  id: number;
+  name: string;
+  sku: string;
+  batches: Array<{
+    batchId: number;
+    batchNumber: string;
+    store_id: number;
+    store_name: string;
+    available: number;
+    price: number;
+    expiryDate?: string;
+    daysUntilExpiry?: number;
+  }>;
+  mainImage: string;
+}
+
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [allProducts, setAllProducts] = useState<any[]>([]);
-  const [batches, setBatches] = useState<any[]>([]);
+  const [allBatches, setAllBatches] = useState<any[]>([]); // All batches from all stores
   const [stores, setStores] = useState<any[]>([]);
 
   const [date, setDate] = useState(getTodayDate());
@@ -83,7 +102,7 @@ export default function SocialCommercePage() {
   const [deliveryAddress, setDeliveryAddress] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchResults, setSearchResults] = useState<ProductBatchInfo[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [cart, setCart] = useState<CartProduct[]>([]);
 
@@ -93,7 +112,6 @@ export default function SocialCommercePage() {
   const [amount, setAmount] = useState('0.00');
 
   const [defectiveProduct, setDefectiveProduct] = useState<DefectItem | null>(null);
-  const [selectedStore, setSelectedStore] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
 
   // 🧑‍💼 Existing customer + last order summary states
@@ -175,9 +193,6 @@ export default function SocialCommercePage() {
       }
 
       setStores(storesData);
-      if (storesData.length > 0) {
-        setSelectedStore(String(storesData[0].id));
-      }
     } catch (error) {
       console.error('Error fetching stores:', error);
       setStores([]);
@@ -206,63 +221,38 @@ export default function SocialCommercePage() {
     }
   };
 
-  const fetchBatchesForStore = async (storeId: string) => {
-    if (!storeId) return;
+  // ✅ Fetch batches from ALL stores
+  const fetchAllBatches = async () => {
+    if (stores.length === 0) return;
 
     try {
       setIsLoadingData(true);
-      console.log('📦 Fetching batches for store:', storeId);
+      console.log('📦 Fetching batches from all stores');
 
-      try {
-        const batchesData = await batchService.getAvailableBatches(parseInt(storeId));
-        console.log('✅ Raw batches from getAvailableBatches:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
+      const allBatchesPromises = stores.map(async (store) => {
+        try {
+          const batchesData = await batchService.getAvailableBatches(store.id);
+          return batchesData
+            .filter((batch: any) => batch.quantity > 0)
+            .map((batch: any) => ({
+              ...batch,
+              store_id: store.id,
+              store_name: store.name,
+            }));
+        } catch (err) {
+          console.warn(`⚠️ Failed to fetch batches for store ${store.name}`, err);
+          return [];
         }
-      } catch (err) {
-        console.warn('⚠️ getAvailableBatches failed, trying getBatchesArray...', err);
-      }
+      });
 
-      try {
-        const batchesData = await batchService.getBatchesArray({
-          store_id: parseInt(storeId),
-          status: 'available',
-        });
-        console.log('✅ Raw batches from getBatchesArray:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
-        }
-      } catch (err) {
-        console.warn('⚠️ getBatchesArray failed, trying getBatchesByStore...', err);
-      }
-
-      try {
-        const batchesData = await batchService.getBatchesByStore(parseInt(storeId));
-        console.log('✅ Raw batches from getBatchesByStore:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
-        }
-      } catch (err) {
-        console.error('⚠️ All batch fetch methods failed', err);
-      }
-
-      setBatches([]);
-      console.log('⚠️ No batches found for store:', storeId);
+      const batchArrays = await Promise.all(allBatchesPromises);
+      const flattenedBatches = batchArrays.flat();
+      
+      setAllBatches(flattenedBatches);
+      console.log('✅ Total batches loaded:', flattenedBatches.length);
     } catch (error: any) {
       console.error('❌ Batch fetch error:', error);
-      setBatches([]);
+      setAllBatches([]);
     } finally {
       setIsLoadingData(false);
     }
@@ -302,32 +292,31 @@ export default function SocialCommercePage() {
     }
   };
 
-  const performLocalSearch = async (query: string) => {
-    const results: any[] = [];
+  // ✅ New search function - returns products grouped with all their batch locations
+  const performMultiStoreSearch = async (query: string): Promise<ProductBatchInfo[]> => {
     const queryLower = query.toLowerCase().trim();
+    console.log('🔍 Multi-store search for:', queryLower);
 
-    console.log('🔍 Local search for:', queryLower);
+    const productBatchMap = new Map<number, ProductBatchInfo>();
 
     for (const prod of allProducts) {
       const productName = (prod.name || '').toLowerCase();
       const productSku = (prod.sku || '').toLowerCase();
 
       let matches = false;
-      let relevanceScore = 0;
-
-      if (productName === queryLower || productSku === queryLower) {
-        relevanceScore = 100;
-        matches = true;
-      } else if (productName.startsWith(queryLower) || productSku.startsWith(queryLower)) {
-        relevanceScore = 80;
-        matches = true;
-      } else if (productName.includes(queryLower) || productSku.includes(queryLower)) {
-        relevanceScore = 60;
+      if (
+        productName === queryLower ||
+        productSku === queryLower ||
+        productName.startsWith(queryLower) ||
+        productSku.startsWith(queryLower) ||
+        productName.includes(queryLower) ||
+        productSku.includes(queryLower)
+      ) {
         matches = true;
       }
 
       if (matches) {
-        const productBatches = batches.filter((batch: any) => {
+        const productBatches = allBatches.filter((batch: any) => {
           const batchProductId = batch.product?.id || batch.product_id;
           return batchProductId === prod.id && batch.quantity > 0;
         });
@@ -335,30 +324,29 @@ export default function SocialCommercePage() {
         if (productBatches.length > 0) {
           const imageUrl = await fetchPrimaryImage(prod.id);
 
-          for (const batch of productBatches) {
-            results.push({
-              id: prod.id,
-              name: prod.name,
-              sku: prod.sku,
+          const batchInfo: ProductBatchInfo = {
+            id: prod.id,
+            name: prod.name,
+            sku: prod.sku,
+            mainImage: imageUrl,
+            batches: productBatches.map((batch: any) => ({
               batchId: batch.id,
               batchNumber: batch.batch_number,
-              attributes: {
-                Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
-                mainImage: imageUrl,
-              },
+              store_id: batch.store_id,
+              store_name: batch.store_name,
               available: batch.quantity,
+              price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
               expiryDate: batch.expiry_date,
               daysUntilExpiry: batch.days_until_expiry,
-              relevance_score: relevanceScore,
-              search_stage: 'local',
-            });
-          }
+            })),
+          };
+
+          productBatchMap.set(prod.id, batchInfo);
         }
       }
     }
 
-    results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-    return results;
+    return Array.from(productBatchMap.values());
   };
 
   const calculateAmount = (basePrice: number, qty: number, discPer: number, discTk: number) => {
@@ -370,7 +358,8 @@ export default function SocialCommercePage() {
 
   // 🔍 Helper: check if customer exists + get last order
   const handlePhoneBlur = async () => {
-    const phone = userPhone.trim();
+    const rawPhone = userPhone.trim();
+    const phone = rawPhone.replace(/\D/g, '');
     if (!phone) {
       setExistingCustomer(null);
       setLastOrderInfo(null);
@@ -382,32 +371,61 @@ export default function SocialCommercePage() {
       setIsCheckingCustomer(true);
       setCustomerCheckError(null);
 
-      const response = await axios.get('/customers/by-phone', {
-        params: { phone },
-      });
+      // Prefer new endpoint (Customer Tags API): POST /customers/find-by-phone
+      let customer: any = null;
+      try {
+        const response = await axios.post('/customers/find-by-phone', { phone });
+        const payload = response.data?.data ?? response.data;
+        customer = payload?.customer ?? payload;
+      } catch (e: any) {
+        // Fallback for older builds: GET /customers/by-phone
+        try {
+          const response = await axios.get('/customers/by-phone', { params: { phone } });
+          const payload = response.data?.data ?? response.data;
+          customer = payload?.customer ?? payload;
+        } catch {
+          customer = null;
+        }
+      }
 
-      if (response.data?.success && response.data?.data) {
-        const customer = response.data.data;
+      if (customer?.id) {
         setExistingCustomer(customer);
 
-        // Auto-fill name/email if empty
         if (!userName && customer.name) setUserName(customer.name);
         if (!userEmail && customer.email) setUserEmail(customer.email);
 
-        // Fetch last order summary
+        // Best-effort: get last order from customer orders (if endpoint exists)
         try {
-          const lastOrderRes = await axios.get(`/customers/${customer.id}/last-order-summary`);
-          if (lastOrderRes.data?.success) {
-            setLastOrderInfo(lastOrderRes.data.data);
+          const lastOrderRes = await axios.get(`/customers/${customer.id}/orders`, {
+            params: { per_page: 1, sort_by: 'order_date', sort_order: 'desc' },
+          });
+          const payload = lastOrderRes.data?.data ?? lastOrderRes.data;
+          const list = payload?.data ?? payload?.orders ?? payload ?? [];
+          const last = Array.isArray(list) ? list[0] : null;
+          if (last) {
+            setLastOrderInfo({
+              date: last?.order_date || last?.created_at || last?.date,
+              summary_text: last?.summary_text || last?.order_number || `Order #${last?.id ?? ''}`,
+              total_amount: last?.total_amount ?? last?.total,
+            });
           } else {
             setLastOrderInfo(null);
           }
         } catch (err) {
-          console.warn('Failed to load last order summary', err);
-          setLastOrderInfo(null);
+          // Fallback to older summary endpoint if present
+          try {
+            const lastOrderRes = await axios.get(`/customers/${customer.id}/last-order-summary`);
+            if (lastOrderRes.data?.success) {
+              setLastOrderInfo(lastOrderRes.data.data);
+            } else {
+              setLastOrderInfo(null);
+            }
+          } catch {
+            console.warn('Failed to load last order info', err);
+            setLastOrderInfo(null);
+          }
         }
       } else {
-        // No existing customer
         setExistingCustomer(null);
         setLastOrderInfo(null);
       }
@@ -455,6 +473,8 @@ export default function SocialCommercePage() {
             amount: defect.sellingPrice || 0,
             isDefective: true,
             defectId: defect.id,
+            store_id: defect.store_id || 0,
+            store_name: defect.store || 'Unknown',
           };
 
           setCart([defectCartItem]);
@@ -481,18 +501,18 @@ export default function SocialCommercePage() {
     loadInitialData();
   }, []);
 
+  // ✅ Fetch all batches when stores are loaded
   useEffect(() => {
-    if (selectedStore) {
-      fetchBatchesForStore(selectedStore);
+    if (stores.length > 0) {
+      fetchAllBatches();
     }
-  }, [selectedStore]);
+  }, [stores]);
 
   // ✅ Load Pathao cities when domestic
   useEffect(() => {
     if (!isInternational) {
       fetchPathaoCities();
     } else {
-      // reset domestic fields if switching to international
       setPathaoCityId('');
       setPathaoZoneId('');
       setPathaoAreaId('');
@@ -529,19 +549,21 @@ export default function SocialCommercePage() {
     setPathaoAreaId('');
   }, [pathaoZoneId, isInternational]);
 
+  // ✅ Updated search effect - searches across all stores
   useEffect(() => {
-    if (!searchQuery.trim() || !Array.isArray(batches)) {
+    if (!searchQuery.trim() || !Array.isArray(allBatches)) {
       setSearchResults([]);
       return;
     }
 
-    if (batches.length === 0) {
+    if (allBatches.length === 0) {
       console.log('⚠️ No batches available to search');
       return;
     }
 
     const delayDebounce = setTimeout(async () => {
       try {
+        // First try API search
         const response = await axios.post('/products/advanced-search', {
           query: searchQuery,
           is_archived: false,
@@ -558,10 +580,10 @@ export default function SocialCommercePage() {
             response.data.data ||
             [];
 
-          const results: any[] = [];
+          const productBatchMap = new Map<number, ProductBatchInfo>();
 
           for (const prod of products) {
-            const productBatches = batches.filter((batch: any) => {
+            const productBatches = allBatches.filter((batch: any) => {
               const batchProductId = batch.product?.id || batch.product_id;
               return batchProductId === prod.id && batch.quantity > 0;
             });
@@ -569,39 +591,37 @@ export default function SocialCommercePage() {
             if (productBatches.length > 0) {
               const imageUrl = await fetchPrimaryImage(prod.id);
 
-              for (const batch of productBatches) {
-                results.push({
-                  id: prod.id,
-                  name: prod.name,
-                  sku: prod.sku,
+              productBatchMap.set(prod.id, {
+                id: prod.id,
+                name: prod.name,
+                sku: prod.sku,
+                mainImage: imageUrl,
+                batches: productBatches.map((batch: any) => ({
                   batchId: batch.id,
                   batchNumber: batch.batch_number,
-                  attributes: {
-                    Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
-                    mainImage: imageUrl,
-                  },
+                  store_id: batch.store_id,
+                  store_name: batch.store_name,
                   available: batch.quantity,
+                  price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
                   expiryDate: batch.expiry_date,
                   daysUntilExpiry: batch.days_until_expiry,
-                  relevance_score: prod.relevance_score || 0,
-                  search_stage: prod.search_stage || 'api',
-                });
-              }
+                })),
+              });
             }
           }
 
-          results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+          const results = Array.from(productBatchMap.values());
           setSearchResults(results);
 
           if (results.length === 0 && products.length > 0) {
-            showToast('Products found but not available in selected store', 'error');
+            showToast('Products found but not available in any store', 'error');
           }
         } else {
           throw new Error('API search unsuccessful');
         }
       } catch (error: any) {
         console.warn('❌ API search failed, using local search');
-        const localResults = await performLocalSearch(searchQuery);
+        const localResults = await performMultiStoreSearch(searchQuery);
         setSearchResults(localResults);
 
         if (localResults.length === 0) {
@@ -611,11 +631,11 @@ export default function SocialCommercePage() {
     }, 300);
 
     return () => clearTimeout(delayDebounce);
-  }, [searchQuery, batches, allProducts]);
+  }, [searchQuery, allBatches, allProducts]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
-      const price = parseFloat(String(selectedProduct.attributes?.Price || 0));
+      const price = parseFloat(String(selectedProduct.price || 0));
       const qty = parseFloat(quantity) || 0;
       const discPer = parseFloat(discountPercent) || 0;
       const discTk = parseFloat(discountTk) || 0;
@@ -627,8 +647,21 @@ export default function SocialCommercePage() {
     }
   }, [selectedProduct, quantity, discountPercent, discountTk]);
 
-  const handleProductSelect = (product: any) => {
-    setSelectedProduct(product);
+  const handleBatchSelect = (productInfo: ProductBatchInfo, batch: any) => {
+    setSelectedProduct({
+      id: productInfo.id,
+      name: productInfo.name,
+      sku: productInfo.sku,
+      batchId: batch.batchId,
+      batchNumber: batch.batchNumber,
+      price: batch.price,
+      available: batch.available,
+      store_id: batch.store_id,
+      store_name: batch.store_name,
+      mainImage: productInfo.mainImage,
+      expiryDate: batch.expiryDate,
+      daysUntilExpiry: batch.daysUntilExpiry,
+    });
     setSearchQuery('');
     setSearchResults([]);
     setQuantity('1');
@@ -642,7 +675,7 @@ export default function SocialCommercePage() {
       return;
     }
 
-    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const price = Number(String(selectedProduct.price ?? '0').replace(/[^0-9.-]/g, ''));
     const qty = parseInt(quantity);
     const discPer = parseFloat(discountPercent) || 0;
     const discTk = parseFloat(discountTk) || 0;
@@ -660,18 +693,22 @@ export default function SocialCommercePage() {
       id: Date.now(),
       product_id: selectedProduct.id,
       batch_id: selectedProduct.batchId,
-      productName: `${selectedProduct.name}${selectedProduct.batchNumber ? ` (Batch: ${selectedProduct.batchNumber})` : ''}`,
+      productName: `${selectedProduct.name} (${selectedProduct.store_name})${selectedProduct.batchNumber ? ` - Batch: ${selectedProduct.batchNumber}` : ''}`,
       quantity: qty,
       unit_price: price,
       discount_amount: discountValue,
       amount: finalAmount,
       isDefective: selectedProduct.isDefective,
       defectId: selectedProduct.defectId,
+      store_id: selectedProduct.store_id,
+      store_name: selectedProduct.store_name,
     };
 
     console.log('✅ Adding to cart:', {
       product_id: newItem.product_id,
       batch_id: newItem.batch_id,
+      store_id: newItem.store_id,
+      store_name: newItem.store_name,
       isDefective: newItem.isDefective,
     });
 
@@ -698,12 +735,8 @@ export default function SocialCommercePage() {
       alert('Please add products to cart');
       return;
     }
-    if (!selectedStore) {
-      alert('Please select a store');
-      return;
-    }
 
-    // ✅ Always delivery validation
+    // ✅ Validate delivery address
     if (isInternational) {
       if (!country || !internationalCity || !deliveryAddress) {
         alert('Please fill in international address');
@@ -716,7 +749,7 @@ export default function SocialCommercePage() {
       }
     }
 
-    // ⚠️ Duplicate protection: warn if there is an order today already
+    // ⚠️ Duplicate protection
     if (lastOrderInfo && lastOrderInfo.date) {
       const lastDate = new Date(lastOrderInfo.date);
       const now = new Date();
@@ -734,78 +767,79 @@ export default function SocialCommercePage() {
     }
 
     try {
-      console.log('📦 CREATING SOCIAL COMMERCE ORDER');
+    console.log('📦 CREATING SOCIAL COMMERCE ORDER');
 
-      const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
-      const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
-      const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+    const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+    const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+    const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
 
-      const shipping_address = isInternational
-        ? {
-            name: userName,
-            phone: userPhone,
-            street: deliveryAddress,
-            city: internationalCity,
-            state: state || undefined,
-            country,
-            postal_code: internationalPostalCode || undefined,
-          }
-        : {
-            name: userName,
-            phone: userPhone,
-            street: streetAddress,
-            area: areaObj?.area_name || '',
-            city: cityObj?.city_name || '',
-            pathao_city_id: Number(pathaoCityId),
-            pathao_zone_id: Number(pathaoZoneId),
-            pathao_area_id: Number(pathaoAreaId),
-            postal_code: postalCode || undefined,
-          };
-
-      const orderData = {
-        order_type: 'social_commerce',
-        store_id: parseInt(selectedStore),
-        customer: {
+    const shipping_address = isInternational
+      ? {
           name: userName,
-          email: userEmail || undefined,
           phone: userPhone,
-        },
-        shipping_address,
-        items: cart.map((item) => ({
-          product_id: item.product_id,
-          batch_id: item.batch_id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount_amount: item.discount_amount,
-        })),
-        shipping_amount: 0,
-        notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`,
-      };
+          street: deliveryAddress,
+          city: internationalCity,
+          state: state || undefined,
+          country,
+          postal_code: internationalPostalCode || undefined,
+        }
+      : {
+          name: userName,
+          phone: userPhone,
+          street: streetAddress,
+          area: areaObj?.area_name || '',
+          city: cityObj?.city_name || '',
+          pathao_city_id: Number(pathaoCityId),
+          pathao_zone_id: Number(pathaoZoneId),
+          pathao_area_id: Number(pathaoAreaId),
+          postal_code: postalCode || undefined,
+        };
 
-      sessionStorage.setItem(
-        'pendingOrder',
-        JSON.stringify({
-          ...orderData,
-          salesBy,
-          date,
-          isInternational,
-          subtotal,
-          defectiveItems: cart
-            .filter((item) => item.isDefective)
-            .map((item) => ({
-              defectId: item.defectId,
-              price: item.unit_price,
-              productName: item.productName,
-            })),
-        })
-      );
+    // ✅ Flatten items - each item already has store_id
+    const orderData = {
+      order_type: 'social_commerce',
+      customer: {
+        name: userName,
+        email: userEmail || undefined,
+        phone: userPhone,
+      },
+      shipping_address,
+      items: cart.map(item => ({
+        product_id: item.product_id,
+        batch_id: item.batch_id,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        discount_amount: item.discount_amount,
+        store_id: item.store_id, // ✅ Each item has its store_id
+      })),
+      shipping_amount: 0,
+      notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`,
+    };
 
-      console.log('✅ Order data prepared, redirecting...');
-      window.location.href = '/social-commerce/amount-details';
-    } catch (error) {
-      console.error('❌ Error:', error);
-      alert('Failed to process order');
-    }
+    sessionStorage.setItem(
+      'pendingOrder',
+      JSON.stringify({
+        ...orderData,
+        salesBy,
+        date,
+        isInternational,
+        subtotal,
+        defectiveItems: cart
+          .filter((item) => item.isDefective)
+          .map((item) => ({
+            defectId: item.defectId,
+            price: item.unit_price,
+            productName: item.productName,
+          })),
+      })
+    );
+
+    console.log('✅ Order data prepared, redirecting...');
+    window.location.href = '/social-commerce/amount-details';
+  } catch (error) {
+    console.error('❌ Error:', error);
+    alert('Failed to process order');
+  }
   };
 
   return (
@@ -853,25 +887,14 @@ export default function SocialCommercePage() {
                   />
                 </div>
                 <div className="w-full sm:w-auto">
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    Store <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="">Select Store</option>
-                    {stores.map((store) => (
-                      <option key={store.id} value={store.id}>
-                        {store.name}
-                      </option>
-                    ))}
-                  </select>
-                  {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading batches...</p>}
-                  {selectedStore && !isLoadingData && batches.length > 0 && (
-                    <p className="mt-1 text-xs text-green-600">{batches.length} batches available</p>
-                  )}
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Inventory Status</label>
+                  <div className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white">
+                    {isLoadingData ? (
+                      <span className="text-blue-600">Loading...</span>
+                    ) : (
+                      <span className="text-green-600">{allBatches.length} batches across {stores.length} stores</span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -935,6 +958,15 @@ export default function SocialCommercePage() {
                                 <p>
                                   Total Orders: <span className="font-medium">{existingCustomer.total_orders ?? 0}</span>
                                 </p>
+                                {/* Customer Tags (view + manage) */}
+                                <CustomerTagManager
+                                  customerId={existingCustomer.id}
+                                  initialTags={Array.isArray(existingCustomer.tags) ? existingCustomer.tags : []}
+                                  compact
+                                  onTagsChange={(next) =>
+                                    setExistingCustomer((prev: any) => (prev ? { ...prev, tags: next } : prev))
+                                  }
+                                />
                                 {lastOrderInfo ? (
                                   <div className="mt-1">
                                     <p className="font-semibold">Last Order Summary:</p>
@@ -981,8 +1013,6 @@ export default function SocialCommercePage() {
                       <button
                         onClick={() => {
                           setIsInternational(!isInternational);
-
-                          // reset domestic
                           setPathaoCityId('');
                           setPathaoZoneId('');
                           setPathaoAreaId('');
@@ -990,8 +1020,6 @@ export default function SocialCommercePage() {
                           setPathaoAreas([]);
                           setStreetAddress('');
                           setPostalCode('');
-
-                          // reset international
                           setCountry('');
                           setState('');
                           setInternationalCity('');
@@ -1155,7 +1183,7 @@ export default function SocialCommercePage() {
                     }`}
                   >
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">Search Product</h3>
+                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">Search Product (All Stores)</h3>
                       {selectedProduct?.isDefective && (
                         <span className="px-2 py-1 bg-orange-500 text-white text-xs font-medium rounded">
                           Defective Product
@@ -1166,76 +1194,91 @@ export default function SocialCommercePage() {
                     <div className="flex gap-2 mb-4">
                       <input
                         type="text"
-                        placeholder={
-                          !selectedStore
-                            ? 'Select a store first...'
-                            : isLoadingData
-                            ? 'Loading batches...'
-                            : 'Search product name...'
-                        }
+                        placeholder={isLoadingData ? 'Loading inventory...' : 'Search product name or SKU...'}
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        disabled={!selectedStore || isLoadingData}
+                        disabled={isLoadingData}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                       <button
-                        disabled={!selectedStore || isLoadingData}
+                        disabled={isLoadingData}
                         className="px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Search size={18} />
                       </button>
                     </div>
 
-                    {!selectedStore && (
-                      <div className="text-center py-8 text-sm text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-700">
-                        Please select a store to search products
-                      </div>
-                    )}
-
-                    {selectedStore && isLoadingData && (
+                    {isLoadingData && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
-                        Loading batches for selected store...
+                        Loading inventory from all stores...
                       </div>
                     )}
 
-                    {selectedStore && !isLoadingData && searchQuery && searchResults.length === 0 && (
+                    {!isLoadingData && searchQuery && searchResults.length === 0 && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
                         No products found matching "{searchQuery}"
                       </div>
                     )}
 
                     {searchResults.length > 0 && (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-60 md:max-h-80 overflow-y-auto mb-4 p-1">
-                        {searchResults.map((product) => (
+                      <div className="space-y-4 max-h-96 overflow-y-auto mb-4 p-1">
+                        {searchResults.map((productInfo) => (
                           <div
-                            key={`${product.id}-${product.batchId}`}
-                            onClick={() => handleProductSelect(product)}
-                            className="border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                            key={productInfo.id}
+                            className="border border-gray-200 dark:border-gray-600 rounded p-3"
                           >
-                            <img
-                              src={product.attributes.mainImage}
-                              alt={product.name}
-                              className="w-full h-24 sm:h-32 object-cover rounded mb-2"
-                            />
-                            <p className="text-xs text-gray-900 dark:text-white font-medium truncate">
-                              {product.name}
-                            </p>
-                            {product.batchNumber && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
-                                Batch: {product.batchNumber}
+                            <div className="flex gap-3 mb-3">
+                              <img
+                                src={productInfo.mainImage}
+                                alt={productInfo.name}
+                                className="w-20 h-20 object-cover rounded"
+                              />
+                              <div className="flex-1">
+                                <p className="text-sm font-medium text-gray-900 dark:text-white">{productInfo.name}</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">SKU: {productInfo.sku}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  Available in {productInfo.batches.length} location(s)
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="space-y-2">
+                              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 flex items-center gap-1">
+                                <Package size={12} />
+                                Select Store & Batch:
                               </p>
-                            )}
-                            <p className="text-xs text-gray-600 dark:text-gray-400">
-                              {product.attributes.Price} Tk
-                            </p>
-                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                              Available: {product.available}
-                            </p>
-                            {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
-                              <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                                Expires in {product.daysUntilExpiry} days
-                              </p>
-                            )}
+                              {productInfo.batches.map((batch) => (
+                                <button
+                                  key={`${batch.batchId}-${batch.store_id}`}
+                                  onClick={() => handleBatchSelect(productInfo, batch)}
+                                  className="w-full p-2 border border-gray-200 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors text-left"
+                                >
+                                  <div className="flex justify-between items-start">
+                                    <div>
+                                      <p className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                                         {batch.store_name}
+                                      </p>
+                                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                                        Batch: {batch.batchNumber}
+                                      </p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="text-xs font-medium text-gray-900 dark:text-white">
+                                        {batch.price} Tk
+                                      </p>
+                                      <p className="text-xs text-green-600 dark:text-green-400">
+                                        Stock: {batch.available}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {batch.daysUntilExpiry != null && batch.daysUntilExpiry < 30 && (
+                                    <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
+                                      ⚠️ Expires in {batch.daysUntilExpiry} days
+                                    </p>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -1265,13 +1308,14 @@ export default function SocialCommercePage() {
                           </button>
                         </div>
                         <p className="text-sm font-medium text-gray-900 dark:text-white">{selectedProduct.name}</p>
+                        <p className="text-sm text-blue-600 dark:text-blue-400">🏪 {selectedProduct.store_name}</p>
                         {selectedProduct.batchNumber && (
-                          <p className="text-sm text-blue-600 dark:text-blue-400">
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
                             Batch: {selectedProduct.batchNumber}
                           </p>
                         )}
                         <p className="text-sm text-gray-600 dark:text-gray-400">
-                          Price: {selectedProduct.attributes.Price} Tk
+                          Price: {selectedProduct.price} Tk
                         </p>
                         <p className="text-sm text-green-600 dark:text-green-400">
                           Available: {selectedProduct.available}

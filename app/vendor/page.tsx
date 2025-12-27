@@ -121,6 +121,14 @@ export default function VendorPaymentPage() {
     ]
   });
 
+  // Variant quick-add (group sizes/colors) in PO creation
+  const [showVariantPicker, setShowVariantPicker] = useState(false);
+  const [variantBaseProduct, setVariantBaseProduct] = useState<Product | null>(null);
+  const [variantOptions, setVariantOptions] = useState<Product[]>([]);
+  const [variantInputs, setVariantInputs] = useState<Record<number, { quantity: string; unit_cost: string }>>({});
+  const [variantBulkCost, setVariantBulkCost] = useState('');
+
+
   // Form states - Payment
   const [paymentForm, setPaymentForm] = useState({
     payment_method_id: '',
@@ -160,6 +168,122 @@ export default function VendorPaymentPage() {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 3000);
   };
+
+  const getVariantGroupKey = (p: Product): string => {
+    const sku = (p.sku || '').trim().toLowerCase();
+    if (sku) return sku.replace(/[-_\s]?\d+$/i, '');
+    const name = (p.name || '').trim().toLowerCase();
+    return name.replace(/\s+\d+(?:\.\d+)?$/i, '').trim();
+  };
+
+  const extractTrailingSize = (p: Product): number | null => {
+    const name = (p.name || '').trim();
+    const m = name.match(/(\d+(?:\.\d+)?)\s*$/);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    return isNaN(n) ? null : n;
+  };
+
+  const getVariantGroupProducts = (p: Product): Product[] => {
+    // If backend already returns variants, use them
+    if (Array.isArray((p as any).variants) && (p as any).variants.length > 0) {
+      const all = [p, ...(p as any).variants].filter(Boolean) as any[];
+      const map = new Map<number, Product>();
+      all.forEach((x) => {
+        if (x?.id) map.set(Number(x.id), x);
+      });
+      return Array.from(map.values());
+    }
+
+    // Fallback: infer variants from the full product list by SKU prefix or name base
+    const key = getVariantGroupKey(p);
+    const grouped = products.filter((x) => getVariantGroupKey(x) === key);
+
+    if (grouped.length <= 1) {
+      const base = (p.name || '').trim().toLowerCase().replace(/\s+\d+(?:\.\d+)?$/i, '').trim();
+      const starts = products.filter((x) => (x.name || '').trim().toLowerCase().startsWith(base));
+      return starts;
+    }
+
+    return grouped;
+  };
+
+  const openVariantPicker = (productId: string) => {
+    const pid = parseInt(productId || '0', 10);
+    if (!pid) return;
+
+    const base = products.find((p) => p.id === pid);
+    if (!base) return;
+
+    const options = getVariantGroupProducts(base)
+      .filter((x) => x?.id)
+      .sort((a, b) => {
+        const sa = extractTrailingSize(a);
+        const sb = extractTrailingSize(b);
+        if (sa === null && sb === null) return (a.name || '').localeCompare(b.name || '');
+        if (sa === null) return 1;
+        if (sb === null) return -1;
+        return sa - sb;
+      });
+
+    const inputs: Record<number, { quantity: string; unit_cost: string }> = {};
+    options.forEach((opt) => {
+      const existing = purchaseForm.items.find((it: any) => String(it.product_id) === String(opt.id));
+      inputs[opt.id] = {
+        quantity: existing?.quantity_ordered || '0',
+        unit_cost: existing?.unit_cost || '',
+      };
+    });
+
+    setVariantBaseProduct(base);
+    setVariantOptions(options);
+    setVariantInputs(inputs);
+    setVariantBulkCost('');
+    setShowVariantPicker(true);
+  };
+
+  const applyVariantPicker = () => {
+    if (!variantOptions.length) return;
+
+    setPurchaseForm((prev: any) => {
+      const items = [...prev.items];
+
+      variantOptions.forEach((opt) => {
+        const input = variantInputs[opt.id] || { quantity: '0', unit_cost: '' };
+        const qty = parseInt(input.quantity || '0', 10) || 0;
+        if (qty <= 0) return;
+
+        const idx = items.findIndex((x) => String(x.product_id) === String(opt.id));
+        if (idx >= 0) {
+          items[idx] = {
+            ...items[idx],
+            quantity_ordered: String(qty),
+            unit_cost: input.unit_cost || items[idx].unit_cost || '',
+          };
+        } else {
+          items.push({
+            product_id: String(opt.id),
+            quantity_ordered: String(qty),
+            unit_cost: input.unit_cost || '',
+            unit_sell_price: '',
+            tax_amount: '',
+            discount_amount: '',
+            notes: '',
+          });
+        }
+      });
+
+      return { ...prev, items };
+    });
+
+    setShowVariantPicker(false);
+    setVariantBaseProduct(null);
+    setVariantOptions([]);
+    setVariantInputs({});
+    setVariantBulkCost('');
+    showAlert('success', 'Variations applied to purchase order');
+  };
+
 
   // Load vendors
   const loadVendors = async () => {
@@ -891,6 +1015,22 @@ export default function VendorPaymentPage() {
                         <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
                       ))}
                     </select>
+                          {item.product_id && (() => {
+                            const base = products.find((p) => p.id === parseInt(item.product_id, 10));
+                            const count = base ? getVariantGroupProducts(base).length : 0;
+                            if (!base || count <= 1) return null;
+                            return (
+                              <button
+                                type="button"
+                                onClick={() => openVariantPicker(item.product_id)}
+                                className="mt-2 inline-flex items-center gap-1 px-2 py-1 text-xs bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md"
+                                title="Quick add size/color variations"
+                              >
+                                Variations ({count})
+                              </button>
+                            );
+                          })()}
+
                   </div>
 
                   <div>
@@ -1056,7 +1196,131 @@ export default function VendorPaymentPage() {
       </Modal>
 
       {/* Payment Modal */}
-      <Modal
+      
+    {/* Variant Picker Modal */}
+    <Modal
+      isOpen={showVariantPicker}
+      onClose={() => setShowVariantPicker(false)}
+      title={`Add variations${variantBaseProduct?.name ? `: ${variantBaseProduct.name}` : ''}`}
+      size="xl"
+    >
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Set Unit Cost for all (optional)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={variantBulkCost}
+              onChange={(e) => setVariantBulkCost(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              placeholder="e.g., 1200"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!variantBulkCost) return;
+              setVariantInputs((prev) => {
+                const next = { ...prev };
+                variantOptions.forEach((v) => {
+                  next[v.id] = { ...(next[v.id] || { quantity: '0', unit_cost: '' }), unit_cost: variantBulkCost };
+                });
+                return next;
+              });
+            }}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
+          >
+            Apply to all
+          </button>
+        </div>
+
+        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-700">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
+                    Variation
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
+                    Qty
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
+                    Unit Cost
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                {variantOptions.map((v) => (
+                  <tr key={v.id}>
+                    <td className="px-4 py-3 text-sm text-gray-800 dark:text-gray-100">
+                      <div className="font-medium">{v.name}</div>
+                      {v.sku && <div className="text-xs text-gray-500 dark:text-gray-400">{v.sku}</div>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        value={variantInputs[v.id]?.quantity ?? '0'}
+                        onChange={(e) =>
+                          setVariantInputs((prev) => ({
+                            ...prev,
+                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '' }), quantity: e.target.value },
+                          }))
+                        }
+                        className="w-28 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={variantInputs[v.id]?.unit_cost ?? ''}
+                        onChange={(e) =>
+                          setVariantInputs((prev) => ({
+                            ...prev,
+                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '' }), unit_cost: e.target.value },
+                          }))
+                        }
+                        className="w-36 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    </td>
+                  </tr>
+                ))}
+                {variantOptions.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                      No variations found for this product.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-3 pt-2">
+          <button
+            type="button"
+            onClick={() => setShowVariantPicker(false)}
+            className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={applyVariantPicker}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
+          >
+            Apply to PO
+          </button>
+        </div>
+      </div>
+    </Modal>
+
+<Modal
         isOpen={showPayment}
         onClose={() => setShowPayment(false)}
         title="Make Payment"

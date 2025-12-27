@@ -8,6 +8,11 @@ type Customer = {
   name?: string;
   phone?: string;
   email?: string;
+  tags?: string[];
+  customer_type?: string;
+  customer_code?: string;
+  total_orders?: number;
+  total_purchases?: string;
 };
 
 type LastOrderSummary = {
@@ -49,7 +54,8 @@ export function useCustomerLookup(opts?: {
 
   useEffect(() => {
     const raw = phone.trim();
-    if (raw.length < minLength) {
+    const formatted = raw.replace(/\D/g, "");
+    if (formatted.length < minLength) {
       setCustomer(null);
       setLastOrder(null);
       setError(null);
@@ -58,22 +64,31 @@ export function useCustomerLookup(opts?: {
     }
 
     // avoid spamming same query
-    if (raw === lastQueried.current) return;
+    if (formatted === lastQueried.current) return;
 
     const t = setTimeout(async () => {
       try {
         setLoading(true);
         setError(null);
 
-        lastQueried.current = raw;
+        lastQueried.current = formatted;
 
-        // 1) lookup customer by phone
-        const res = await axiosInstance.get("/customers/by-phone", {
-          params: { phone: raw },
-        });
-
-        const payload = res.data?.data ?? res.data; // supports both shapes
-        const found = payload?.customer ?? payload; // in case backend nests
+        // 1) lookup customer by phone (new endpoint preferred)
+        let found: any = null;
+        try {
+          const res = await axiosInstance.post('/customers/find-by-phone', { phone: formatted });
+          const payload = res.data?.data ?? res.data;
+          found = payload?.customer ?? payload;
+        } catch (err: any) {
+          // Fallbacks for older builds
+          try {
+            const res = await axiosInstance.get('/customers/by-phone', { params: { phone: formatted } });
+            const payload = res.data?.data ?? res.data;
+            found = payload?.customer ?? payload;
+          } catch {
+            found = null;
+          }
+        }
 
         if (!found?.id) {
           setCustomer(null);
@@ -84,11 +99,35 @@ export function useCustomerLookup(opts?: {
         setCustomer(found);
 
         // 2) fetch last purchase/summary
-        const lastRes = await axiosInstance.get(
-          `/customers/${found.id}/last-order-summary`
-        );
-        const lastPayload = lastRes.data?.data ?? lastRes.data;
-        setLastOrder(lastPayload ?? null);
+        // New customer payload already includes total_orders/total_purchases, but not last order.
+        // Use customer orders endpoint (if available) as a best-effort.
+        try {
+          const lastRes = await axiosInstance.get(`/customers/${found.id}/orders`, {
+            params: { per_page: 1, sort_by: 'order_date', sort_order: 'desc' },
+          });
+          const lastPayload = lastRes.data?.data ?? lastRes.data;
+          const list = lastPayload?.data ?? lastPayload?.orders ?? lastPayload ?? [];
+          const last = Array.isArray(list) ? list[0] : null;
+          if (last) {
+            setLastOrder({
+              last_order_id: last?.id,
+              last_order_date: last?.order_date || last?.created_at || last?.date,
+              last_order_total: Number(last?.total_amount ?? last?.total ?? 0),
+              last_order_items_count: Number(last?.items_count ?? last?.total_items ?? last?.items?.length ?? 0),
+            });
+          } else {
+            setLastOrder(null);
+          }
+        } catch {
+          // fallback to old summary endpoint (if still present)
+          try {
+            const lastRes = await axiosInstance.get(`/customers/${found.id}/last-order-summary`);
+            const lastPayload = lastRes.data?.data ?? lastRes.data;
+            setLastOrder(lastPayload ?? null);
+          } catch {
+            setLastOrder(null);
+          }
+        }
       } catch (e: any) {
         setCustomer(null);
         setLastOrder(null);

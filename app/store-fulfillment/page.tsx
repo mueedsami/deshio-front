@@ -20,6 +20,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import storeFulfillmentService, { AssignedOrder, OrderItem } from '@/services/storeFulfillmentService';
 import Toast from '@/components/Toast';
+import ActivityLogPanel from '@/components/activity/ActivityLogPanel';
 
 interface ScanHistoryEntry {
   barcode: string;
@@ -644,6 +645,19 @@ export default function StoreFulfillmentPage() {
                     )}
                   </button>
                 </div>
+
+	                {/* Activity for this order */}
+	                {order?.id ? (
+	                  <div className="mt-6">
+	                    <ActivityLogPanel
+	                      title="Order Activity"
+	                      module="orders"
+	                      modelName="Order"
+	                      entityId={order.id}
+	                      limit={10}
+	                    />
+	                  </div>
+	                ) : null}
 
                 {/* Right Column - Scanning Interface */}
                 <div>

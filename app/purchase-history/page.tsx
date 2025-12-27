@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw } from 'lucide-react';
+import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import orderService, { type OrderFilters } from '@/services/orderService';
@@ -10,6 +10,7 @@ import refundService, { type CreateRefundRequest } from '@/services/refundServic
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
 import axiosInstance from '@/lib/axios';
+import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
 
 interface OrderItem {
   id: number;
@@ -247,6 +248,24 @@ export default function PurchaseHistoryPage() {
     }
     
     setShowExchangeModal(true);
+  };
+
+  const handlePrintReceipt = async (order: Order) => {
+    setActiveMenu(null);
+
+    try {
+      const status = await checkQZStatus();
+      if (!status.connected) {
+        alert('QZ Tray is offline. Opening receipt preview (Print → Save as PDF).');
+      }
+
+      const fullOrder = await orderService.getById(order.id);
+      await printReceipt(fullOrder);
+      alert(`✅ Receipt printed for order #${fullOrder.order_number || fullOrder.id}`);
+    } catch (error: any) {
+      console.error('Print receipt error:', error);
+      alert(`Failed to print receipt: ${error?.message || 'Unknown error'}`);
+    }
   };
 
   const handleReturnSubmit = async (returnData: {
@@ -781,9 +800,21 @@ export default function PurchaseHistoryPage() {
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      handlePrintReceipt(order);
+                                    }}
+                                    className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-3 rounded-t-lg transition-colors"
+                                  >
+                                    <Printer className="w-4 h-4 text-gray-700 dark:text-gray-300" />
+                                    <span>Print Receipt</span>
+                                  </button>
+                                  <div className="h-px bg-gray-200 dark:bg-gray-700"></div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
                                       handleExchangeClick(order);
                                     }}
-                                    className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-3 rounded-t-lg transition-colors"
+                                    className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-3 transition-colors"
                                   >
                                     <ArrowRightLeft className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                                     <span>Exchange Products</span>

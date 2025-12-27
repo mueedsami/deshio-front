@@ -53,14 +53,16 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
         }
 
         // Verify payment status from backend
-        console.log('✅ Checking payment status for order:', paymentIntent.order_id);
+        console.log('✅ Checking payment status for order:', paymentIntent.order_number);
         
-        const result = await sslcommerzService.checkPaymentStatus(paymentIntent.order_id);
+        const result = await sslcommerzService.checkPaymentStatus(paymentIntent.order_number);
 
         console.log('📊 Payment status result:', result);
 
+        const paymentStatus = (result.order.payment_status || '').toLowerCase();
+
         // Determine payment outcome
-        if (result.order.payment_status === 'completed') {
+        if (paymentStatus === 'completed' || paymentStatus === 'paid') {
           setPaymentResult({
             status: 'success',
             orderNumber: result.order.order_number,
@@ -70,7 +72,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'completed');
           }
-        } else if (result.order.status === 'payment_failed') {
+        } else if (paymentStatus === 'failed' || result.order.status === 'payment_failed') {
           setPaymentResult({
             status: 'failed',
             orderNumber: result.order.order_number,
@@ -80,7 +82,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'failed');
           }
-        } else if (result.order.status === 'cancelled') {
+        } else if (paymentStatus === 'cancelled' || result.order.status === 'cancelled') {
           setPaymentResult({
             status: 'cancelled',
             orderNumber: result.order.order_number,
@@ -90,6 +92,11 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'cancelled');
           }
+        }
+        else {
+          // Still unpaid/pending/processing → keep intent so we can re-check later
+          setPaymentResult({ status: null, orderNumber: null, message: null });
+          return;
         }
 
         // Clear payment intent after verification

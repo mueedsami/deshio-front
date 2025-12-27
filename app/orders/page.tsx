@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import {
@@ -15,16 +15,25 @@ import {
   Edit,
   RefreshCw,
   ArrowLeftRight,
-  X
+  X,
+  Truck,
+  Printer,
+  Settings,
+  CheckCircle,
 } from 'lucide-react';
+
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
 
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import ActivityLogPanel from '@/components/activity/ActivityLogPanel';
 import productReturnService, { type CreateReturnRequest } from '@/services/productReturnService';
 import refundService, { type CreateRefundRequest } from '@/services/refundService';
+
+import shipmentService from '@/services/shipmentService';
+import { checkQZStatus, printReceipt, printBulkReceipts, getPrinters, savePreferredPrinter } from '@/lib/qz-tray';
 
 interface Order {
   id: number;
@@ -54,16 +63,25 @@ interface Order {
     paid: number;
     due: number;
   };
+
+  // ✅ backend order status
   status: string;
+  statusLabel: string;
+
+  // ✅ payment status separate
+  paymentStatus: string;
+  paymentStatusLabel: string;
+
   salesBy: string;
   store: string;
   storeId?: number;
   notes?: string;
-  fulfillmentStatus?: string | null;
+
+  createdAt?: string;
+  orderDateRaw?: string;
 }
 
-
-// Types expected by ReturnProductModal / ExchangeProductModal (POS components)
+// Types expected by ReturnProductModal / ExchangeProductModal
 type ReturnModalOrderItem = {
   id: number;
   product_id: number;
@@ -144,9 +162,7 @@ const toReturnModalOrder = (o: BackendOrder): ReturnModalOrder => ({
 const toExchangeModalOrder = (o: BackendOrder): ExchangeModalOrder => ({
   id: o.id,
   order_number: o.order_number,
-  customer: o.customer
-    ? { id: o.customer.id, name: o.customer.name, phone: o.customer.phone }
-    : undefined,
+  customer: o.customer ? { id: o.customer.id, name: o.customer.name, phone: o.customer.phone } : undefined,
   store: { id: o.store?.id ?? 0, name: o.store?.name ?? '' },
   items: (o.items ?? []).map((it) => ({
     id: it.id,
@@ -170,28 +186,48 @@ const toExchangeModalOrder = (o: BackendOrder): ExchangeModalOrder => ({
   paid_amount: o.paid_amount ?? '0',
 });
 
+const normalize = (v: any) => String(v ?? '').trim().toLowerCase();
 
-export default function PendingOrdersDashboard() {
+const titleCase = (s: string) =>
+  s
+    .replace(/_/g, ' ')
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+
+export default function OrdersDashboard() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
+
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All Status');
+
+  // ✅ NEW: Order type filter (All / Social / E-Com)
   const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
+
+  // ✅ Separate filters
+  const [orderStatusFilter, setOrderStatusFilter] = useState('All Order Status');
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
+
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [editableOrder, setEditableOrder] = useState<Order | null>(null);
+
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+
   const [activeMenu, setActiveMenu] = useState<number | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+
   const [userName, setUserName] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSavingOrder, setIsSavingOrder] = useState(false);
 
-  // 🔁 Return / Exchange (re-use POS logic from Purchase History)
+  // 🔁 Return / Exchange
   const [selectedOrderForAction, setSelectedOrderForAction] = useState<BackendOrder | null>(null);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
@@ -204,77 +240,174 @@ export default function PendingOrdersDashboard() {
   const [pickerBatches, setPickerBatches] = useState<any[]>([]);
   const [pickerStoreId, setPickerStoreId] = useState<number | null>(null);
 
+  // ✅ Bulk selection + operations (Pathao + Print)
+  const [selectedOrders, setSelectedOrders] = useState<Set<number>>(new Set());
+  const [isSendingBulk, setIsSendingBulk] = useState(false);
+  const [isPrintingBulk, setIsPrintingBulk] = useState(false);
+
+  const [bulkPrintProgress, setBulkPrintProgress] = useState<{
+    show: boolean;
+    current: number;
+    total: number;
+    success: number;
+    failed: number;
+    details?: Array<{ orderId?: number; orderNumber?: string; status?: 'success' | 'failed'; message?: string }>;
+  }>({ show: false, current: 0, total: 0, success: 0, failed: 0, details: [] });
+
+  const [pathaoProgress, setPathaoProgress] = useState<{
+    show: boolean;
+    current: number;
+    total: number;
+    success: number;
+    failed: number;
+    details: Array<{ orderId: number; orderNumber?: string; status: 'success' | 'failed'; message: string }>;
+  }>({ show: false, current: 0, total: 0, success: 0, failed: 0, details: [] });
+
+  // ✅ QZ / printer state
+  const [qzConnected, setQzConnected] = useState(false);
+  const [printers, setPrinters] = useState<string[]>([]);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>('');
+  const [showPrinterSelect, setShowPrinterSelect] = useState(false);
+
+  // ✅ Single action loading (per-order)
+  const [singleActionLoading, setSingleActionLoading] = useState<{
+    orderId: number;
+    action: 'print' | 'pathao';
+  } | null>(null);
+
+  const isSingleLoading = (orderId: number, action: 'print' | 'pathao') =>
+    singleActionLoading?.orderId === orderId && singleActionLoading?.action === action;
+
   useEffect(() => {
     const name = localStorage.getItem('userName') || '';
     setUserName(name);
     loadOrders();
+    checkPrinterStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const parseMoney = (val: any) =>
-    Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
+  const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
 
-  // 🔧 Central transformer to avoid the "all orders of same customer" bug
+  const derivePaymentStatus = (order: any) => {
+    const raw = normalize(order?.payment_status);
+    if (raw) return raw;
+    const total = parseMoney(order?.total_amount);
+    const due = parseMoney(order?.outstanding_amount);
+    if (total <= 0) return 'pending';
+    if (due <= 0) return 'paid';
+    if (due < total) return 'partially_paid';
+    return 'pending';
+  };
+
+  const statusLabel = (raw: string) => {
+    const s = normalize(raw);
+    return s ? titleCase(s) : 'Unknown';
+  };
+
+  const getOrderStatusBadge = (raw: string) => {
+    const s = normalize(raw);
+    const cls =
+      s === 'delivered' || s === 'completed'
+        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+        : s === 'shipped'
+        ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+        : s === 'processing' || s === 'confirmed' || s === 'ready_for_pickup'
+        ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400'
+        : s === 'cancelled'
+        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+        : s === 'refunded'
+        ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
+        : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300';
+
+    return (
+      <span className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${cls}`}>
+        {statusLabel(raw)}
+      </span>
+    );
+  };
+
+  const getPaymentStatusBadge = (raw: string, compact = true) => {
+    const s = normalize(raw);
+    const cls =
+      s === 'paid'
+        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+        : s === 'partially_paid'
+        ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
+        : s === 'overdue'
+        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+        : s === 'failed'
+        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+        : s === 'refunded'
+        ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
+        : 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300';
+
+    return (
+      <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-medium ${cls}`}>
+        {compact ? statusLabel(raw) : `Payment: ${statusLabel(raw)}`}
+      </span>
+    );
+  };
+
+  // 🔧 Central transformer
   const transformOrder = (order: any): Order => {
+    const paid = parseMoney(order.paid_amount);
+    const due = parseMoney(order.outstanding_amount);
+    const total = parseMoney(order.total_amount);
+
+    const oStatusRaw = order.status ?? '';
+    const pStatusRaw = derivePaymentStatus(order);
+
     return {
       id: order.id,
       orderNumber: order.order_number,
       orderType: order.order_type,
-      orderTypeLabel: order.order_type_label,
+      orderTypeLabel: order.order_type_label ?? titleCase(order.order_type ?? ''),
       date: new Date(order.order_date).toLocaleDateString('en-GB'),
       customer: {
-        // Prefer per-order snapshot fields if present
         name: order.customer_name ?? order.customer?.name ?? '',
         phone: order.customer_phone ?? order.customer?.phone ?? '',
         email: order.customer_email ?? order.customer?.email ?? '',
-        address:
-          order.customer_address ??
-          order.shipping_address ??
-          ''
+        address: order.customer_address ?? order.shipping_address ?? '',
       },
       items:
         order.items?.map((item: any) => {
           const unitPrice = parseMoney(item.unit_price);
           const discountAmount = parseMoney(item.discount_amount);
-
-          console.log('Item data:', {
-            product_name: item.product_name,
-            unit_price_raw: item.unit_price,
-            unit_price_cleaned: unitPrice,
-            discount_raw: item.discount_amount,
-            discount_cleaned: discountAmount
-          });
-
           return {
             id: item.id,
             name: item.product_name,
             sku: item.product_sku,
             quantity: item.quantity,
             price: unitPrice,
-            discount: discountAmount
+            discount: discountAmount,
           };
         }) || [],
       subtotal: parseMoney(order.subtotal),
       discount: parseMoney(order.discount_amount),
       shipping: parseMoney(order.shipping_amount),
       amounts: {
-        total: parseMoney(order.total_amount),
-        paid: parseMoney(order.paid_amount),
-        due: parseMoney(order.outstanding_amount)
+        total: total,
+        paid: paid,
+        due: due,
       },
-      status: order.payment_status === 'paid' ? 'Paid' : 'Pending',
+
+      status: normalize(oStatusRaw) || 'pending',
+      statusLabel: statusLabel(oStatusRaw || 'pending'),
+
+      paymentStatus: normalize(pStatusRaw) || 'pending',
+      paymentStatusLabel: statusLabel(pStatusRaw || 'pending'),
+
       salesBy: order.salesman?.name || userName || 'N/A',
       store: order.store?.name || '',
       storeId: order.store?.id,
       notes: order.notes || '',
-      fulfillmentStatus: order.fulfillment_status
+      createdAt: order.created_at,
+      orderDateRaw: order.order_date,
     };
   };
 
   const recalcOrderTotals = (order: Order): Order => {
-    const subtotal = order.items.reduce(
-      (sum, item) => sum + (item.price - item.discount) * item.quantity,
-      0
-    );
+    const subtotal = order.items.reduce((sum, item) => sum + (item.price - item.discount) * item.quantity, 0);
     const discount = order.discount ?? 0;
     const shipping = order.shipping ?? 0;
     const total = subtotal - discount + shipping;
@@ -287,50 +420,47 @@ export default function PendingOrdersDashboard() {
       amounts: {
         ...order.amounts,
         total,
-        due
-      }
+        due,
+      },
     };
   };
 
+  // ✅ Social Commerce + E-Commerce orders
   const loadOrders = async () => {
     setIsLoading(true);
     try {
-      // Fetch social commerce orders pending fulfillment
-      const socialCommerceResponse = await orderService.getAll({
-        order_type: 'social_commerce',
-        status: 'pending',
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        per_page: 1000
-      });
+      const [social, ecommerce] = await Promise.all([
+        orderService.getAll({
+          order_type: 'social_commerce',
+          sort_by: 'created_at',
+          sort_order: 'desc',
+          per_page: 1000,
+        }),
+        orderService.getAll({
+          order_type: 'ecommerce',
+          sort_by: 'created_at',
+          sort_order: 'desc',
+          per_page: 1000,
+        }),
+      ]);
 
-      // Fetch e-commerce orders pending fulfillment
-      const ecommerceResponse = await orderService.getAll({
-        order_type: 'ecommerce',
-        status: 'pending',
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        per_page: 1000
-      });
+      const allOrders = [...(social.data || []), ...(ecommerce.data || [])];
 
-      // Combine both order types
-      const allOrders = [
-        ...socialCommerceResponse.data,
-        ...ecommerceResponse.data
-      ];
+      allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-      // Sort combined orders by date
-      allOrders.sort(
-        (a: any, b: any) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-
-      const transformedOrders = allOrders.map((order: any) =>
-        transformOrder(order)
-      );
+      const transformedOrders = allOrders.map((o: any) => transformOrder(o));
 
       setOrders(transformedOrders);
       setFilteredOrders(transformedOrders);
+
+      setSelectedOrders((prev) => {
+        const stillExists = new Set(transformedOrders.map((o) => o.id));
+        const next = new Set<number>();
+        prev.forEach((id) => {
+          if (stillExists.has(id)) next.add(id);
+        });
+        return next;
+      });
     } catch (error: any) {
       console.error('Failed to load orders:', error);
       alert('Failed to load orders. Please check your connection.');
@@ -341,15 +471,57 @@ export default function PendingOrdersDashboard() {
     }
   };
 
+  // ✅ QZ Tray status / printers
+  const checkPrinterStatus = async () => {
+    try {
+      const status = await checkQZStatus();
+      setQzConnected(status.connected);
+
+      if (status.connected) {
+        const printerList = await getPrinters();
+        setPrinters(printerList);
+
+        const savedPrinter = localStorage.getItem('preferredPrinter') || localStorage.getItem('defaultPrinter');
+        if (savedPrinter && printerList.includes(savedPrinter)) {
+          setSelectedPrinter(savedPrinter);
+        } else if (printerList.length > 0) {
+          setSelectedPrinter(printerList[0]);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check printer status:', error);
+      setQzConnected(false);
+    }
+  };
+
+  const handlePrinterSelect = (printer: string) => {
+    setSelectedPrinter(printer);
+    savePreferredPrinter(printer);
+    setShowPrinterSelect(false);
+  };
+
+  const orderStatusOptions = useMemo(() => {
+    const set = new Set<string>();
+    orders.forEach((o) => set.add(o.status));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [orders]);
+
+  const paymentStatusOptions = useMemo(() => {
+    const set = new Set<string>();
+    orders.forEach((o) => set.add(o.paymentStatus));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [orders]);
+
   useEffect(() => {
     let filtered = orders;
 
     if (search.trim()) {
+      const q = search.trim().toLowerCase();
       filtered = filtered.filter(
         (o) =>
-          o.id.toString().includes(search.trim()) ||
-          o.orderNumber?.toLowerCase().includes(search.toLowerCase()) ||
-          o.customer.name.toLowerCase().includes(search.toLowerCase()) ||
+          o.id.toString().includes(q) ||
+          o.orderNumber?.toLowerCase().includes(q) ||
+          o.customer.name.toLowerCase().includes(q) ||
           o.customer.phone.includes(search.trim())
       );
     }
@@ -358,10 +530,7 @@ export default function PendingOrdersDashboard() {
       filtered = filtered.filter((o) => {
         const orderDate = o.date;
         let filterDateFormatted = dateFilter;
-        if (
-          dateFilter.includes('-') &&
-          dateFilter.split('-')[0].length === 4
-        ) {
+        if (dateFilter.includes('-') && dateFilter.split('-')[0].length === 4) {
           const [year, month, day] = dateFilter.split('-');
           filterDateFormatted = `${day}/${month}/${year}`;
         }
@@ -369,24 +538,24 @@ export default function PendingOrdersDashboard() {
       });
     }
 
-    if (statusFilter !== 'All Status') {
-      filtered = filtered.filter((o) =>
-        statusFilter === 'Paid' ? o.amounts.due === 0 : o.amounts.due > 0
-      );
+    // ✅ NEW: order type filter
+    if (orderTypeFilter !== 'All Types') {
+      const target = normalize(orderTypeFilter);
+      filtered = filtered.filter((o) => normalize(o.orderType) === target);
     }
 
-    if (orderTypeFilter !== 'All Types') {
-      filtered = filtered.filter((o) => {
-        if (orderTypeFilter === 'Social Commerce')
-          return o.orderType === 'social_commerce';
-        if (orderTypeFilter === 'E-Commerce')
-          return o.orderType === 'ecommerce';
-        return true;
-      });
+    if (orderStatusFilter !== 'All Order Status') {
+      const target = normalize(orderStatusFilter);
+      filtered = filtered.filter((o) => normalize(o.status) === target);
+    }
+
+    if (paymentStatusFilter !== 'All Payment Status') {
+      const target = normalize(paymentStatusFilter);
+      filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
     }
 
     setFilteredOrders(filtered);
-  }, [search, dateFilter, statusFilter, orderTypeFilter, orders]);
+  }, [search, dateFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, orders]);
 
   const handleViewDetails = async (order: Order) => {
     setIsLoadingDetails(true);
@@ -436,7 +605,6 @@ export default function PendingOrdersDashboard() {
       const transformed = transformOrder(fullOrder);
       setSelectedOrder(transformed);
       setEditableOrder(transformed);
-      // Also refresh list summary
       await loadOrders();
     } catch (e: any) {
       console.error('Failed to reload order after item change:', e);
@@ -444,17 +612,19 @@ export default function PendingOrdersDashboard() {
     }
   };
 
-  // 🔁 Return / Exchange (re-use POS logic from Purchase History)
-  // NOTE: These flows are safe only after an order is COMPLETED (inventory already reduced)
+  const canReturnOrExchange = (statusRaw: any) => {
+    const s = normalize(statusRaw);
+    return s === 'delivered' || s === 'completed';
+  };
+
   const openReturnModal = async (order: Order) => {
     setActiveMenu(null);
-
     try {
       const fullOrder = await orderService.getById(order.id);
 
-      if (fullOrder.status !== 'completed') {
+      if (!canReturnOrExchange(fullOrder.status)) {
         alert(
-          `Return is available only for completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
+          `Return is available only for delivered/completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
         );
         return;
       }
@@ -469,13 +639,12 @@ export default function PendingOrdersDashboard() {
 
   const openExchangeModal = async (order: Order) => {
     setActiveMenu(null);
-
     try {
       const fullOrder = await orderService.getById(order.id);
 
-      if (fullOrder.status !== 'completed') {
+      if (!canReturnOrExchange(fullOrder.status)) {
         alert(
-          `Exchange is available only for completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
+          `Exchange is available only for delivered/completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
         );
         return;
       }
@@ -489,18 +658,8 @@ export default function PendingOrdersDashboard() {
   };
 
   const handleReturnSubmit = async (returnData: {
-    selectedProducts: Array<{
-      order_item_id: number;
-      quantity: number;
-      product_barcode_id?: number;
-    }>;
-    refundMethods: {
-      cash: number;
-      card: number;
-      bkash: number;
-      nagad: number;
-      total: number;
-    };
+    selectedProducts: Array<{ order_item_id: number; quantity: number; product_barcode_id?: number }>;
+    refundMethods: { cash: number; card: number; bkash: number; nagad: number; total: number };
     returnReason:
       | 'defective_product'
       | 'wrong_item'
@@ -520,8 +679,6 @@ export default function PendingOrdersDashboard() {
     try {
       if (!selectedOrderForAction) return;
 
-      console.log('🔄 Processing return with data:', returnData);
-
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
         return_reason: returnData.returnReason,
@@ -532,7 +689,7 @@ export default function PendingOrdersDashboard() {
           quantity: item.quantity,
           product_barcode_id: item.product_barcode_id,
         })),
-        customer_notes: returnData.customerNotes || 'Return initiated from Orders (Social/E-com)',
+        customer_notes: returnData.customerNotes || 'Return initiated from Orders dashboard',
       };
 
       const returnResponse = await productReturnService.create(returnRequest);
@@ -543,17 +700,10 @@ export default function PendingOrdersDashboard() {
         quality_check_notes: 'Auto-approved via Orders dashboard',
       });
 
-      await productReturnService.approve(returnId, {
-        internal_notes: 'Approved via Orders dashboard',
-      });
-
-      await productReturnService.process(returnId, {
-        restore_inventory: true,
-      });
-
+      await productReturnService.approve(returnId, { internal_notes: 'Approved via Orders dashboard' });
+      await productReturnService.process(returnId, { restore_inventory: true });
       await productReturnService.complete(returnId);
 
-      // If cashier actually gave money back, record it as a partial amount (accurate ledger)
       if (returnData.refundMethods.total > 0) {
         const refundRequest: CreateRefundRequest = {
           return_id: returnId,
@@ -573,9 +723,7 @@ export default function PendingOrdersDashboard() {
         const refundId = refundResponse.data.id;
 
         await refundService.process(refundId);
-        await refundService.complete(refundId, {
-          transaction_reference: `ORD-REFUND-${Date.now()}`,
-        });
+        await refundService.complete(refundId, { transaction_reference: `ORD-REFUND-${Date.now()}` });
       }
 
       await loadOrders();
@@ -591,11 +739,7 @@ export default function PendingOrdersDashboard() {
   };
 
   const handleExchangeSubmit = async (exchangeData: {
-    removedProducts: Array<{
-      order_item_id: number;
-      quantity: number;
-      product_barcode_id?: number;
-    }>;
+    removedProducts: Array<{ order_item_id: number; quantity: number; product_barcode_id?: number }>;
     replacementProducts: Array<{
       product_id: number;
       batch_id: number;
@@ -617,9 +761,6 @@ export default function PendingOrdersDashboard() {
     try {
       if (!selectedOrderForAction) return;
 
-      console.log('🔄 Processing exchange with data:', exchangeData);
-
-      // STEP 1: Create return for removed items
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
         return_reason: 'other',
@@ -641,18 +782,10 @@ export default function PendingOrdersDashboard() {
         quality_check_passed: true,
         quality_check_notes: 'Exchange - Auto-approved via Orders dashboard',
       });
-
-      await productReturnService.approve(returnId, {
-        internal_notes: 'Exchange - Auto-approved via Orders dashboard',
-      });
-
-      await productReturnService.process(returnId, {
-        restore_inventory: true,
-      });
-
+      await productReturnService.approve(returnId, { internal_notes: 'Exchange - Auto-approved via Orders dashboard' });
+      await productReturnService.process(returnId, { restore_inventory: true });
       await productReturnService.complete(returnId);
 
-      // STEP 2: Create full refund for exchange (refund amount is derived from return)
       const refundRequest: CreateRefundRequest = {
         return_id: returnId,
         refund_type: 'full',
@@ -664,18 +797,12 @@ export default function PendingOrdersDashboard() {
       const refundId = refundResponse.data.id;
 
       await refundService.process(refundId);
-      await refundService.complete(refundId, {
-        transaction_reference: `EXCHANGE-REFUND-${Date.now()}`,
-      });
+      await refundService.complete(refundId, { transaction_reference: `EXCHANGE-REFUND-${Date.now()}` });
 
-      // STEP 3: Create replacement order in the SAME channel (social/ecom)
-      const newOrderTotal = exchangeData.replacementProducts.reduce(
-        (sum, p) => sum + p.unit_price * p.quantity,
-        0
-      );
+      const newOrderTotal = exchangeData.replacementProducts.reduce((sum, p) => sum + p.unit_price * p.quantity, 0);
 
       const newOrderData = {
-        order_type: selectedOrderForAction.order_type as 'counter' | 'social_commerce' | 'ecommerce',
+        order_type: selectedOrderForAction.order_type as 'social_commerce' | 'ecommerce',
         store_id: exchangeData.exchangeAtStoreId,
         customer_id: selectedOrderForAction.customer?.id,
         items: exchangeData.replacementProducts.map((p) => ({
@@ -687,7 +814,7 @@ export default function PendingOrdersDashboard() {
           barcode_id: p.barcode_id,
         })),
         payment: {
-          payment_method_id: 1, // Cash
+          payment_method_id: 1,
           amount: newOrderTotal,
           payment_type: 'full' as const,
         },
@@ -699,7 +826,6 @@ export default function PendingOrdersDashboard() {
 
       await loadOrders();
 
-      // Success message
       let msg = `✅ Exchange processed successfully!\n\n📦 Return: #${returnNumber}\n🛒 New Order: #${newOrder.order_number}`;
       if (exchangeData.paymentRefund.type === 'payment') {
         msg += `\n\n💳 Customer paid additional: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
@@ -721,7 +847,6 @@ export default function PendingOrdersDashboard() {
 
   const handleCancelOrder = async (orderId: number) => {
     if (!confirm('Are you sure you want to cancel this order?')) return;
-
     try {
       await orderService.cancel(orderId, 'Cancelled by user');
       await loadOrders();
@@ -742,7 +867,6 @@ export default function PendingOrdersDashboard() {
         </span>
       );
     }
-
     if (orderType === 'ecommerce') {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
@@ -751,25 +875,371 @@ export default function PendingOrdersDashboard() {
         </span>
       );
     }
-
-    return null;
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300">
+        <Package className="h-3 w-3" />
+        Other
+      </span>
+    );
   };
 
-  const totalRevenue = orders.reduce(
-    (sum, order) => sum + order.amounts.total,
-    0
-  );
-  const paidOrders = orders.filter((o) => o.amounts.due === 0).length;
-  const pendingOrders = orders.filter((o) => o.amounts.due > 0).length;
-  const socialCommerceCount = orders.filter(
-    (o) => o.orderType === 'social_commerce'
-  ).length;
-  const ecommerceCount = orders.filter(
-    (o) => o.orderType === 'ecommerce'
-  ).length;
+  const totalRevenue = orders.reduce((sum, order) => sum + order.amounts.total, 0);
+  const paidOrders = orders.filter((o) => normalize(o.paymentStatus) === 'paid').length;
+  const dueOrders = orders.filter((o) => normalize(o.paymentStatus) !== 'paid').length;
+
+  // ✅ Bulk selection helpers
+  const handleToggleSelectAll = () => {
+    if (selectedOrders.size === filteredOrders.length) {
+      setSelectedOrders(new Set());
+    } else {
+      setSelectedOrders(new Set(filteredOrders.map((o) => o.id)));
+    }
+  };
+
+  const handleToggleSelect = (orderId: number) => {
+    setSelectedOrders((prev) => {
+      const next = new Set(prev);
+      if (next.has(orderId)) next.delete(orderId);
+      else next.add(orderId);
+      return next;
+    });
+  };
+
+  // ✅ Bulk: Send to Pathao
+  const handleBulkSendToPathao = async () => {
+    if (selectedOrders.size === 0) {
+      alert('Please select at least one order to send to Pathao.');
+      return;
+    }
+    if (!confirm(`Send ${selectedOrders.size} order(s) to Pathao?`)) return;
+
+    setIsSendingBulk(true);
+    setPathaoProgress({
+      show: true,
+      current: 0,
+      total: selectedOrders.size,
+      success: 0,
+      failed: 0,
+      details: [],
+    });
+
+    let successCount = 0;
+    let failedCount = 0;
+
+    try {
+      const selectedOrdersList = orders.filter((o) => selectedOrders.has(o.id));
+      const shipmentIdsToSend: number[] = [];
+
+      for (let idx = 0; idx < selectedOrdersList.length; idx++) {
+        const order = selectedOrdersList[idx];
+        setPathaoProgress((prev) => ({ ...prev, current: idx + 1 }));
+
+        try {
+          let existingShipment: any = null;
+          try {
+            existingShipment = await shipmentService.getByOrderId(order.id);
+          } catch {
+            existingShipment = null;
+          }
+
+          if (existingShipment) {
+            if (existingShipment.pathao_consignment_id) {
+              failedCount++;
+              setPathaoProgress((prev) => ({
+                ...prev,
+                failed: failedCount,
+                details: [
+                  ...prev.details,
+                  { orderId: order.id, orderNumber: order.orderNumber, status: 'failed', message: 'Already sent to Pathao' },
+                ],
+              }));
+              continue;
+            }
+            shipmentIdsToSend.push(existingShipment.id);
+          } else {
+            const newShipment = await shipmentService.create({
+              order_id: order.id,
+              delivery_type: 'home_delivery',
+              package_weight: 1.0,
+              send_to_pathao: false,
+            });
+            shipmentIdsToSend.push(newShipment.id);
+          }
+        } catch (error: any) {
+          failedCount++;
+          setPathaoProgress((prev) => ({
+            ...prev,
+            failed: failedCount,
+            details: [
+              ...prev.details,
+              {
+                orderId: order.id,
+                orderNumber: order.orderNumber,
+                status: 'failed',
+                message: error?.response?.data?.message || error.message || 'Failed',
+              },
+            ],
+          }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+
+      if (shipmentIdsToSend.length > 0) {
+        const result = await shipmentService.bulkSendToPathao(shipmentIdsToSend);
+
+        (result?.success || []).forEach((item: any) => {
+          successCount++;
+          setPathaoProgress((prev) => ({
+            ...prev,
+            success: successCount,
+            details: [
+              ...prev.details,
+              {
+                orderId: 0,
+                orderNumber: item.shipment_number,
+                status: 'success',
+                message: `Consignment ID: ${item.pathao_consignment_id}`,
+              },
+            ],
+          }));
+        });
+
+        (result?.failed || []).forEach((item: any) => {
+          failedCount++;
+          setPathaoProgress((prev) => ({
+            ...prev,
+            failed: failedCount,
+            details: [
+              ...prev.details,
+              {
+                orderId: 0,
+                orderNumber: item.shipment_number,
+                status: 'failed',
+                message: item.reason,
+              },
+            ],
+          }));
+        });
+      }
+
+      alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
+      setSelectedOrders(new Set());
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Bulk send to Pathao error:', error);
+      alert(`Failed to complete bulk send: ${error?.response?.data?.message || error.message || 'Unknown error'}`);
+    } finally {
+      setIsSendingBulk(false);
+      setTimeout(() => {
+        setPathaoProgress({ show: false, current: 0, total: 0, success: 0, failed: 0, details: [] });
+      }, 2500);
+    }
+  };
+
+  // ✅ Bulk: Print receipts
+  const handleBulkPrintReceipts = async () => {
+    if (selectedOrders.size === 0) {
+      alert('Please select at least one order to print.');
+      return;
+    }
+
+    // Try to refresh printer status, but don't block printing if QZ is offline.
+    try {
+      await checkPrinterStatus();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    } catch (e) {
+      console.warn('QZ Tray status check failed - will use browser preview fallback.', e);
+    }
+
+    let status: { connected: boolean } = { connected: false };
+    try {
+      status = await checkQZStatus();
+    } catch (e) {
+      console.warn('checkQZStatus failed - assuming offline.', e);
+    }
+
+    if (status.connected && !selectedPrinter) {
+      setShowPrinterSelect(true);
+      alert('Please select a printer first.');
+      return;
+    }
+
+    if (!confirm(`Print receipts for ${selectedOrders.size} order(s)?`)) return;
+
+    setIsPrintingBulk(true);
+    setBulkPrintProgress({
+      show: true,
+      current: 0,
+      total: selectedOrders.size,
+      success: 0,
+      failed: 0,
+      details: [],
+    });
+
+    try {
+      const selectedOrdersList = orders.filter((o) => selectedOrders.has(o.id));
+
+      // Always fetch full orders so receipt layout has complete data
+      const fullOrders: any[] = [];
+      for (let i = 0; i < selectedOrdersList.length; i++) {
+        const o = selectedOrdersList[i];
+        setBulkPrintProgress((prev) => ({ ...prev, current: i + 1 }));
+
+        try {
+          const fullOrder = await orderService.getById(o.id);
+          fullOrders.push(fullOrder);
+        } catch (e) {
+          console.error('Failed to fetch order for receipt:', o.id, e);
+          setBulkPrintProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+
+      // If QZ is offline, open ONE bulk preview window (Print → Save as PDF).
+      if (!status.connected) {
+        await printBulkReceipts(fullOrders);
+        alert('Opened receipt preview. Use Print → Save as PDF.');
+        return;
+      }
+
+      // QZ online: print one-by-one (so we can track success/fail counts)
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (let i = 0; i < fullOrders.length; i++) {
+        const fullOrder = fullOrders[i];
+        setBulkPrintProgress((prev) => ({ ...prev, current: i + 1 }));
+
+        try {
+          await printReceipt(fullOrder as any, selectedPrinter);
+          successCount++;
+          setBulkPrintProgress((prev) => ({ ...prev, success: successCount }));
+        } catch {
+          failedCount++;
+          setBulkPrintProgress((prev) => ({ ...prev, failed: failedCount }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      }
+
+      alert(`Bulk print completed!\nSuccess: ${successCount}\nFailed: ${failedCount}`);
+    } finally {
+      setIsPrintingBulk(false);
+      setTimeout(() => {
+        setBulkPrintProgress((prev) => ({ ...prev, show: false }));
+      }, 1200);
+    }
+  };
+
+  // ✅ Single: Send one order to Pathao
+  const handleSingleSendToPathao = async (order: Order) => {
+    if (!confirm(`Send order ${order.orderNumber} to Pathao?`)) return;
+
+    setSingleActionLoading({ orderId: order.id, action: 'pathao' });
+    setActiveMenu(null);
+
+    try {
+      let shipment: any = null;
+      try {
+        shipment = await shipmentService.getByOrderId(order.id);
+      } catch {
+        shipment = null;
+      }
+
+      if (shipment?.pathao_consignment_id) {
+        alert(`Already sent to Pathao.\nConsignment ID: ${shipment.pathao_consignment_id}`);
+        return;
+      }
+
+      if (!shipment?.id) {
+        shipment = await shipmentService.create({
+          order_id: order.id,
+          delivery_type: 'home_delivery',
+          package_weight: 1.0,
+          send_to_pathao: false,
+        });
+      }
+
+      const shipmentId = shipment?.id;
+      if (!shipmentId) {
+        alert('Failed to create/get shipment ID for this order.');
+        return;
+      }
+
+      const result = await shipmentService.bulkSendToPathao([shipmentId]);
+      const success = Array.isArray(result?.success) ? result.success : [];
+      const failed = Array.isArray(result?.failed) ? result.failed : [];
+
+      if (success.length > 0) {
+        const item = success[0];
+        alert(
+          `✅ Sent to Pathao successfully!\n\nShipment: ${item.shipment_number ?? ''}\nConsignment ID: ${
+            item.pathao_consignment_id ?? ''
+          }`
+        );
+      } else if (failed.length > 0) {
+        const item = failed[0];
+        alert(`❌ Failed to send to Pathao.\n\nReason: ${item.reason ?? 'Unknown error'}`);
+      } else {
+        alert('Pathao response received, but could not determine success/failure.');
+      }
+
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Single send to Pathao error:', error);
+      alert(`Failed to send to Pathao: ${error?.response?.data?.message || error.message || 'Unknown error'}`);
+    } finally {
+      setSingleActionLoading(null);
+    }
+  };
+
+  // ✅ Single: Print one receipt
+  const handleSinglePrintReceipt = async (order: Order) => {
+    if (!confirm(`Print receipt for order ${order.orderNumber}?`)) return;
+
+    setSingleActionLoading({ orderId: order.id, action: 'print' });
+    setActiveMenu(null);
+
+    try {
+      // Try to refresh printers, but don't block preview fallback.
+      try {
+        await checkPrinterStatus();
+      } catch (e) {
+        console.warn('Printer status check failed - will use browser preview fallback.', e);
+      }
+
+      let status: { connected: boolean } = { connected: false };
+      try {
+        status = await checkQZStatus();
+      } catch (e) {
+        console.warn('checkQZStatus failed - assuming offline.', e);
+      }
+
+      if (status.connected && !selectedPrinter) {
+        setShowPrinterSelect(true);
+        alert('Please select a printer first.');
+        return;
+      }
+
+      if (!status.connected) {
+        alert('QZ Tray is offline. Opening receipt preview (Print → Save as PDF).');
+      }
+
+      const fullOrder = await orderService.getById(order.id);
+      await printReceipt(fullOrder as any, status.connected ? selectedPrinter : undefined);
+
+      alert('✅ Receipt ready (printed or opened in preview)!');
+    } catch (error: any) {
+      console.error('Single print error:', error);
+      alert(`Failed to print receipt: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setSingleActionLoading(null);
+    }
+  };
 
   // 🔁 Product picker helpers
-
   const fetchBatchesForStore = async (storeId: number) => {
     try {
       setIsProductLoading(true);
@@ -777,9 +1247,7 @@ export default function PendingOrdersDashboard() {
       try {
         const batchesData = await batchService.getAvailableBatches(storeId);
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(
-            (batch: any) => batch.quantity > 0
-          );
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setPickerBatches(availableBatches);
           return;
         }
@@ -790,12 +1258,10 @@ export default function PendingOrdersDashboard() {
       try {
         const batchesData = await batchService.getBatchesArray({
           store_id: storeId,
-          status: 'available'
+          status: 'available',
         });
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(
-            (batch: any) => batch.quantity > 0
-          );
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setPickerBatches(availableBatches);
           return;
         }
@@ -806,9 +1272,7 @@ export default function PendingOrdersDashboard() {
       try {
         const batchesData = await batchService.getBatchesByStore(storeId);
         if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter(
-            (batch: any) => batch.quantity > 0
-          );
+          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
           setPickerBatches(availableBatches);
           return;
         }
@@ -837,17 +1301,13 @@ export default function PendingOrdersDashboard() {
         enable_fuzzy: true,
         fuzzy_threshold: 60,
         search_fields: ['name', 'sku', 'description', 'category'],
-        per_page: 50
+        per_page: 50,
       });
 
       const results: any[] = [];
 
       if (response.data?.success) {
-        const products =
-          response.data.data?.items ||
-          response.data.data?.data?.items ||
-          response.data.data ||
-          [];
+        const products = response.data.data?.items || response.data.data?.data?.items || response.data.data || [];
 
         for (const prod of products) {
           const productBatches = pickerBatches.filter((batch: any) => {
@@ -866,15 +1326,13 @@ export default function PendingOrdersDashboard() {
                 price: parseMoney(batch.sell_price),
                 available: batch.quantity,
                 relevance_score: prod.relevance_score || 0,
-                search_stage: prod.search_stage || 'api'
+                search_stage: prod.search_stage || 'api',
               });
             }
           }
         }
 
-        results.sort(
-          (a, b) => (b.relevance_score || 0) - (a.relevance_score || 0)
-        );
+        results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
         setProductResults(results);
       } else {
         setProductResults([]);
@@ -898,67 +1356,53 @@ export default function PendingOrdersDashboard() {
     }, 300);
 
     return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productSearch, showProductPicker, pickerStoreId, pickerBatches]);
 
   const handleSelectProductForOrder = async (product: any) => {
-  if (!editableOrder) return;
+    if (!editableOrder) return;
 
-  try {
-    const itemPayload = {
-      // Core relations
-      order_id: editableOrder.id,
-      store_id: editableOrder.storeId ?? null,
+    try {
+      const itemPayload = {
+        order_id: editableOrder.id,
+        store_id: editableOrder.storeId ?? null,
 
-      // Product info
-      product_id: product.id,
-      product_name: product.name,
-      product_sku: product.sku,
+        product_id: product.id,
+        product_name: product.name,
+        product_sku: product.sku,
 
-      // Batch / inventory
-      batch_id: product.batchId,
+        batch_id: product.batchId,
 
-      // Pricing
-      quantity: 1,
-      unit_price: product.price,
-      discount_amount: 0
-    };
+        quantity: 1,
+        unit_price: product.price,
+        discount_amount: 0,
+      };
 
-    console.log('Adding order item payload:', itemPayload);
+      const payload = {
+        ...itemPayload,
+        items: [itemPayload],
+      };
 
-    // Send both flat fields AND items[] array to satisfy either kind of validator
-    const payload = {
-      ...itemPayload,
-      items: [itemPayload]
-    };
+      const res = await axios.post(`/orders/${editableOrder.id}/items`, payload);
+      console.log('Add item response:', res.data);
 
-    const res = await axios.post(
-      `/orders/${editableOrder.id}/items`,
-      payload
-    );
+      await reloadEditableOrder(editableOrder.id);
 
-    console.log('Add item response:', res.data);
-
-    await reloadEditableOrder(editableOrder.id);
-
-    setShowProductPicker(false);
-    setProductSearch('');
-    setProductResults([]);
-  } catch (err: any) {
-    console.error('Failed to add item to order (full error):', err);
-    const backendData = err?.response?.data;
-    console.log('Backend 422 data:', backendData);
-
-    const msg =
-      backendData?.message ||
-      backendData?.error ||
-      JSON.stringify(backendData || {}) ||
-      err?.message ||
-      'Failed to add item to order.';
-
-    alert(msg);
-  }
-};
-
+      setShowProductPicker(false);
+      setProductSearch('');
+      setProductResults([]);
+    } catch (err: any) {
+      console.error('Failed to add item to order (full error):', err);
+      const backendData = err?.response?.data;
+      const msg =
+        backendData?.message ||
+        backendData?.error ||
+        JSON.stringify(backendData || {}) ||
+        err?.message ||
+        'Failed to add item to order.';
+      alert(msg);
+    }
+  };
 
   const openProductPicker = () => {
     if (!editableOrder?.storeId && !pickerStoreId) {
@@ -1002,7 +1446,7 @@ export default function PendingOrdersDashboard() {
       await axios.put(`/orders/${editableOrder.id}/items/${item.id}`, {
         quantity: item.quantity,
         unit_price: item.price,
-        discount_amount: item.discount ?? 0
+        discount_amount: item.discount ?? 0,
       });
 
       await reloadEditableOrder(editableOrder.id);
@@ -1032,7 +1476,7 @@ export default function PendingOrdersDashboard() {
         customer_address: editableOrder.customer.address || null,
         discount_amount: editableOrder.discount ?? 0,
         shipping_amount: editableOrder.shipping ?? 0,
-        notes: editableOrder.notes ?? ''
+        notes: editableOrder.notes ?? '',
       };
 
       const response = await axios.patch(`/orders/${editableOrder.id}`, payload);
@@ -1068,11 +1512,7 @@ export default function PendingOrdersDashboard() {
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header
-            darkMode={darkMode}
-            setDarkMode={setDarkMode}
-            toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-          />
+          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
 
           <main className="flex-1 overflow-auto bg-white dark:bg-black">
             {/* Header */}
@@ -1081,18 +1521,63 @@ export default function PendingOrdersDashboard() {
                 <div className="max-w-7xl mx-auto flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="p-1.5 bg-black dark:bg-white rounded">
-                      <Package className="w-4 h-4 text-white dark:text-black" />
+                      <ShoppingBag className="w-4 h-4 text-white dark:text-black" />
                     </div>
                     <div>
-                      <h1 className="text-lg font-bold text-black dark:text-white leading-none">
-                        Pending Orders
-                      </h1>
+                      <h1 className="text-lg font-bold text-black dark:text-white leading-none">Orders</h1>
                       <p className="text-[10px] text-gray-600 dark:text-gray-400 leading-none mt-0.5">
                         {filteredOrders.length} of {orders.length} orders
-                        awaiting fulfillment
                       </p>
                     </div>
                   </div>
+
+                  {/* Printer selector */}
+                  {qzConnected && (
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1 px-2 py-1 border border-gray-300 dark:border-gray-700 rounded text-[10px]">
+                        <div className="w-1 h-1 rounded-full bg-black dark:bg-white" />
+                        <span className="font-medium text-black dark:text-white">Printer</span>
+                      </div>
+
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowPrinterSelect(!showPrinterSelect)}
+                          className="flex items-center gap-1 px-2 py-1 border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900 rounded transition-colors"
+                        >
+                          <Settings className="w-3 h-3 text-black dark:text-white" />
+                          <span className="text-[10px] font-medium text-black dark:text-white truncate max-w-[120px]">
+                            {selectedPrinter || 'Select'}
+                          </span>
+                        </button>
+
+                        {showPrinterSelect && (
+                          <div className="absolute right-0 top-full mt-1 bg-white dark:bg-black border border-gray-300 dark:border-gray-700 rounded shadow-lg w-64 z-50">
+                            <div className="px-2 py-1 border-b border-gray-200 dark:border-gray-800">
+                              <p className="text-[9px] font-bold text-gray-500 dark:text-gray-400 uppercase">Printers</p>
+                            </div>
+                            {printers.map((printer) => (
+                              <button
+                                key={printer}
+                                onClick={() => handlePrinterSelect(printer)}
+                                className={`w-full px-2 py-1.5 text-left text-[10px] transition-colors ${
+                                  selectedPrinter === printer
+                                    ? 'bg-black dark:bg-white text-white dark:text-black font-medium'
+                                    : 'text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-900'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between">
+                                  <span className="truncate">{printer}</span>
+                                  {selectedPrinter === printer && (
+                                    <CheckCircle className="w-2.5 h-2.5 flex-shrink-0 ml-1" />
+                                  )}
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1100,51 +1585,21 @@ export default function PendingOrdersDashboard() {
             {/* Stats */}
             <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800">
               <div className="max-w-7xl mx-auto">
-                <div className="grid grid-cols-6 gap-2">
+                <div className="grid grid-cols-4 gap-2">
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      Total
-                    </p>
-                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
-                      {orders.length}
-                    </p>
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Total</p>
+                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{orders.length}</p>
                   </div>
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      Social
-                    </p>
-                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
-                      {socialCommerceCount}
-                    </p>
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Paid</p>
+                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{paidOrders}</p>
                   </div>
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      E-Com
-                    </p>
-                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
-                      {ecommerceCount}
-                    </p>
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Due/Not Paid</p>
+                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{dueOrders}</p>
                   </div>
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      Paid
-                    </p>
-                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
-                      {paidOrders}
-                    </p>
-                  </div>
-                  <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      Due
-                    </p>
-                    <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
-                      {pendingOrders}
-                    </p>
-                  </div>
-                  <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">
-                      Revenue
-                    </p>
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Revenue</p>
                     <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">
                       ৳{(totalRevenue / 1000).toFixed(0)}k
                     </p>
@@ -1160,7 +1615,7 @@ export default function PendingOrdersDashboard() {
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <input
                     type="text"
-                    placeholder="Search Order ID or Customer..."
+                    placeholder="Search order no / customer / phone..."
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full pl-10 pr-4 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
@@ -1174,24 +1629,41 @@ export default function PendingOrdersDashboard() {
                   className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 />
 
+                {/* ✅ NEW: Order type filter */}
                 <select
                   value={orderTypeFilter}
                   onChange={(e) => setOrderTypeFilter(e.target.value)}
                   className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
-                  <option>All Types</option>
-                  <option>Social Commerce</option>
-                  <option>E-Commerce</option>
+                  <option value="All Types">All Types</option>
+                  <option value="social_commerce">Social Commerce</option>
+                  <option value="ecommerce">E-Commerce</option>
                 </select>
 
                 <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
+                  value={orderStatusFilter}
+                  onChange={(e) => setOrderStatusFilter(e.target.value)}
                   className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
-                  <option>All Status</option>
-                  <option>Paid</option>
-                  <option>Pending</option>
+                  <option>All Order Status</option>
+                  {orderStatusOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {statusLabel(s)}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={paymentStatusFilter}
+                  onChange={(e) => setPaymentStatusFilter(e.target.value)}
+                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                >
+                  <option>All Payment Status</option>
+                  {paymentStatusOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {statusLabel(s)}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1200,27 +1672,127 @@ export default function PendingOrdersDashboard() {
               </p>
             </div>
 
+            {/* Bulk Actions */}
+            <div className="max-w-7xl mx-auto px-4">
+              {selectedOrders.size > 0 && (
+                <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 bg-black dark:bg-white rounded flex items-center justify-center">
+                        <span className="text-white dark:text-black text-[10px] font-bold">{selectedOrders.size}</span>
+                      </div>
+                      <p className="text-[10px] font-semibold text-black dark:text-white">{selectedOrders.size} selected</p>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={handleBulkPrintReceipts}
+                        disabled={isPrintingBulk}
+                        className="flex items-center gap-1 px-2 py-1 bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black rounded transition-colors disabled:opacity-50 text-[10px] font-medium"
+                      >
+                        <Printer className="w-3 h-3" />
+                        {isPrintingBulk ? 'Printing' : 'Print'}
+                      </button>
+
+                      <button
+                        onClick={handleBulkSendToPathao}
+                        disabled={isSendingBulk}
+                        className="flex items-center gap-1 px-2 py-1 bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black rounded transition-colors disabled:opacity-50 text-[10px] font-medium"
+                      >
+                        <Truck className="w-3 h-3" />
+                        {isSendingBulk ? 'Sending' : 'Pathao'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Progress: Pathao */}
+              {pathaoProgress.show && (
+                <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[10px] font-semibold text-black dark:text-white flex items-center gap-1">
+                      <Package className="w-3 h-3" />
+                      Pathao {pathaoProgress.current}/{pathaoProgress.total}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-0.5">
+                        <CheckCircle className="w-3 h-3 text-black dark:text-white" />
+                        <span className="text-[10px] font-medium text-black dark:text-white">{pathaoProgress.success}</span>
+                      </div>
+                      <div className="flex items-center gap-0.5">
+                        <XCircle className="w-3 h-3 text-gray-500" />
+                        <span className="text-[10px] font-medium text-gray-500">{pathaoProgress.failed}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-1">
+                    <div
+                      className="bg-black dark:bg-white h-1 rounded-full transition-all"
+                      style={{
+                        width: `${pathaoProgress.total > 0 ? (pathaoProgress.current / pathaoProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Progress: Print */}
+              {bulkPrintProgress.show && (
+                <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[10px] font-semibold text-black dark:text-white flex items-center gap-1">
+                      <Printer className="w-3 h-3" />
+                      Print {bulkPrintProgress.current}/{bulkPrintProgress.total}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-0.5">
+                        <CheckCircle className="w-3 h-3 text-black dark:text-white" />
+                        <span className="text-[10px] font-medium text-black dark:text-white">{bulkPrintProgress.success}</span>
+                      </div>
+                      <div className="flex items-center gap-0.5">
+                        <XCircle className="w-3 h-3 text-gray-500" />
+                        <span className="text-[10px] font-medium text-gray-500">{bulkPrintProgress.failed}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-1">
+                    <div
+                      className="bg-black dark:bg-white h-1 rounded-full transition-all"
+                      style={{
+                        width: `${bulkPrintProgress.total > 0 ? (bulkPrintProgress.current / bulkPrintProgress.total) * 100 : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Orders Table */}
             <div className="max-w-7xl mx-auto px-4 pb-4">
               {isLoading ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl p-12 text-center border border-gray-200 dark:border-gray-800">
                   <Loader className="animate-spin h-12 w-12 text-black dark:text-white mx-auto" />
-                  <p className="text-gray-500 dark:text-gray-400 font-medium mt-4">
-                    Loading orders...
-                  </p>
+                  <p className="text-gray-500 dark:text-gray-400 font-medium mt-4">Loading orders...</p>
                 </div>
               ) : filteredOrders.length === 0 ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl p-12 text-center border border-gray-200 dark:border-gray-800">
                   <Package className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-                  <p className="text-gray-500 dark:text-gray-400 font-medium">
-                    No pending orders found
-                  </p>
+                  <p className="text-gray-500 dark:text-gray-400 font-medium">No orders found</p>
                 </div>
               ) : (
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
                   <table className="w-full">
                     <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                       <tr>
+                        <th className="px-3 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase w-10">
+                          <input
+                            type="checkbox"
+                            checked={filteredOrders.length > 0 && selectedOrders.size === filteredOrders.length}
+                            onChange={handleToggleSelectAll}
+                            className="h-4 w-4"
+                          />
+                        </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Order No
                         </th>
@@ -1244,65 +1816,58 @@ export default function PendingOrdersDashboard() {
                         </th>
                       </tr>
                     </thead>
+
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                       {filteredOrders.map((order) => (
-                        <tr
-                          key={order.id}
-                          className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-                        >
-                          <td className="px-4 py-3">
-                            <p className="text-sm font-semibold text-black dark:text-white">
-                              {order.orderNumber}
-                            </p>
+                        <tr key={order.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                          <td className="px-3 py-3">
+                            <input
+                              type="checkbox"
+                              checked={selectedOrders.has(order.id)}
+                              onChange={() => handleToggleSelect(order.id)}
+                              className="h-4 w-4"
+                            />
                           </td>
+
                           <td className="px-4 py-3">
-                            {getOrderTypeBadge(order.orderType)}
+                            <p className="text-sm font-semibold text-black dark:text-white">{order.orderNumber}</p>
+                            <p className="text-[10px] text-gray-500 dark:text-gray-500">#{order.id}</p>
                           </td>
+
+                          <td className="px-4 py-3">{getOrderTypeBadge(order.orderType)}</td>
+
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
                               <div className="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center">
                                 <span className="text-xs font-bold text-gray-700 dark:text-gray-300">
-                                  {order.customer.name
-                                    .charAt(0)
-                                    .toUpperCase()}
+                                  {(order.customer.name || '?').charAt(0).toUpperCase()}
                                 </span>
                               </div>
                               <div>
-                                <p className="text-sm font-medium text-black dark:text-white">
-                                  {order.customer.name}
-                                </p>
-                                <p className="text-xs text-gray-500 dark:text-gray-500">
-                                  {order.customer.phone}
-                                </p>
+                                <p className="text-sm font-medium text-black dark:text-white">{order.customer.name}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-500">{order.customer.phone}</p>
                               </div>
                             </div>
                           </td>
+
                           <td className="px-4 py-3">
-                            <p className="text-sm text-gray-700 dark:text-gray-300">
-                              {order.date}
-                            </p>
+                            <p className="text-sm text-gray-700 dark:text-gray-300">{order.date}</p>
                           </td>
+
                           <td className="px-4 py-3">
-                            <span
-                              className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                                order.status === 'Paid'
-                                  ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                                  : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                              }`}
-                            >
-                              {order.status}
-                            </span>
+                            <div className="flex flex-col gap-1">
+                              {getOrderStatusBadge(order.status)}
+                              <div className="flex items-center gap-1">{getPaymentStatusBadge(order.paymentStatus)}</div>
+                            </div>
                           </td>
+
                           <td className="px-4 py-3 text-right">
-                            <p className="text-sm font-bold text-black dark:text-white">
-                              ৳{order.amounts.total.toFixed(2)}
-                            </p>
+                            <p className="text-sm font-bold text-black dark:text-white">৳{order.amounts.total.toFixed(2)}</p>
                             {order.amounts.due > 0 && (
-                              <p className="text-xs text-red-600 dark:text-red-400">
-                                Due: ৳{order.amounts.due.toFixed(2)}
-                              </p>
+                              <p className="text-xs text-red-600 dark:text-red-400">Due: ৳{order.amounts.due.toFixed(2)}</p>
                             )}
                           </td>
+
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-2">
                               <button
@@ -1316,31 +1881,19 @@ export default function PendingOrdersDashboard() {
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  const rect =
-                                    e.currentTarget.getBoundingClientRect();
-                                  const menuHeight = 280;
-                                  const spaceBelow =
-                                    window.innerHeight - rect.bottom;
-                                  const spaceRight =
-                                    window.innerWidth - rect.right;
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const menuHeight = 360;
+                                  const spaceBelow = window.innerHeight - rect.bottom;
+                                  const spaceRight = window.innerWidth - rect.right;
 
                                   let top = rect.bottom + 4;
                                   let left = rect.right - 224;
 
-                                  if (spaceBelow < menuHeight) {
-                                    top = rect.top - menuHeight - 4;
-                                  }
-
-                                  if (spaceRight < 224) {
-                                    left = rect.left - 224 + rect.width;
-                                  }
+                                  if (spaceBelow < menuHeight) top = rect.top - menuHeight - 4;
+                                  if (spaceRight < 224) left = rect.left - 224 + rect.width;
 
                                   setMenuPosition({ top, left });
-                                  setActiveMenu(
-                                    activeMenu === order.id
-                                      ? null
-                                      : order.id
-                                  );
+                                  setActiveMenu(activeMenu === order.id ? null : order.id);
                                 }}
                                 className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
                                 title="More Actions"
@@ -1377,6 +1930,7 @@ export default function PendingOrdersDashboard() {
             <Eye className="h-5 w-5 flex-shrink-0" />
             <span>View Details</span>
           </button>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1388,6 +1942,49 @@ export default function PendingOrdersDashboard() {
             <Edit className="h-5 w-5 flex-shrink-0" />
             <span>Edit Order</span>
           </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              if (order) handleSinglePrintReceipt(order);
+            }}
+            disabled={(() => {
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              return order ? isSingleLoading(order.id, 'print') : false;
+            })()}
+            className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+          >
+            <Printer className="h-5 w-5 flex-shrink-0" />
+            <span>
+              {(() => {
+                const order = filteredOrders.find((o) => o.id === activeMenu);
+                return order && isSingleLoading(order.id, 'print') ? 'Printing...' : 'Print Receipt';
+              })()}
+            </span>
+          </button>
+
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              if (order) handleSingleSendToPathao(order);
+            }}
+            disabled={(() => {
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              return order ? isSingleLoading(order.id, 'pathao') : false;
+            })()}
+            className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+          >
+            <Truck className="h-5 w-5 flex-shrink-0" />
+            <span>
+              {(() => {
+                const order = filteredOrders.find((o) => o.id === activeMenu);
+                return order && isSingleLoading(order.id, 'pathao') ? 'Sending...' : 'Send to Pathao';
+              })()}
+            </span>
+          </button>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1399,6 +1996,7 @@ export default function PendingOrdersDashboard() {
             <RefreshCw className="h-5 w-5 flex-shrink-0" />
             <span>Return Order</span>
           </button>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1410,6 +2008,7 @@ export default function PendingOrdersDashboard() {
             <ArrowLeftRight className="h-5 w-5 flex-shrink-0" />
             <span>Exchange Order</span>
           </button>
+
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -1428,15 +2027,10 @@ export default function PendingOrdersDashboard() {
       {showDetailsModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-xl max-w-4xl w-full max-h-[90vh] overflow-auto border border-gray-200 dark:border-gray-800">
-            {/* Modal Header */}
             <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between z-10">
               <div>
-                <h2 className="text-xl font-bold text-black dark:text-white">
-                  Order Details
-                </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {selectedOrder?.orderNumber || 'Loading...'}
-                </p>
+                <h2 className="text-xl font-bold text-black dark:text-white">Order Details</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder?.orderNumber || 'Loading...'}</p>
               </div>
               <button
                 onClick={() => {
@@ -1449,106 +2043,68 @@ export default function PendingOrdersDashboard() {
               </button>
             </div>
 
-            {/* Modal Content */}
             {isLoadingDetails ? (
               <div className="p-12 text-center">
                 <Loader className="animate-spin h-12 w-12 text-black dark:text-white mx-auto mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">
-                  Loading order details...
-                </p>
+                <p className="text-gray-500 dark:text-gray-400">Loading order details...</p>
               </div>
             ) : selectedOrder ? (
               <div className="p-6 space-y-6">
-                {/* Order Info */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">
-                      Order Type
-                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Order Type</p>
                     {getOrderTypeBadge(selectedOrder.orderType)}
                   </div>
+
                   <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">
-                      Status
-                    </p>
-                    <span
-                      className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                        selectedOrder.status === 'Paid'
-                          ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                          : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400'
-                      }`}
-                    >
-                      {selectedOrder.status}
-                    </span>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Order Status</p>
+                    {getOrderStatusBadge(selectedOrder.status)}
                   </div>
+
                   <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">
-                      Date
-                    </p>
-                    <p className="text-sm font-medium text-black dark:text-white">
-                      {selectedOrder.date}
-                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Payment Status</p>
+                    {getPaymentStatusBadge(selectedOrder.paymentStatus, false)}
                   </div>
+
                   <div>
-                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">
-                      Store
-                    </p>
-                    <p className="text-sm font-medium text-black dark:text-white">
-                      {selectedOrder.store}
-                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Date</p>
+                    <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.date}</p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Store</p>
+                    <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.store}</p>
                   </div>
                 </div>
 
-                {/* Customer Info */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Customer Information
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Customer Information</h3>
                   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-xs text-gray-500 dark:text-gray-500">
-                        Name
-                      </p>
-                      <p className="text-sm font-medium text-black dark:text-white">
-                        {selectedOrder.customer.name}
-                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-500">Name</p>
+                      <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.customer.name}</p>
                     </div>
                     <div className="flex items-center justify-between">
-                      <p className="text-xs text-gray-500 dark:text-gray-500">
-                        Phone
-                      </p>
-                      <p className="text-sm font-medium text-black dark:text-white">
-                        {selectedOrder.customer.phone}
-                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-500">Phone</p>
+                      <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.customer.phone}</p>
                     </div>
                     {selectedOrder.customer.email && (
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-gray-500 dark:text-gray-500">
-                          Email
-                        </p>
-                        <p className="text-sm font-medium text-black dark:text-white">
-                          {selectedOrder.customer.email}
-                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-500">Email</p>
+                        <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.customer.email}</p>
                       </div>
                     )}
                     {selectedOrder.customer.address && (
                       <div>
-                        <p className="text-xs text-gray-500 dark:text-gray-500 mb-1">
-                          Address
-                        </p>
-                        <p className="text-sm text-black dark:text-white">
-                          {selectedOrder.customer.address}
-                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-500 mb-1">Address</p>
+                        <p className="text-sm text-black dark:text-white">{selectedOrder.customer.address}</p>
                       </div>
                     )}
                   </div>
                 </div>
 
-                {/* Order Items */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Order Items
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Items</h3>
                   {selectedOrder.items && selectedOrder.items.length > 0 ? (
                     <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
                       <table className="w-full">
@@ -1570,17 +2126,10 @@ export default function PendingOrdersDashboard() {
                         </thead>
                         <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
                           {selectedOrder.items.map((item) => (
-                            <tr
-                              key={item.id}
-                              className="hover:bg-gray-50 dark:hover:bg-gray-800/50"
-                            >
+                            <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                               <td className="px-4 py-3">
-                                <p className="text-sm font-medium text-black dark:text-white">
-                                  {item.name}
-                                </p>
-                                <p className="text-xs text-gray-500 dark:text-gray-500">
-                                  SKU: {item.sku}
-                                </p>
+                                <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
+                                <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
                               </td>
                               <td className="px-4 py-3 text-center">
                                 <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 text-sm font-medium text-black dark:text-white">
@@ -1588,21 +2137,12 @@ export default function PendingOrdersDashboard() {
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-right">
-                                <p className="text-sm text-black dark:text-white">
-                                  ৳{item.price.toFixed(2)}
-                                </p>
-                                {item.discount > 0 && (
-                                  <p className="text-xs text-red-500">
-                                    -৳{item.discount.toFixed(2)}
-                                  </p>
-                                )}
+                                <p className="text-sm text-black dark:text-white">৳{item.price.toFixed(2)}</p>
+                                {item.discount > 0 && <p className="text-xs text-red-500">-৳{item.discount.toFixed(2)}</p>}
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <p className="text-sm font-medium text-black dark:text-white">
-                                  ৳{(
-                                    (item.price - item.discount) *
-                                    item.quantity
-                                  ).toFixed(2)}
+                                  ৳{((item.price - item.discount) * item.quantity).toFixed(2)}
                                 </p>
                               </td>
                             </tr>
@@ -1613,32 +2153,21 @@ export default function PendingOrdersDashboard() {
                   ) : (
                     <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-8 text-center">
                       <Package className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                      <p className="text-sm text-gray-500 dark:text-gray-500">
-                        No items in this order
-                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-500">No items in this order</p>
                     </div>
                   )}
                 </div>
 
-                {/* Order Summary */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Order Summary
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Summary</h3>
                   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-700 dark:text-gray-300">
-                        Subtotal
-                      </p>
-                      <p className="text-sm font-medium text-black dark:text-white">
-                        ৳{selectedOrder.subtotal.toFixed(2)}
-                      </p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">Subtotal</p>
+                      <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.subtotal.toFixed(2)}</p>
                     </div>
                     {selectedOrder.discount > 0 && (
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-gray-700 dark:text-gray-300">
-                          Discount
-                        </p>
+                        <p className="text-sm text-gray-700 dark:text-gray-300">Discount</p>
                         <p className="text-sm font-medium text-red-600 dark:text-red-400">
                           -৳{selectedOrder.discount.toFixed(2)}
                         </p>
@@ -1646,35 +2175,23 @@ export default function PendingOrdersDashboard() {
                     )}
                     {selectedOrder.shipping > 0 && (
                       <div className="flex items-center justify-between">
-                        <p className="text-sm text-gray-700 dark:text-gray-300">
-                          Shipping
-                        </p>
-                        <p className="text-sm font-medium text-black dark:text-white">
-                          ৳{selectedOrder.shipping.toFixed(2)}
-                        </p>
+                        <p className="text-sm text-gray-700 dark:text-gray-300">Shipping</p>
+                        <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.shipping.toFixed(2)}</p>
                       </div>
                     )}
                     <div className="border-t border-gray-200 dark:border-gray-700 pt-2 flex items-center justify-between">
-                      <p className="text-sm font-bold text-black dark:text-white">
-                        Total
-                      </p>
-                      <p className="text-lg font-bold text-black dark:text-white">
-                        ৳{selectedOrder.amounts.total.toFixed(2)}
-                      </p>
+                      <p className="text-sm font-bold text-black dark:text-white">Total</p>
+                      <p className="text-lg font-bold text-black dark:text-white">৳{selectedOrder.amounts.total.toFixed(2)}</p>
                     </div>
                     <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-700 dark:text-gray-300">
-                        Paid
-                      </p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">Paid</p>
                       <p className="text-sm font-medium text-green-600 dark:text-green-400">
                         ৳{selectedOrder.amounts.paid.toFixed(2)}
                       </p>
                     </div>
                     {selectedOrder.amounts.due > 0 && (
                       <div className="flex items-center justify-between">
-                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">
-                          Due
-                        </p>
+                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Due</p>
                         <p className="text-sm font-bold text-red-600 dark:text-red-400">
                           ৳{selectedOrder.amounts.due.toFixed(2)}
                         </p>
@@ -1683,17 +2200,23 @@ export default function PendingOrdersDashboard() {
                   </div>
                 </div>
 
-                {/* Notes */}
                 {selectedOrder.notes && (
                   <div>
-                    <h3 className="text-sm font-bold text-black dark:text-white mb-2">
-                      Notes
-                    </h3>
+                    <h3 className="text-sm font-bold text-black dark:text-white mb-2">Notes</h3>
                     <p className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800 rounded-lg p-3">
                       {selectedOrder.notes}
                     </p>
                   </div>
                 )}
+
+                <ActivityLogPanel
+                  title="Order Activity"
+                  module="orders"
+                  modelName="Order"
+                  entityId={selectedOrder.id}
+                  search={selectedOrder.orderNumber}
+                  limit={12}
+                />
               </div>
             ) : null}
           </div>
@@ -1704,15 +2227,10 @@ export default function PendingOrdersDashboard() {
       {showEditModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-xl max-w-4xl w-full max-h-[90vh] overflow-auto border border-gray-200 dark:border-gray-800">
-            {/* Modal Header */}
             <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-4 flex items-center justify-between z-10">
               <div>
-                <h2 className="text-xl font-bold text-black dark:text-white">
-                  Edit Order
-                </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {selectedOrder?.orderNumber || 'Loading...'}
-                </p>
+                <h2 className="text-xl font-bold text-black dark:text-white">Edit Order</h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder?.orderNumber || 'Loading...'}</p>
               </div>
               <button
                 onClick={() => {
@@ -1726,109 +2244,68 @@ export default function PendingOrdersDashboard() {
               </button>
             </div>
 
-            {/* Modal Content */}
             {isLoadingDetails ? (
               <div className="p-12 text-center">
                 <Loader className="animate-spin h-12 w-12 text-black dark:text-white mx-auto mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">
-                  Loading order details...
-                </p>
+                <p className="text-gray-500 dark:text-gray-400">Loading order details...</p>
               </div>
             ) : editableOrder ? (
               <div className="p-6 space-y-6">
-                {/* Customer Information */}
+                {/* Customer */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Customer Information
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Customer Information</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Name
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Name</label>
                       <input
                         type="text"
                         value={editableOrder.customer.name}
                         onChange={(e) =>
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = {
-                              ...prev,
-                              customer: {
-                                ...prev.customer,
-                                name: e.target.value
-                              }
-                            };
-                            return updated;
+                            return { ...prev, customer: { ...prev.customer, name: e.target.value } };
                           })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Phone
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Phone</label>
                       <input
                         type="text"
                         value={editableOrder.customer.phone}
                         onChange={(e) =>
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = {
-                              ...prev,
-                              customer: {
-                                ...prev.customer,
-                                phone: e.target.value
-                              }
-                            };
-                            return updated;
+                            return { ...prev, customer: { ...prev.customer, phone: e.target.value } };
                           })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Email
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Email</label>
                       <input
                         type="email"
                         value={editableOrder.customer.email ?? ''}
                         onChange={(e) =>
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = {
-                              ...prev,
-                              customer: {
-                                ...prev.customer,
-                                email: e.target.value
-                              }
-                            };
-                            return updated;
+                            return { ...prev, customer: { ...prev.customer, email: e.target.value } };
                           })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Address
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Address</label>
                       <textarea
                         rows={2}
                         value={editableOrder.customer.address ?? ''}
                         onChange={(e) =>
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = {
-                              ...prev,
-                              customer: {
-                                ...prev.customer,
-                                address: e.target.value
-                              }
-                            };
-                            return updated;
+                            return { ...prev, customer: { ...prev.customer, address: e.target.value } };
                           })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1837,11 +2314,9 @@ export default function PendingOrdersDashboard() {
                   </div>
                 </div>
 
-                {/* Order Items with Add / Remove / Update */}
+                {/* Items */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Order Items
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Items</h3>
                   {editableOrder.items && editableOrder.items.length > 0 ? (
                     <div className="space-y-3">
                       {editableOrder.items.map((item, index) => (
@@ -1850,47 +2325,31 @@ export default function PendingOrdersDashboard() {
                           className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700"
                         >
                           <div className="flex-1">
-                            <p className="text-sm font-medium text-black dark:text-white">
-                              {item.name}
-                            </p>
-                            <p className="text-xs text-gray-500 dark:text-gray-500">
-                              SKU: {item.sku}
-                            </p>
+                            <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
+                            <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
                           </div>
+
                           <div className="w-24">
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                              Qty
-                            </label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Qty</label>
                             <input
                               type="number"
                               value={item.quantity}
                               min={1}
                               onChange={(e) => {
-                                const val = Math.max(
-                                  1,
-                                  Number(e.target.value || 1)
-                                );
+                                const val = Math.max(1, Number(e.target.value || 1));
                                 setEditableOrder((prev) => {
                                   if (!prev) return prev;
                                   const items = [...prev.items];
-                                  items[index] = {
-                                    ...items[index],
-                                    quantity: val
-                                  };
-                                  const updated = recalcOrderTotals({
-                                    ...prev,
-                                    items
-                                  });
-                                  return updated;
+                                  items[index] = { ...items[index], quantity: val };
+                                  return recalcOrderTotals({ ...prev, items });
                                 });
                               }}
                               className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
                             />
                           </div>
+
                           <div className="w-32">
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                              Price
-                            </label>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Price</label>
                             <input
                               type="number"
                               value={item.price}
@@ -1900,20 +2359,14 @@ export default function PendingOrdersDashboard() {
                                 setEditableOrder((prev) => {
                                   if (!prev) return prev;
                                   const items = [...prev.items];
-                                  items[index] = {
-                                    ...items[index],
-                                    price: val
-                                  };
-                                  const updated = recalcOrderTotals({
-                                    ...prev,
-                                    items
-                                  });
-                                  return updated;
+                                  items[index] = { ...items[index], price: val };
+                                  return recalcOrderTotals({ ...prev, items });
                                 });
                               }}
                               className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
                             />
                           </div>
+
                           <div className="flex flex-col gap-1 items-end">
                             <button
                               type="button"
@@ -1934,9 +2387,7 @@ export default function PendingOrdersDashboard() {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-sm text-gray-500">
-                      No items in this order
-                    </p>
+                    <p className="text-sm text-gray-500">No items in this order</p>
                   )}
 
                   <button
@@ -1948,16 +2399,12 @@ export default function PendingOrdersDashboard() {
                   </button>
                 </div>
 
-                {/* Order Details */}
+                {/* Totals */}
                 <div>
-                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">
-                    Order Details
-                  </h3>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Details</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Discount (৳)
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Discount (৳)</label>
                       <input
                         type="number"
                         value={editableOrder.discount}
@@ -1966,20 +2413,14 @@ export default function PendingOrdersDashboard() {
                           const val = Number(e.target.value || 0);
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = recalcOrderTotals({
-                              ...prev,
-                              discount: val
-                            });
-                            return updated;
+                            return recalcOrderTotals({ ...prev, discount: val });
                           });
                         }}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Shipping (৳)
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Shipping (৳)</label>
                       <input
                         type="number"
                         value={editableOrder.shipping}
@@ -1988,30 +2429,21 @@ export default function PendingOrdersDashboard() {
                           const val = Number(e.target.value || 0);
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            const updated = recalcOrderTotals({
-                              ...prev,
-                              shipping: val
-                            });
-                            return updated;
+                            return recalcOrderTotals({ ...prev, shipping: val });
                           });
                         }}
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
-                        Notes
-                      </label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Notes</label>
                       <textarea
                         rows={3}
                         value={editableOrder.notes ?? ''}
                         onChange={(e) =>
                           setEditableOrder((prev) => {
                             if (!prev) return prev;
-                            return {
-                              ...prev,
-                              notes: e.target.value
-                            };
+                            return { ...prev, notes: e.target.value };
                           })
                         }
                         className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -2020,7 +2452,6 @@ export default function PendingOrdersDashboard() {
                   </div>
                 </div>
 
-                {/* Action Buttons */}
                 <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-800">
                   <button
                     onClick={() => {
@@ -2046,14 +2477,12 @@ export default function PendingOrdersDashboard() {
         </div>
       )}
 
-      {/* Product Picker Modal for Edit Order */}
+      {/* Product Picker Modal */}
       {showProductPicker && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
           <div className="bg-white dark:bg-gray-900 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden border border-gray-200 dark:border-gray-800">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
-              <h3 className="text-sm font-semibold text-black dark:text-white">
-                Add Product to Order
-              </h3>
+              <h3 className="text-sm font-semibold text-black dark:text-white">Add Product to Order</h3>
               <button
                 onClick={() => {
                   setShowProductPicker(false);
@@ -2081,9 +2510,7 @@ export default function PendingOrdersDashboard() {
               <div className="border border-gray-200 dark:border-gray-800 rounded-lg max-h-72 overflow-auto p-2">
                 {isProductLoading ? (
                   <div className="p-6 text-center">
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Loading products...
-                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Loading products...</p>
                   </div>
                 ) : productResults.length === 0 ? (
                   <div className="p-6 text-center text-xs text-gray-500 dark:text-gray-400">
@@ -2098,20 +2525,14 @@ export default function PendingOrdersDashboard() {
                         onClick={() => handleSelectProductForOrder(product)}
                         className="border border-gray-200 dark:border-gray-600 rounded p-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                       >
-                        <p className="text-xs font-medium text-black dark:text-white truncate">
-                          {product.name}
-                        </p>
+                        <p className="text-xs font-medium text-black dark:text-white truncate">{product.name}</p>
                         {product.batchNumber && (
                           <p className="text-[11px] text-blue-600 dark:text-blue-400 truncate">
                             Batch: {product.batchNumber}
                           </p>
                         )}
-                        <p className="text-[11px] text-gray-600 dark:text-gray-400">
-                          Price: {product.price} Tk
-                        </p>
-                        <p className="text-[11px] text-green-600 dark:text-green-400">
-                          Available: {product.available}
-                        </p>
+                        <p className="text-[11px] text-gray-600 dark:text-gray-400">Price: {product.price} Tk</p>
+                        <p className="text-[11px] text-green-600 dark:text-green-400">Available: {product.available}</p>
                       </button>
                     ))}
                   </div>
@@ -2147,14 +2568,11 @@ export default function PendingOrdersDashboard() {
       )}
 
       {/* Click outside to close menu */}
-      {activeMenu !== null && (
-        <div
-          className="fixed inset-0 z-[55]"
-          onClick={() => setActiveMenu(null)}
-        />
-      )}
+      {activeMenu !== null && <div className="fixed inset-0 z-[55]" onClick={() => setActiveMenu(null)} />}
 
-      {/* Custom Scrollbar Styles */}
+      {/* Click outside to close printer select */}
+      {showPrinterSelect && <div className="fixed inset-0 z-40" onClick={() => setShowPrinterSelect(false)} />}
+
       <style jsx>{`
         .overflow-y-auto::-webkit-scrollbar {
           width: 6px;

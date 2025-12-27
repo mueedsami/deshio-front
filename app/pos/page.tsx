@@ -31,6 +31,7 @@ import CartTable, { CartItem } from '@/components/pos/CartTable';
 import InputModeSelector from '@/components/pos/InputModeSelector';
 
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
+import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
 
 interface Store {
   id: number;
@@ -74,6 +75,27 @@ export default function POSPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Printing
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(true);
+  const [lastCompletedOrderId, setLastCompletedOrderId] = useState<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('posAutoPrintReceipt');
+      if (saved !== null) setAutoPrintReceipt(saved === '1');
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('posAutoPrintReceipt', autoPrintReceipt ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  }, [autoPrintReceipt]);
 
   // Input Mode
   const [inputMode, setInputMode] = useState<'barcode' | 'manual'>('barcode');
@@ -718,6 +740,28 @@ export default function POSPage() {
       await orderService.complete(order.id);
       console.log('✅ Order completed');
 
+      // Remember last order for manual reprint
+      setLastCompletedOrderId(order.id);
+
+      // Auto print receipt (non-blocking)
+      if (autoPrintReceipt) {
+        (async () => {
+          try {
+            const status = await checkQZStatus();
+            if (!status.connected) {
+              showToast('QZ Tray offline - opening receipt preview (Print → Save as PDF)', 'error');
+            }
+
+            const fullOrder = await orderService.getById(order.id);
+            await printReceipt(fullOrder);
+            showToast('✅ Receipt printed', 'success');
+          } catch (e: any) {
+            console.error('❌ Receipt auto-print failed:', e);
+            showToast(`Receipt print failed: ${e?.message || 'Unknown error'}`, 'error');
+          }
+        })();
+      }
+
       // ✅ FIXED: Show change message if applicable
       if (change > 0) {
         showToast(
@@ -778,6 +822,26 @@ export default function POSPage() {
       alert(`Error: ${errorMessage}\n\nCheck console for details.`);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleReprintLastReceipt = async () => {
+    if (!lastCompletedOrderId) {
+      showToast('No completed order to print yet', 'error');
+      return;
+    }
+
+    try {
+      const status = await checkQZStatus();
+      if (!status.connected) {
+        showToast('QZ Tray offline - opening receipt preview (Print → Save as PDF)', 'error');
+      }
+      const fullOrder = await orderService.getById(lastCompletedOrderId);
+      await printReceipt(fullOrder);
+      showToast('✅ Receipt printed', 'success');
+    } catch (e: any) {
+      console.error('❌ Receipt print failed:', e);
+      showToast(`Receipt print failed: ${e?.message || 'Unknown error'}`, 'error');
     }
   };
 
@@ -1313,6 +1377,20 @@ export default function POSPage() {
                                 customerLookup.phone}
                             </div>
 
+                            {Array.isArray((customerLookup.customer as any)?.tags) &&
+                              (customerLookup.customer as any).tags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 pt-1">
+                                  {(customerLookup.customer as any).tags.map((tag: string) => (
+                                    <span
+                                      key={tag}
+                                      className="px-2 py-0.5 rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-[10px] font-medium text-gray-700 dark:text-gray-200"
+                                    >
+                                      {tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
                             {customerLookup.lastOrder && (
                               <div className="text-xs text-gray-600 dark:text-gray-300 pt-1">
                                 <div>
@@ -1508,6 +1586,28 @@ export default function POSPage() {
                           ৳{Math.max(0, due).toFixed(2)}
                         </span>
                       </div>
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between gap-3">
+                      <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={autoPrintReceipt}
+                          onChange={(e) => setAutoPrintReceipt(e.target.checked)}
+                          className="h-4 w-4"
+                        />
+                        Auto-print receipt
+                      </label>
+
+                      {lastCompletedOrderId && (
+                        <button
+                          type="button"
+                          onClick={handleReprintLastReceipt}
+                          className="text-xs px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200"
+                        >
+                          Reprint last receipt
+                        </button>
+                      )}
                     </div>
 
                     <button

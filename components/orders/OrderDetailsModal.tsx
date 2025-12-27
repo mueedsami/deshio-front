@@ -48,28 +48,29 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
   };
 
   const handlePrintReceipt = async () => {
-    if (!qzStatus.connected) {
-      alert('QZ Tray is not connected. Please start QZ Tray and try again.');
-      return;
-    }
+    const connected = !!qzStatus?.connected;
 
-    if (!selectedPrinter) {
+    if (connected && !selectedPrinter) {
       setShowPrinterSelect(true);
       alert('Please select a printer first.');
       return;
     }
 
+    if (!connected) {
+      alert('QZ Tray is offline. Opening receipt preview (Print → Save as PDF).');
+    }
+
     setIsPrinting(true);
     try {
-      await printReceipt(order, selectedPrinter);
-      alert(`Receipt printed successfully for Order #${order.orderNumber || order.id}`);
+      await printReceipt(order, connected ? selectedPrinter : undefined);
+      alert(`Receipt ready for Order #${order.orderNumber || order.id}`);
     } catch (error: any) {
       console.error('Print error:', error);
-      alert(`Failed to print receipt: ${error.message}`);
+      alert(`Failed to print receipt: ${error?.message || 'Unknown error'}`);
     } finally {
       setIsPrinting(false);
     }
-  };
+  };;
 
   const handlePreviewReceipt = () => {
     setShowReceiptPreview(true);

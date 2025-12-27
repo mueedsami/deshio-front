@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import purchaseOrderService, { 
@@ -142,6 +142,34 @@ export default function PurchaseOrdersPage() {
     items: []
   });
 
+  // Edit Purchase Order
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editPO, setEditPO] = useState<PurchaseOrder | null>(null);
+  const [editForm, setEditForm] = useState<{
+    tax_amount: string;
+    discount_amount: string;
+    shipping_cost: string;
+    items: Array<{
+      id: number;
+      product_label: string;
+      quantity_ordered: string;
+      unit_cost: string;
+    }>;
+  }>({
+    tax_amount: '0',
+    discount_amount: '0',
+    shipping_cost: '0',
+    items: [],
+  });
+
+  const [editOriginal, setEditOriginal] = useState<{
+    tax_amount: number;
+    discount_amount: number;
+    shipping_cost: number;
+    items: Record<number, { quantity_ordered: number; unit_cost: number }>;
+  } | null>(null);
+
+
   useEffect(() => {
     loadPurchaseOrders();
     loadVendors();
@@ -219,7 +247,7 @@ export default function PurchaseOrdersPage() {
       // Initialize receive form with PO items
       const items = (fullPO.items || []).map(item => ({
         item_id: item.id || 0,
-        quantity_received: item.quantity_ordered?.toString() || '',
+        quantity_received: '0',
         batch_number: '',
         manufactured_date: '',
         expiry_date: ''
@@ -233,6 +261,97 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
+
+  const openEditModal = async (po: PurchaseOrder) => {
+    try {
+      setLoading(true);
+
+      const fullPO = await purchaseOrderService.getById(po.id);
+
+      const items = (fullPO.items || []).map((it) => ({
+        id: it.id,
+        product_label: it.product?.name
+          ? `${it.product.name}${it.product.sku ? ` (${it.product.sku})` : ''}`
+          : `Item #${it.id}`,
+        quantity_ordered: String(it.quantity_ordered ?? 0),
+        unit_cost: String(it.unit_cost ?? 0),
+      }));
+
+      const originalItems: Record<number, { quantity_ordered: number; unit_cost: number }> = {};
+      (fullPO.items || []).forEach((it) => {
+        originalItems[it.id] = {
+          quantity_ordered: Number(it.quantity_ordered ?? 0),
+          unit_cost: Number(it.unit_cost ?? 0),
+        };
+      });
+
+      setEditPO(fullPO);
+      setEditForm({
+        tax_amount: String(fullPO.tax_amount ?? 0),
+        discount_amount: String(fullPO.discount_amount ?? 0),
+        shipping_cost: String(fullPO.shipping_cost ?? 0),
+        items,
+      });
+      setEditOriginal({
+        tax_amount: Number(fullPO.tax_amount ?? 0),
+        discount_amount: Number(fullPO.discount_amount ?? 0),
+        shipping_cost: Number(fullPO.shipping_cost ?? 0),
+        items: originalItems,
+      });
+
+      setShowEditModal(true);
+    } catch (error) {
+      console.error('Error loading PO for edit:', error);
+      showAlert('error', 'Failed to load purchase order for editing');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveEditPO = async () => {
+    if (!editPO) return;
+
+    try {
+      setLoading(true);
+
+      const tax = parseFloat(editForm.tax_amount || '0') || 0;
+      const discount = parseFloat(editForm.discount_amount || '0') || 0;
+      const shipping = parseFloat(editForm.shipping_cost || '0') || 0;
+
+      await purchaseOrderService.update(editPO.id, {
+        tax_amount: tax,
+        discount_amount: discount,
+        shipping_cost: shipping,
+      });
+
+      if (editOriginal) {
+        for (const it of editForm.items) {
+          const qty = parseInt(it.quantity_ordered || '0', 10) || 0;
+          const cost = parseFloat(it.unit_cost || '0') || 0;
+          const orig = editOriginal.items[it.id];
+
+          if (!orig || orig.quantity_ordered !== qty || Number(orig.unit_cost) !== cost) {
+            await purchaseOrderService.updateItem(editPO.id, it.id, {
+              quantity_ordered: qty,
+              unit_cost: cost,
+            });
+          }
+        }
+      }
+
+      showAlert('success', 'Purchase order updated successfully');
+      setShowEditModal(false);
+      setEditPO(null);
+      await fetchPurchaseOrders();
+    } catch (error: any) {
+      console.error('Error updating PO:', error);
+      showAlert('error', error?.response?.data?.message || 'Failed to update purchase order');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
 
   const handleReceivePO = async () => {
     if (!selectedPO) return;
@@ -440,6 +559,17 @@ export default function PurchaseOrdersPage() {
                           <Eye className="w-4 h-4" />
                           View
                         </button>
+                        {(po.status === 'draft' || po.status === 'approved') && (
+                          <button
+                            onClick={() => openEditModal(po)}
+                            className="flex items-center gap-1 px-3 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
+                            title="Edit purchase order"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                            Edit
+                          </button>
+                        )}
+
 
                         {po.status === 'draft' && (
                           <button
@@ -654,7 +784,136 @@ export default function PurchaseOrdersPage() {
         )}
       </Modal>
 
-      {/* Receive Modal */}
+      
+      {/* Edit Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Edit Purchase Order</h2>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto max-h-[70vh] space-y-6">
+              {editPO?.status && editPO.status !== 'draft' && (
+                <div className="p-3 rounded-md bg-yellow-50 text-yellow-800 text-sm">
+                  Note: Your backend may allow editing only in <b>draft</b> status. If saving fails, change the PO back to draft first.
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Amount</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editForm.tax_amount}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, tax_amount: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discount Amount</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editForm.discount_amount}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, discount_amount: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Shipping Cost</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editForm.shipping_cost}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, shipping_cost: e.target.value }))}
+                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  />
+                </div>
+              </div>
+
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Items (Quantity &amp; Unit Cost)</h3>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead className="bg-gray-50 dark:bg-gray-700/50">
+                      <tr>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Product</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Qty Ordered</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {editForm.items.map((it, idx) => (
+                        <tr key={it.id} className="bg-white dark:bg-gray-800">
+                          <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">{it.product_label}</td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              value={it.quantity_ordered}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  items: prev.items.map((x, i) => (i === idx ? { ...x, quantity_ordered: v } : x)),
+                                }));
+                              }}
+                              className="w-28 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={it.unit_cost}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  items: prev.items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
+                                }));
+                              }}
+                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveEditPO}
+                disabled={loading}
+                className="px-4 py-2 bg-purple-600 text-white rounded-md text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
+              >
+                {loading ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+{/* Receive Modal */}
       <Modal
         isOpen={showReceiveModal}
         onClose={() => setShowReceiveModal(false)}

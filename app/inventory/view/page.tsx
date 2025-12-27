@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import inventoryService, { GlobalInventoryItem, StoreBreakdown } from '@/services/inventoryService';
 import productService from '@/services/productService';
 import categoryService from '@/services/groupInventory';
+import productImageService from '@/services/productImageService';
 
 interface Category {
   id: number;
@@ -45,77 +46,124 @@ export default function ViewInventoryPage() {
     fetchData();
   }, []);
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
-
-      // Fetch categories
-      const categoriesResponse = await categoryService.getCategories();
-      const categoriesData = categoriesResponse.data.data || categoriesResponse.data || [];
-      setCategories(categoriesData);
-
-      // Fetch global inventory
-      const inventoryResponse = await inventoryService.getGlobalInventory();
-      const inventoryData = inventoryResponse.data || [];
-
-      // Fetch all products to get custom fields
-      const productsResponse = await productService.getAll({ per_page: 1000 });
-      const productsData = productsResponse.data || [];
-
-      // Group inventory by SKU and variations
-      const grouped = groupInventoryBySKU(inventoryData, productsData, categoriesData);
-      setGroupedProducts(grouped);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    } finally {
-      setLoading(false);
-    }
+  // --- Same approach as GalleryPage: normalize image paths to absolute URLs ---
+  const getBaseUrl = () => {
+    // Example: NEXT_PUBLIC_API_URL = https://backend.errumbd.com/api
+    // We need base = https://backend.errumbd.com
+    const api = process.env.NEXT_PUBLIC_API_URL || '';
+    return api ? api.replace(/\/api\/?$/, '') : '';
   };
 
-  const getCategoryName = (categoryId: number, categories: Category[]): string => {
-    const category = categories.find(c => c.id === categoryId);
+  const normalizeImageUrl = (url?: string | null) => {
+    if (!url) return '/placeholder-image.jpg';
+
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
+
+    const baseUrl = getBaseUrl();
+
+    // backend often returns /storage/....
+    if (url.startsWith('/storage')) return `${baseUrl}${url}`;
+
+    // if it already starts with "/", treat as site-relative
+    if (url.startsWith('/')) return url;
+
+    // otherwise treat as filename stored in product-images
+    if (!baseUrl) return `/storage/product-images/${url}`; // best-effort fallback
+    return `${baseUrl}/storage/product-images/${url}`;
+  };
+
+  const getCategoryName = (categoryId: number, cats: Category[]): string => {
+    const category = cats.find(c => c.id === categoryId);
     if (!category) return 'Uncategorized';
 
     if (category.parent_id) {
-      const parent = categories.find(c => c.id === category.parent_id);
+      const parent = cats.find(c => c.id === category.parent_id);
       return parent ? `${parent.title} / ${category.title}` : category.title;
     }
 
     return category.title;
   };
 
+  // Fetch primary image per product_id using the same logic as GalleryPage
+  const fetchPrimaryImagesMap = async (productIds: number[]) => {
+    const baseUrl = getBaseUrl();
+    const unique = Array.from(new Set(productIds.filter(Boolean)));
+
+    const pairs = await Promise.all(
+      unique.map(async (pid) => {
+        try {
+          const imgs = await productImageService.getProductImages(pid);
+
+          const urls = (imgs || [])
+            .filter((img: any) => img?.is_active)
+            .sort((a: any, b: any) => {
+              if (a.is_primary && !b.is_primary) return -1;
+              if (!a.is_primary && b.is_primary) return 1;
+              return (a.sort_order || 0) - (b.sort_order || 0);
+            })
+            .map((img: any) => {
+              const u = img.image_url || img.image_path;
+              if (!u) return null;
+
+              if (u.startsWith('http')) return u;
+              if (u.startsWith('/storage')) return `${baseUrl}${u}`;
+              return `${baseUrl}/storage/product-images/${u}`;
+            })
+            .filter(Boolean) as string[];
+
+          return [pid, urls[0] || '/placeholder-image.jpg'] as const;
+        } catch (e) {
+          console.warn(`Failed to load images for product ${pid}`, e);
+          return [pid, '/placeholder-image.jpg'] as const;
+        }
+      })
+    );
+
+    return new Map<number, string>(pairs);
+  };
+
   const groupInventoryBySKU = (
     inventoryItems: GlobalInventoryItem[],
     products: any[],
-    categories: Category[]
+    cats: Category[],
+    primaryImageMap: Map<number, string>
   ): GroupedProduct[] => {
     const skuGroups: { [sku: string]: GroupedProduct } = {};
 
     inventoryItems.forEach((item) => {
-      // Find product details
       const product = products.find(p => p.id === item.product_id);
       if (!product) return;
 
       const sku = product.sku || item.sku || 'NO-SKU';
 
-      // Get color and size from custom fields
-      const colorField = product.custom_fields?.find((f: any) => 
+      const colorField = product.custom_fields?.find((f: any) =>
         f.field_title?.toLowerCase() === 'color' || f.field_title?.toLowerCase() === 'colour'
       );
-      const sizeField = product.custom_fields?.find((f: any) => 
+      const sizeField = product.custom_fields?.find((f: any) =>
         f.field_title?.toLowerCase() === 'size'
       );
-      const imageField = product.custom_fields?.find((f: any) => 
+      const imageField = product.custom_fields?.find((f: any) =>
         f.field_title?.toLowerCase() === 'image'
       );
 
       const color = colorField?.value || 'Default';
       const size = sizeField?.value || 'One Size';
-      const image = imageField?.value || product.images?.[0]?.image_path || '/placeholder-product.png';
 
-      // Initialize SKU group if not exists
+      // Priority:
+      // 1) custom field image (if it exists)
+      // 2) productImageService primary image
+      // 3) product.images[0].image_path (normalized)
+      // 4) placeholder
+      const cfImage = imageField?.value ? normalizeImageUrl(imageField.value) : '';
+      const apiPrimary = primaryImageMap.get(item.product_id) || '';
+      const productImagesFallback = product.images?.[0]?.image_path
+        ? normalizeImageUrl(product.images?.[0]?.image_path)
+        : '';
+
+      const image = cfImage || apiPrimary || productImagesFallback || '/placeholder-image.jpg';
+
       if (!skuGroups[sku]) {
-        const categoryName = getCategoryName(product.category_id, categories);
+        const categoryName = getCategoryName(product.category_id, cats);
 
         skuGroups[sku] = {
           sku,
@@ -127,9 +175,9 @@ export default function ViewInventoryPage() {
         };
       }
 
-      // Find or create variation (grouped by color)
+      // group by color (your original behavior)
       let variation = skuGroups[sku].variations.find(v => v.color === color);
-      
+
       if (!variation) {
         variation = {
           color,
@@ -140,30 +188,57 @@ export default function ViewInventoryPage() {
         };
         skuGroups[sku].variations.push(variation);
       } else {
-        // If same color but different size, append size
+        // if same color but different size, append size
         if (size !== 'One Size' && !variation.size?.includes(size)) {
-          variation.size = variation.size === 'One Size' 
-            ? size 
+          variation.size = variation.size === 'One Size'
+            ? size
             : `${variation.size}, ${size}`;
+        }
+        // keep a valid image if it was missing earlier
+        if (!variation.image || variation.image === '/placeholder-image.jpg') {
+          variation.image = image;
         }
       }
 
-      // Add quantity and stores
       variation.quantity += item.total_quantity;
+
       item.stores.forEach(store => {
         const existingStore = variation!.stores.find(s => s.store_id === store.store_id);
-        if (existingStore) {
-          existingStore.quantity += store.quantity;
-        } else {
-          variation!.stores.push({ ...store });
-        }
+        if (existingStore) existingStore.quantity += store.quantity;
+        else variation!.stores.push({ ...store });
       });
 
-      // Update total stock
       skuGroups[sku].totalStock += item.total_quantity;
     });
 
     return Object.values(skuGroups);
+  };
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+
+      const categoriesResponse = await categoryService.getCategories();
+      const categoriesData = categoriesResponse.data.data || categoriesResponse.data || [];
+      setCategories(categoriesData);
+
+      const inventoryResponse = await inventoryService.getGlobalInventory();
+      const inventoryData = inventoryResponse.data || [];
+
+      const productsResponse = await productService.getAll({ per_page: 1000 });
+      const productsData = productsResponse.data || [];
+
+      // Build images map from productImageService (like GalleryPage)
+      const productIds = inventoryData.map((x: any) => x.product_id).filter(Boolean);
+      const primaryImageMap = await fetchPrimaryImagesMap(productIds);
+
+      const grouped = groupInventoryBySKU(inventoryData, productsData, categoriesData, primaryImageMap);
+      setGroupedProducts(grouped);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const toggleExpand = (sku: string) => {
@@ -186,8 +261,8 @@ export default function ViewInventoryPage() {
         <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
           <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
           <div className="flex-1 flex flex-col overflow-hidden">
-            <Header 
-              darkMode={darkMode} 
+            <Header
+              darkMode={darkMode}
               setDarkMode={setDarkMode}
               toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
             />
@@ -209,14 +284,13 @@ export default function ViewInventoryPage() {
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header 
-            darkMode={darkMode} 
+          <Header
+            darkMode={darkMode}
             setDarkMode={setDarkMode}
             toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
 
           <main className="flex-1 overflow-auto p-6">
-            {/* Header Section */}
             <div className="mb-6">
               <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
                 Inventory Overview
@@ -226,7 +300,6 @@ export default function ViewInventoryPage() {
               </p>
             </div>
 
-            {/* Search Bar */}
             <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-6">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -240,7 +313,6 @@ export default function ViewInventoryPage() {
               </div>
             </div>
 
-            {/* Inventory List */}
             <div className="space-y-4">
               {filteredProducts.length === 0 ? (
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-12 text-center">
@@ -255,22 +327,22 @@ export default function ViewInventoryPage() {
                     key={item.sku}
                     className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
                   >
-                    {/* Product Header */}
                     <div className="p-4">
                       <div className="flex items-start gap-4">
-                        {/* Product Image - Show first variation's image */}
                         <div className="w-20 h-20 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
                           <img
-                            src={item.variations[0]?.image || '/placeholder-product.png'}
+                            src={normalizeImageUrl(item.variations[0]?.image)}
                             alt={item.productName}
                             className="w-full h-full object-cover"
                             onError={(e) => {
-                              (e.target as HTMLImageElement).src = '/placeholder-product.png';
+                              const img = e.currentTarget;
+                              if (img.dataset.fallbackApplied) return;
+                              img.dataset.fallbackApplied = '1';
+                              img.src = '/placeholder-image.jpg';
                             }}
                           />
                         </div>
 
-                        {/* Product Info */}
                         <div className="flex-1 min-w-0">
                           <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
                             {item.productName}
@@ -291,7 +363,6 @@ export default function ViewInventoryPage() {
                           </div>
                         </div>
 
-                        {/* Stock Summary */}
                         <div className="flex items-center gap-6">
                           <div className="text-right">
                             <p className="text-sm text-gray-600 dark:text-gray-400">Total Stock</p>
@@ -314,7 +385,6 @@ export default function ViewInventoryPage() {
                       </div>
                     </div>
 
-                    {/* Expanded Variations Details */}
                     {item.expanded && (
                       <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                         <div className="p-4">
@@ -327,15 +397,17 @@ export default function ViewInventoryPage() {
                                 key={idx}
                                 className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4"
                               >
-                                {/* Variation Header */}
                                 <div className="flex items-center gap-4 mb-3">
                                   <div className="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded overflow-hidden">
                                     <img
-                                      src={variation.image || '/placeholder-product.png'}
-                                      alt={`${variation.color}`}
+                                      src={normalizeImageUrl(variation.image)}
+                                      alt={`${variation.color || 'Variation'}`}
                                       className="w-full h-full object-cover"
                                       onError={(e) => {
-                                        (e.target as HTMLImageElement).src = '/placeholder-product.png';
+                                        const img = e.currentTarget;
+                                        if (img.dataset.fallbackApplied) return;
+                                        img.dataset.fallbackApplied = '1';
+                                        img.src = '/placeholder-image.jpg';
                                       }}
                                     />
                                   </div>
@@ -353,12 +425,15 @@ export default function ViewInventoryPage() {
                                       )}
                                     </div>
                                     <p className="text-sm text-gray-600 dark:text-gray-400">
-                                      Total: <span className="font-semibold text-gray-900 dark:text-white">{variation.quantity}</span> units
+                                      Total:{' '}
+                                      <span className="font-semibold text-gray-900 dark:text-white">
+                                        {variation.quantity}
+                                      </span>{' '}
+                                      units
                                     </p>
                                   </div>
                                 </div>
 
-                                {/* Store Distribution */}
                                 {variation.stores.length > 0 && (
                                   <div className="overflow-x-auto">
                                     <table className="w-full">

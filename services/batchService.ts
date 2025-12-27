@@ -110,6 +110,22 @@ export interface ApiResponse<T> {
   message?: string;
 }
 
+/**
+ * Bulk Price Update Response (based on your backend handler)
+ */
+export interface BulkBatchPriceUpdateData {
+  product_id: number;
+  sell_price: string; // backend may return string formatted
+  updated_batches: number;
+  updates: Array<{
+    batch_id: number;
+    batch_number: string | null;
+    store: string;
+    old_price: string;
+    new_price: string;
+  }>;
+}
+
 class BatchService {
   /**
    * Get all batches with filters (returns full paginated response)
@@ -166,6 +182,21 @@ class BatchService {
     adjustment: number;
   }>> {
     const response = await axios.post(`/batches/${id}/adjust-stock`, data);
+    return response.data;
+  }
+
+  /**
+   * ✅ Bulk update selling price for ALL batches of a product
+   * Endpoint: POST /products/{product_id}/batches/update-price
+   * Body: { sell_price: number }
+   */
+  async updateAllBatchPrices(
+    productId: number,
+    sellPrice: number
+  ): Promise<ApiResponse<BulkBatchPriceUpdateData>> {
+    const response = await axios.post(`/products/${productId}/batches/update-price`, {
+      sell_price: sellPrice,
+    });
     return response.data;
   }
 
@@ -264,9 +295,9 @@ class BatchService {
    * Get available batches (returns array)
    */
   async getAvailableBatches(storeId?: number): Promise<Batch[]> {
-    return this.getBatchesArray({ 
+    return this.getBatchesArray({
       status: 'available',
-      store_id: storeId 
+      store_id: storeId
     });
   }
 }

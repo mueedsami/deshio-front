@@ -1,39 +1,38 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { 
-  Package, 
-  Store as StoreIcon, 
-  CheckCircle, 
-  XCircle, 
-  AlertTriangle, 
-  Search, 
-  ArrowLeft, 
-  Loader, 
+import {
+  Package,
+  Store as StoreIcon,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  Search,
+  ArrowLeft,
+  Loader,
   RefreshCw,
   MapPin,
   TrendingUp,
   Award,
-  Box
+  Box,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import orderManagementService, { 
-  PendingAssignmentOrder, 
-  AvailableStore,
-  AvailableStoresResponse 
+import orderManagementService, {
+  PendingAssignmentOrder,
+  AvailableStoresResponse,
 } from '@/services/orderManagementService';
 import Toast from '@/components/Toast';
 
 export default function StoreAssignmentPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+
   // Orders list state
   const [pendingOrders, setPendingOrders] = useState<PendingAssignmentOrder[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // Assignment state
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<PendingAssignmentOrder | null>(null);
@@ -42,7 +41,7 @@ export default function StoreAssignmentPage() {
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
   const [assignmentNotes, setAssignmentNotes] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
-  
+
   // Toast
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -50,25 +49,69 @@ export default function StoreAssignmentPage() {
 
   useEffect(() => {
     fetchPendingOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (selectedOrderId) {
-      const order = pendingOrders.find(o => o.id === selectedOrderId);
+      const order = pendingOrders.find((o) => o.id === selectedOrderId);
       setSelectedOrder(order || null);
       fetchAvailableStores(selectedOrderId);
     }
-  }, [selectedOrderId]);
+    // include pendingOrders so selection works after refresh
+  }, [selectedOrderId, pendingOrders]);
+
+  const displayToast = (
+    message: string,
+    type: 'success' | 'error' | 'info' | 'warning' = 'success'
+  ) => {
+    setToastMessage(message);
+    setToastType(type);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 4000);
+  };
+
+  // Defensive extractor for different API shapes
+  const extractOrders = (resp: any): PendingAssignmentOrder[] => {
+    const candidates = [
+      resp?.orders,
+      resp?.data?.orders,
+      resp?.data?.data?.orders,
+      resp?.data?.data,
+      resp?.data,
+    ];
+
+    for (const c of candidates) {
+      if (Array.isArray(c)) return c as PendingAssignmentOrder[];
+    }
+
+    return [];
+  };
 
   const fetchPendingOrders = async () => {
     setIsLoadingOrders(true);
     try {
-      const data = await orderManagementService.getPendingAssignment({ per_page: 100 });
-      setPendingOrders(data.orders);
-      console.log('📦 Loaded pending assignment orders:', data.orders.length);
+      // Force status filter (fallback to kebab-case if backend uses that)
+      const primary = await orderManagementService.getPendingAssignment({
+        per_page: 100,
+        status: 'pending_assignment',
+      } as any);
+
+      let orders = extractOrders(primary);
+
+      if (!orders.length) {
+        const fallback = await orderManagementService.getPendingAssignment({
+          per_page: 100,
+          status: 'pending-assignment',
+        } as any);
+        orders = extractOrders(fallback);
+      }
+
+      setPendingOrders(orders);
+      console.log('📦 Loaded pending assignment orders:', orders.length);
     } catch (error: any) {
       console.error('Error fetching orders:', error);
-      displayToast('Error loading orders: ' + error.message, 'error');
+      displayToast('Error loading orders: ' + (error?.message || 'Unknown error'), 'error');
     } finally {
       setIsLoadingOrders(false);
     }
@@ -79,16 +122,16 @@ export default function StoreAssignmentPage() {
     try {
       const data = await orderManagementService.getAvailableStores(orderId);
       setAvailableStoresData(data);
-      
+
       // Auto-select recommended store if available
-      if (data.recommendation) {
+      if (data?.recommendation?.store_id) {
         setSelectedStoreId(data.recommendation.store_id);
       }
-      
-      console.log('🏪 Available stores loaded:', data.stores.length);
+
+      console.log('🏪 Available stores loaded:', data?.stores?.length || 0);
     } catch (error: any) {
       console.error('Error fetching stores:', error);
-      displayToast('Error loading stores: ' + error.message, 'error');
+      displayToast('Error loading stores: ' + (error?.message || 'Unknown error'), 'error');
     } finally {
       setIsLoadingStores(false);
     }
@@ -104,12 +147,11 @@ export default function StoreAssignmentPage() {
     try {
       await orderManagementService.assignOrderToStore(selectedOrderId, {
         store_id: selectedStoreId,
-        notes: assignmentNotes || undefined
+        notes: assignmentNotes || undefined,
       });
 
       displayToast('✅ Order assigned successfully!', 'success');
-      
-      // Wait and go back to list
+
       setTimeout(() => {
         setSelectedOrderId(null);
         setSelectedOrder(null);
@@ -117,27 +159,22 @@ export default function StoreAssignmentPage() {
         setSelectedStoreId(null);
         setAssignmentNotes('');
         fetchPendingOrders();
-      }, 2000);
-      
+      }, 800);
     } catch (error: any) {
       console.error('Error assigning order:', error);
-      displayToast(error.message || 'Failed to assign order', 'error');
+      displayToast(error?.message || 'Failed to assign order', 'error');
     } finally {
       setIsAssigning(false);
     }
   };
 
-  const displayToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
-    setToastMessage(message);
-    setToastType(type);
-    setShowToast(true);
-    setTimeout(() => setShowToast(false), 4000);
-  };
-
-  const filteredOrders = pendingOrders.filter(order => 
-    order.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    order.customer?.name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredOrders = pendingOrders.filter((order) => {
+    const q = searchQuery.toLowerCase();
+    return (
+      order.order_number?.toLowerCase().includes(q) ||
+      order.customer?.name?.toLowerCase().includes(q)
+    );
+  });
 
   // ORDER LIST VIEW
   if (!selectedOrderId) {
@@ -145,14 +182,14 @@ export default function StoreAssignmentPage() {
       <div className={darkMode ? 'dark' : ''}>
         <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
           <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
-          
+
           <div className="flex-1 flex flex-col overflow-hidden">
-            <Header 
-              darkMode={darkMode} 
-              setDarkMode={setDarkMode} 
-              toggleSidebar={() => setSidebarOpen(!sidebarOpen)} 
+            <Header
+              darkMode={darkMode}
+              setDarkMode={setDarkMode}
+              toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
             />
-            
+
             <main className="flex-1 overflow-auto p-4 md:p-6">
               <div className="max-w-7xl mx-auto">
                 {/* Header */}
@@ -196,8 +233,12 @@ export default function StoreAssignmentPage() {
                       <div>
                         <p className="text-sm text-gray-600 dark:text-gray-400">Total Items</p>
                         <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">
-                          {pendingOrders.reduce((sum, order) => 
-                            sum + (order.items?.reduce((itemSum, item) => itemSum + item.quantity, 0) || 0), 0
+                          {pendingOrders.reduce(
+                            (sum, order) =>
+                              sum +
+                              (order.items?.reduce((itemSum, item) => itemSum + item.quantity, 0) ||
+                                0),
+                            0
                           )}
                         </p>
                       </div>
@@ -212,9 +253,10 @@ export default function StoreAssignmentPage() {
                       <div>
                         <p className="text-sm text-gray-600 dark:text-gray-400">Total Value</p>
                         <p className="text-3xl font-bold text-gray-900 dark:text-white mt-2">
-                          ৳{pendingOrders.reduce((sum, order) => 
-                            sum + parseFloat(String(order.total_amount)), 0
-                          ).toFixed(2)}
+                          ৳
+                          {pendingOrders
+                            .reduce((sum, order) => sum + parseFloat(String(order.total_amount || 0)), 0)
+                            .toFixed(2)}
                         </p>
                       </div>
                       <div className="p-3 bg-green-100 dark:bg-green-900/30 rounded-lg">
@@ -252,13 +294,14 @@ export default function StoreAssignmentPage() {
                     </p>
                     {!searchQuery && (
                       <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">
-                        All orders have been assigned to stores
+                        If you believe there should be orders here, verify the API is filtering by
+                        status = pending_assignment.
                       </p>
                     )}
                   </div>
                 ) : (
                   <div className="grid gap-4">
-                    {filteredOrders.map(order => (
+                    {filteredOrders.map((order) => (
                       <div
                         key={order.id}
                         onClick={() => setSelectedOrderId(order.id)}
@@ -279,7 +322,7 @@ export default function StoreAssignmentPage() {
                             </p>
                             <div className="flex flex-wrap gap-2 mt-3">
                               {order.items_summary?.slice(0, 3).map((item, idx) => (
-                                <span 
+                                <span
                                   key={idx}
                                   className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
                                 >
@@ -296,10 +339,10 @@ export default function StoreAssignmentPage() {
                           <div className="text-right ml-4">
                             <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">Total</p>
                             <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                              ৳{parseFloat(String(order.total_amount)).toFixed(2)}
+                              ৳{parseFloat(String(order.total_amount || 0)).toFixed(2)}
                             </p>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                              {new Date(order.created_at).toLocaleDateString()}
+                              {order.created_at ? new Date(order.created_at).toLocaleDateString() : ''}
                             </p>
                           </div>
                         </div>
@@ -312,33 +355,27 @@ export default function StoreAssignmentPage() {
           </div>
         </div>
 
-        {showToast && (
-          <Toast 
-            message={toastMessage} 
-            type={toastType} 
-            onClose={() => setShowToast(false)} 
-          />
-        )}
+        {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
       </div>
     );
   }
 
   // STORE ASSIGNMENT VIEW
-  const selectedStoreData = availableStoresData?.stores.find(s => s.store_id === selectedStoreId);
+  const selectedStoreData = availableStoresData?.stores?.find((s) => s.store_id === selectedStoreId);
   const recommendation = availableStoresData?.recommendation;
 
   return (
     <div className={darkMode ? 'dark' : ''}>
       <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
-        
+
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header 
-            darkMode={darkMode} 
-            setDarkMode={setDarkMode} 
-            toggleSidebar={() => setSidebarOpen(!sidebarOpen)} 
+          <Header
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
+            toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
-          
+
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <div className="max-w-7xl mx-auto">
               {/* Header */}
@@ -395,7 +432,7 @@ export default function StoreAssignmentPage() {
                   <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
                     Available Stores
                   </h2>
-                  
+
                   {isLoadingStores ? (
                     <div className="text-center py-12">
                       <Loader className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
@@ -403,10 +440,10 @@ export default function StoreAssignmentPage() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {availableStoresData?.stores.map(store => {
+                      {availableStoresData?.stores?.map((store) => {
                         const isSelected = selectedStoreId === store.store_id;
                         const isRecommended = recommendation?.store_id === store.store_id;
-                        
+
                         return (
                           <div
                             key={store.store_id}
@@ -425,9 +462,7 @@ export default function StoreAssignmentPage() {
                                   <h3 className="font-semibold text-gray-900 dark:text-white">
                                     {store.store_name}
                                   </h3>
-                                  {isRecommended && (
-                                    <Award className="h-4 w-4 text-yellow-500" />
-                                  )}
+                                  {isRecommended && <Award className="h-4 w-4 text-yellow-500" />}
                                 </div>
                                 <p className="text-xs text-gray-600 dark:text-gray-400 flex items-start gap-1">
                                   <MapPin className="h-3 w-3 mt-0.5 flex-shrink-0" />
@@ -487,7 +522,7 @@ export default function StoreAssignmentPage() {
                   <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
                     {selectedStoreData ? 'Inventory Details' : 'Select a Store'}
                   </h2>
-                  
+
                   {selectedStoreData ? (
                     <div className="space-y-4">
                       {/* Inventory Details */}
@@ -524,12 +559,16 @@ export default function StoreAssignmentPage() {
                                 <span className="text-gray-600 dark:text-gray-400">
                                   Required: {detail.required_quantity} | Available: {detail.available_quantity}
                                 </span>
-                                <span className={`font-semibold ${
-                                  detail.can_fulfill
-                                    ? 'text-green-600 dark:text-green-400'
-                                    : 'text-red-600 dark:text-red-400'
-                                }`}>
-                                  {detail.can_fulfill ? 'OK' : `Short by ${detail.required_quantity - detail.available_quantity}`}
+                                <span
+                                  className={`font-semibold ${
+                                    detail.can_fulfill
+                                      ? 'text-green-600 dark:text-green-400'
+                                      : 'text-red-600 dark:text-red-400'
+                                  }`}
+                                >
+                                  {detail.can_fulfill
+                                    ? 'OK'
+                                    : `Short by ${detail.required_quantity - detail.available_quantity}`}
                                 </span>
                               </div>
                             </div>
@@ -550,9 +589,7 @@ export default function StoreAssignmentPage() {
                           maxLength={500}
                           className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                         />
-                        <p className="text-xs text-gray-500 mt-1">
-                          {assignmentNotes.length}/500 characters
-                        </p>
+                        <p className="text-xs text-gray-500 mt-1">{assignmentNotes.length}/500 characters</p>
                       </div>
 
                       {/* Assign Button */}
@@ -604,13 +641,7 @@ export default function StoreAssignmentPage() {
         </div>
       </div>
 
-      {showToast && (
-        <Toast 
-          message={toastMessage} 
-          type={toastType} 
-          onClose={() => setShowToast(false)} 
-        />
-      )}
+      {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
     </div>
   );
 }

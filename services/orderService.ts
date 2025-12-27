@@ -77,6 +77,7 @@ export interface Order {
   order_type_label: string;
   status: string;
   payment_status: string;
+  is_preorder?: boolean;
   fulfillment_status?: string | null;
   customer: {
     id: number;

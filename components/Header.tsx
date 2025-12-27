@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Moon, Sun, Menu, User, LogOut } from 'lucide-react';
+import { Moon, Sun, Menu, User, LogOut, History } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 
 interface HeaderProps {
@@ -12,8 +13,22 @@ interface HeaderProps {
 
 export default function Header({ darkMode, setDarkMode, toggleSidebar }: HeaderProps) {
   const { user, logout } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
   const [showDropdown, setShowDropdown] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const inferredModule = (() => {
+    const seg = (pathname || '').split('/').filter(Boolean)[0] || '';
+    // normalize some common paths
+    if (!seg) return '';
+    return seg;
+  })();
+
+  const goToActivityLogs = () => {
+    const q = inferredModule ? `?module=${encodeURIComponent(inferredModule)}` : '';
+    router.push(`/activity-logs${q}`);
+  };
 
   const handleLogout = async () => {
     if (isLoggingOut) return;
@@ -40,6 +55,15 @@ export default function Header({ darkMode, setDarkMode, toggleSidebar }: HeaderP
 
       {/* Right section */}
       <div className="flex items-center gap-3">
+        {/* Activity Logs */}
+        <button
+          onClick={goToActivityLogs}
+          className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+          title="Activity Logs"
+        >
+          <History className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+        </button>
+
         {/* Dark Mode Toggle */}
         <button
           onClick={() => setDarkMode(!darkMode)}

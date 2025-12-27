@@ -1,6 +1,4 @@
-import axios from 'axios';
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://your-domain.com/api';
+import axiosInstance from '@/lib/axios';
 
 export interface SSLCommerzInitResponse {
   success: boolean;
@@ -19,24 +17,11 @@ export interface SSLCommerzInitResponse {
 }
 
 class SSLCommerzService {
-  private getAuthToken(): string {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('auth_token') || '';
-    }
-    return '';
-  }
-
-  private getAuthHeaders() {
-    const token = this.getAuthToken();
-    return {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    };
-  }
-
   /**
-   * Initialize SSLCommerz payment
-   * This creates an order and returns the payment gateway URL
+   * Initialize SSLCommerz payment:
+   * - Creates an order from cart
+   * - Initiates SSLCommerz session
+   * - Returns payment_url for redirect
    */
   async initializePayment(orderData: {
     shipping_address_id: number;
@@ -45,18 +30,15 @@ class SSLCommerzService {
     coupon_code?: string;
   }): Promise<SSLCommerzInitResponse> {
     try {
-      const response = await axios.post(
-        `${API_BASE_URL}/customer/orders/create-from-cart`,
+      const response = await axiosInstance.post(
+        '/customer/orders/create-from-cart',
         {
           ...orderData,
           payment_method: 'sslcommerz',
-        },
-        {
-          headers: this.getAuthHeaders(),
         }
       );
 
-      return response.data;
+      return response.data as SSLCommerzInitResponse;
     } catch (error: any) {
       console.error('SSLCommerz initialization failed:', error);
       throw {
@@ -67,15 +49,13 @@ class SSLCommerzService {
   }
 
   /**
-   * Redirect to SSLCommerz payment gateway
-   * The gateway will handle payment and redirect back to backend callbacks
-   * Backend routes handle: /api/sslcommerz/success, /failure, /cancel
+   * Redirect customer to SSLCommerz payment gateway
    */
   redirectToPaymentGateway(paymentUrl: string): void {
     if (typeof window !== 'undefined') {
       // Store current location to return to after payment
       localStorage.setItem('sslc_return_url', window.location.pathname);
-      
+
       // Redirect to payment gateway
       window.location.href = paymentUrl;
     }
@@ -83,7 +63,7 @@ class SSLCommerzService {
 
   /**
    * Store payment intent in localStorage before redirecting
-   * This helps track the payment flow when user returns
+   * Used to track payment when user returns
    */
   storePaymentIntent(data: {
     order_id: number;
@@ -115,7 +95,7 @@ class SSLCommerzService {
   }
 
   /**
-   * Clear payment intent after successful processing
+   * Clear payment intent after processing
    */
   clearPaymentIntent(): void {
     if (typeof window !== 'undefined') {
@@ -131,16 +111,16 @@ class SSLCommerzService {
     const intent = this.getPaymentIntent();
     if (!intent) return false;
 
-    // Check if payment intent is not older than 30 minutes
+    // Payment intent valid for 30 minutes
     const thirtyMinutes = 30 * 60 * 1000;
-    return (Date.now() - intent.timestamp) < thirtyMinutes;
+    return Date.now() - intent.timestamp < thirtyMinutes;
   }
 
   /**
-   * Check payment status after user returns from gateway
-   * Use this to verify if payment was completed
+   * Check payment status after user returns from gateway.
+   * IMPORTANT: Customer order lookup uses ORDER NUMBER (e.g. ORD-2024-001234).
    */
-  async checkPaymentStatus(orderId: number): Promise<{
+  async checkPaymentStatus(orderNumber: string): Promise<{
     success: boolean;
     order: {
       id: number;
@@ -151,12 +131,7 @@ class SSLCommerzService {
     };
   }> {
     try {
-      const response = await axios.get(
-        `${API_BASE_URL}/customer/orders/${orderId}`,
-        {
-          headers: this.getAuthHeaders(),
-        }
-      );
+      const response = await axiosInstance.get(`/customer/orders/${orderNumber}`);
 
       return {
         success: true,

@@ -93,35 +93,116 @@ export default function ProductPage() {
     return path ? path.join(' > ') : 'Uncategorized';
   };
 
-  const getColorAndSize = (product: Product): { color?: string; size?: string } => {
-    const colorField = product.custom_fields?.find(cf => 
-      cf.field_title?.toLowerCase() === 'color'
-    );
-    const sizeField = product.custom_fields?.find(cf => 
-      cf.field_title?.toLowerCase() === 'size'
-    );
-    return {
-      color: colorField?.value,
-      size: sizeField?.value,
-    };
+  /**
+   * Robustly extract variant attributes.
+   * - Prefer custom_fields (backend truth)
+   * - Fallback to parsing the product name (common pattern: "Base - Color - Size")
+   */
+  const parseVariantFromName = (name: string): { base?: string; color?: string; size?: string } => {
+    const raw = (name || '').trim();
+    if (!raw) return {};
+
+    // Split by hyphen with optional spaces around it
+    const parts = raw.split(/\s*-\s*/).map(p => p.trim()).filter(Boolean);
+    if (parts.length >= 3) {
+      const size = parts[parts.length - 1];
+      const color = parts[parts.length - 2];
+      const base = parts.slice(0, parts.length - 2).join(' - ').trim();
+      return { base, color, size };
+    }
+
+    if (parts.length === 2) {
+      const base = parts[0];
+      const maybe = parts[1];
+      const looksLikeSize = /^(\d{1,3}|xs|s|m|l|xl|xxl|xxxl)$/i.test(maybe);
+      return looksLikeSize ? { base, size: maybe } : { base, color: maybe };
+    }
+
+    return { base: raw };
   };
 
+  const getColorAndSize = (product: Product): { color?: string; size?: string } => {
+    // 1) Prefer explicit custom fields when available
+    const colorField = product.custom_fields?.find(cf =>
+      String(cf.field_title || '').trim().toLowerCase() === 'color'
+    );
+    const sizeField = product.custom_fields?.find(cf =>
+      String(cf.field_title || '').trim().toLowerCase() === 'size'
+    );
+
+    const color = colorField?.value;
+    const size = sizeField?.value;
+
+    if (color || size) {
+      return { color, size };
+    }
+
+    // 2) Fallback: infer from the name
+    const parsed = parseVariantFromName(product.name);
+    return { color: parsed.color, size: parsed.size };
+  };
+
+  /**
+   * Base name for a single product.
+   * Uses custom_fields if present; otherwise parses the name.
+   */
   const getBaseName = (product: Product): string => {
     const { color, size } = getColorAndSize(product);
-    let name = product.name;
-    
+    const original = (product.name || '').trim();
+    let name = original;
+
+    // If the backend has custom fields, we can safely strip suffixes.
     if (color && size) {
-      const pattern = new RegExp(`\\s*-\\s*${color}\\s*-\\s*${size}$`, 'i');
+      const pattern = new RegExp(`\\s*-\\s*${String(color).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*-\\s*${String(size).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
       name = name.replace(pattern, '');
     } else if (color) {
-      const pattern = new RegExp(`\\s*-\\s*${color}$`, 'i');
+      const pattern = new RegExp(`\\s*-\\s*${String(color).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
       name = name.replace(pattern, '');
     } else if (size) {
-      const pattern = new RegExp(`\\s*-\\s*${size}$`, 'i');
+      const pattern = new RegExp(`\\s*-\\s*${String(size).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
       name = name.replace(pattern, '');
+    } else {
+      // Fallback: parse "Base - Color - Size" naming
+      const parsed = parseVariantFromName(original);
+      if (parsed.base) name = parsed.base;
     }
-    
-    return name.trim();
+
+    return (name || original).trim();
+  };
+
+  /**
+   * Determine a stable base name for a whole SKU group.
+   * If variants use a consistent naming scheme ("Base - Color - Size"),
+   * we pick the most common parsed base across variants.
+   */
+  const getGroupBaseName = (variants: { name: string }[], fallbackName: string) => {
+    const bases = variants
+      .map(v => (parseVariantFromName(v.name).base || '').trim())
+      .filter(Boolean);
+    if (bases.length === 0) return fallbackName;
+
+    const counts = new Map<string, number>();
+    const originalMap = new Map<string, string>();
+    bases.forEach(b => {
+      const key = b.toLowerCase();
+      counts.set(key, (counts.get(key) || 0) + 1);
+      if (!originalMap.has(key)) originalMap.set(key, b);
+    });
+
+    // Pick most frequent; tie-breaker: shortest (cleanest)
+    let bestKey = '';
+    let bestCount = -1;
+    let bestLen = Infinity;
+    for (const [key, c] of counts.entries()) {
+      const candidate = originalMap.get(key) || key;
+      const len = candidate.length;
+      if (c > bestCount || (c === bestCount && len < bestLen)) {
+        bestKey = key;
+        bestCount = c;
+        bestLen = len;
+      }
+    }
+    return (originalMap.get(bestKey) || fallbackName).trim();
   };
 
   // Enhanced image URL processing
@@ -153,7 +234,9 @@ export default function ProductPage() {
       const imageUrl = primaryImage ? getImageUrl(primaryImage.image_path) : null;
 
       // Determine grouping key
-      const groupKey = color ? `${sku}-color` : size ? `${sku}-${size}` : sku;
+      // ✅ Group by SKU so "Air Jordan - Black - 39" and "Air Jordan - Red - 40"
+      // show as ONE product with variations.
+      const groupKey = (sku && String(sku).trim()) ? String(sku).trim() : `product-${product.id}`;
 
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
@@ -188,14 +271,16 @@ export default function ProductPage() {
 
     // Calculate variants and mark groups with variations
     groups.forEach(group => {
-      const hasColors = group.variants.some(v => v.color);
-      if (hasColors) {
-        const uniqueColors = new Set(group.variants.map(v => v.color).filter(Boolean));
-        group.totalVariants = uniqueColors.size;
-        group.hasVariations = uniqueColors.size > 1;
-      } else {
-        group.totalVariants = group.variants.length;
-        group.hasVariations = false;
+      // Base name should be derived from the whole group, not only the first product.
+      group.baseName = getGroupBaseName(group.variants, group.baseName);
+
+      // Any group with more than 1 item should be treated as having variations
+      group.totalVariants = group.variants.length;
+      group.hasVariations = group.variants.length > 1;
+
+      // If the group's primary image is missing, pick first available variant image
+      if (!group.primaryImage) {
+        group.primaryImage = group.variants.find(v => v.image)?.image || null;
       }
     });
 

@@ -7,14 +7,24 @@ export interface Customer {
   phone: string;
   email?: string;
   address?: string;
-  customer_type: 'retail' | 'wholesale' | 'vip';
+  /**
+   * Backend supports multiple customer types (e.g. social_commerce, ecommerce, counter/pos, wholesale, etc).
+   * Keep this flexible to avoid breaking the UI when new types are introduced.
+   */
+  customer_type: string;
   status: 'active' | 'inactive' | 'blocked';
   credit_limit?: string;
   outstanding_balance?: string;
+  /** total orders count (some endpoints provide total_orders) */
   total_orders?: number;
+  /** total spent/purchases amount as string (some endpoints use total_spent, some use total_purchases) */
   total_spent?: string;
   average_order_value?: string;
   last_order_date?: string;
+  /** Customer tags (lowercase, hyphenated). Example: ["regular","vip"] */
+  tags?: string[];
+  /** Some endpoints use these naming conventions */
+  total_purchases?: string;
   created_at: string;
   updated_at: string;
   notes?: string;
@@ -23,6 +33,11 @@ export interface Customer {
     id: number;
     name: string;
   };
+}
+
+export interface CustomerTagsResponse {
+  success: boolean;
+  data: string[];
 }
 
 export interface CustomerOrder {
@@ -212,6 +227,81 @@ const customerService = {
       }
       throw new Error(error.response?.data?.message || 'Failed to fetch customer');
     }
+  },
+
+  /**
+   * Social commerce / POS phone lookup.
+   * New endpoint (per docs): POST /api/customers/find-by-phone { phone }
+   * Falls back to older GET /customers/by-phone and search-based lookup if needed.
+   */
+  async findByPhone(phone: string): Promise<Customer | null> {
+    const formattedPhone = phone.replace(/\D/g, '');
+    if (!formattedPhone) return null;
+
+    // 1) Try new endpoint
+    try {
+      const res = await axiosInstance.post('/customers/find-by-phone', { phone: formattedPhone });
+      const result = res.data;
+      // supports: {success:true,data:{...}} or {data:{...}}
+      const customer = result?.data ?? result?.customer ?? result;
+      if (result?.success === false) return null;
+      return customer?.id ? customer : null;
+    } catch (err: any) {
+      // If backend doesn't have the endpoint, fall back
+      const status = err?.response?.status;
+      if (status && status !== 404 && status !== 405) {
+        // other failures: still fall back, but don't hide unexpected issues completely
+        console.warn('findByPhone primary endpoint failed, falling back:', err?.response?.data || err);
+      }
+    }
+
+    // 2) Old endpoint (some builds)
+    try {
+      const res = await axiosInstance.get('/customers/by-phone', { params: { phone: formattedPhone } });
+      const payload = res.data?.data ?? res.data;
+      const customer = payload?.customer ?? payload;
+      return customer?.id ? customer : null;
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status && status !== 404 && status !== 405) {
+        console.warn('findByPhone fallback /customers/by-phone failed:', err?.response?.data || err);
+      }
+    }
+
+    // 3) Final fallback: search-based
+    return await this.getByPhone(formattedPhone);
+  },
+
+  /** Get all unique tags used across customers */
+  async getAllTags(): Promise<string[]> {
+    const res = await axiosInstance.get('/customers/tags/all');
+    const result = res.data;
+    if (result?.success === false) throw new Error(result?.message || 'Failed to fetch tags');
+    return result?.data ?? [];
+  },
+
+  /** Add one or more tags to a customer */
+  async addTags(customerId: number, tags: string[]): Promise<string[]> {
+    const res = await axiosInstance.post(`/customers/${customerId}/tags`, { tags });
+    const result = res.data;
+    if (result?.success === false) throw new Error(result?.message || 'Failed to add tags');
+    return result?.data?.tags ?? result?.data ?? [];
+  },
+
+  /** Remove one or more tags from a customer */
+  async removeTags(customerId: number, tags: string[]): Promise<string[]> {
+    const res = await axiosInstance.delete(`/customers/${customerId}/tags`, { data: { tags } });
+    const result = res.data;
+    if (result?.success === false) throw new Error(result?.message || 'Failed to remove tags');
+    return result?.data?.tags ?? result?.data ?? [];
+  },
+
+  /** Replace all tags for a customer */
+  async setTags(customerId: number, tags: string[]): Promise<string[]> {
+    const res = await axiosInstance.put(`/customers/${customerId}/tags`, { tags });
+    const result = res.data;
+    if (result?.success === false) throw new Error(result?.message || 'Failed to set tags');
+    return result?.data?.tags ?? result?.data ?? [];
   },
 
   /** Get all customers with filters */
