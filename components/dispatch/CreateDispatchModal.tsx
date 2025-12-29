@@ -281,7 +281,10 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
         // Update existing group
         const next = [...prev];
         const current = next[idx];
-        const currentCount = current.barcodes?.length ?? parseInt(current.quantity || '0') || 0;
+        // NOTE: Avoid mixing ?? with || (Next.js build rule). Compute safely in steps.
+        const qtyFromField = Number.parseInt(current.quantity || '0', 10);
+        const qtySafe = Number.isFinite(qtyFromField) ? qtyFromField : 0;
+        const currentCount = current.barcodes?.length ?? qtySafe;
         const nextCount = currentCount + 1;
 
         const maxAllowed = current.available_quantity || availableQty;
