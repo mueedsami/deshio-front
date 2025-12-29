@@ -1,5 +1,5 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { X, Plus, Trash2, RefreshCw, Scan, AlertTriangle, RotateCcw } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { X, Plus, Trash2, RefreshCw, Scan, RotateCcw, AlertTriangle } from 'lucide-react';
 import { Store } from '@/services/storeService';
 import batchService from '@/services/batchService';
 import barcodeService from '@/services/barcodeService';
@@ -10,8 +10,6 @@ interface DispatchItem {
   product_name: string;
   quantity: string;
   available_quantity: number;
-  /** Present only when items are added by barcode scanning */
-  barcodes?: string[];
 }
 
 interface CreateDispatchModalProps {
@@ -23,6 +21,16 @@ interface CreateDispatchModalProps {
   defaultSourceStoreId?: number;
 }
 
+type AddMode = 'batch' | 'barcode';
+
+type ScanEntry = {
+  barcode: string;
+  batch_id: string;
+  batch_number: string;
+  product_name: string;
+  scanned_at: string;
+};
+
 const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
   isOpen,
   onClose,
@@ -31,8 +39,6 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
   loading,
   defaultSourceStoreId,
 }) => {
-  type AddMode = 'batch' | 'barcode';
-
   const [formData, setFormData] = useState({
     source_store_id: '',
     destination_store_id: '',
@@ -44,24 +50,28 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
 
   const [items, setItems] = useState<DispatchItem[]>([]);
 
-  // Add-items mode (manual batch select vs barcode scan)
+  // Only for UI convenience while creating dispatch (does NOT replace send/receive scan flow).
+  type AddMode = 'batch' | 'barcode';
+  type ScanEntry = {
+    barcode: string;
+    batch_id: string;
+    batch_number: string;
+    product_name: string;
+    scanned_at: string;
+  };
+
   const [addMode, setAddMode] = useState<AddMode>('batch');
   const [scanInput, setScanInput] = useState('');
   const [scanError, setScanError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
+  const [scanHistory, setScanHistory] = useState<ScanEntry[]>([]);
+  const scanInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Keep a lightweight scan history for UX (removal + last scanned)
-  const [scanHistory, setScanHistory] = useState<
-    Array<{
-      barcode: string;
-      batch_id: string;
-      batch_number: string;
-      product_name: string;
-      scanned_at: string;
-    }>
-  >([]);
-
-  const scannedSet = useMemo(() => new Set(scanHistory.map((s) => s.barcode)), [scanHistory]);
+  const scannedSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of scanHistory) s.add(it.barcode);
+    return s;
+  }, [scanHistory]);
   const [currentItem, setCurrentItem] = useState({
     batch_id: '',
     quantity: '',
@@ -104,12 +114,12 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       setAvailableBatches([]);
       setBatchData(null);
       setCurrentItem({ batch_id: '', quantity: '' });
-      // source store cleared -> barcode flow must reset too
-      setScanInput('');
-      setScanError(null);
-      setScanHistory([]);
-      setItems([]);
     }
+
+    // barcode scan UI depends on source store
+    setScanInput('');
+    setScanError(null);
+    setScanHistory([]);
   }, [formData.source_store_id]);
 
   const fetchAvailableBatches = async () => {
@@ -222,8 +232,8 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       return;
     }
 
-    setScanning(true);
     setScanError(null);
+    setScanning(true);
 
     try {
       const res = await barcodeService.scanBarcode(value);
@@ -233,37 +243,37 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       }
 
       const data = res.data;
+      const sourceId = Number(formData.source_store_id);
+      const locationId = data?.current_location?.id;
 
-      const srcId = parseInt(formData.source_store_id);
-      const locId = data.current_location?.id;
-      if (!locId) {
-        setScanError('This barcode has no current location.');
-        return;
-      }
-      if (locId !== srcId) {
-        setScanError(`Barcode is not currently at the selected source store.`);
+      if (!locationId || locationId !== sourceId) {
+        setScanError('Barcode is not currently at the selected source store.');
         return;
       }
 
-      if (!data.current_batch?.id) {
+      if (!data?.current_batch?.id) {
         setScanError('This barcode is not linked to any active batch.');
         return;
       }
 
-      if (!data.is_available) {
-        setScanError('This barcode is not available for dispatch (inactive/reserved/sold).');
+      if (!data?.is_available) {
+        setScanError('This barcode is not available for dispatch.');
         return;
       }
 
       const batchId = String(data.current_batch.id);
       const batchNumber = data.current_batch.batch_number;
       const productName = data.product?.name || 'Unknown Product';
-      const availableQty = Number(data.quantity_available ?? data.current_batch.quantity_available ?? 0);
+
+      const availableQty = Number(
+        typeof data.quantity_available === 'number'
+          ? data.quantity_available
+          : data.current_batch.quantity_available ?? 0
+      );
 
       setItems((prev) => {
         const idx = prev.findIndex((it) => it.batch_id === batchId);
 
-        // Create new group
         if (idx === -1) {
           return [
             ...prev,
@@ -273,36 +283,25 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
               product_name: productName,
               quantity: '1',
               available_quantity: availableQty,
-              barcodes: [value],
             },
           ];
         }
 
-        // Update existing group
         const next = [...prev];
-        const current = next[idx];
-        // NOTE: Avoid mixing ?? with || (Next.js build rule). Compute safely in steps.
-        const qtyFromField = Number.parseInt(current.quantity || '0', 10);
-        const qtySafe = Number.isFinite(qtyFromField) ? qtyFromField : 0;
-        const currentCount = current.barcodes?.length ?? qtySafe;
-        const nextCount = currentCount + 1;
+        const existing = next[idx];
+        const existingQty = Number.parseInt(existing.quantity || '0', 10) || 0;
+        const nextQty = existingQty + 1;
 
-        const maxAllowed = current.available_quantity || availableQty;
-        if (maxAllowed > 0 && nextCount > maxAllowed) {
-          // Don't mutate state, but surface a helpful message
-          setScanError(`Batch limit reached. Only ${maxAllowed} active unit(s) available for this batch.`);
+        const maxAllowed = existing.available_quantity || availableQty;
+        if (maxAllowed > 0 && nextQty > maxAllowed) {
+          setScanError(`Batch limit reached. Only ${maxAllowed} active unit(s) available.`);
           return prev;
         }
 
         next[idx] = {
-          ...current,
-          // Keep the most conservative available quantity
-          available_quantity: Math.min(
-            current.available_quantity || maxAllowed,
-            availableQty || maxAllowed
-          ),
-          barcodes: [...(current.barcodes || []), value],
-          quantity: String(nextCount),
+          ...existing,
+          quantity: String(nextQty),
+          available_quantity: maxAllowed,
         };
         return next;
       });
@@ -319,8 +318,10 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       ]);
 
       setScanInput('');
-    } catch (e: any) {
-      setScanError(e?.response?.data?.message || e?.message || 'Failed to scan barcode');
+      // keep the input focused for hardware scanners
+      setTimeout(() => scanInputRef.current?.focus(), 0);
+    } catch (err: any) {
+      setScanError(err?.response?.data?.message || err?.message || 'Failed to scan barcode');
     } finally {
       setScanning(false);
     }
@@ -336,31 +337,29 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       if (idx === -1) return prev;
       const next = [...prev];
       const item = next[idx];
-      const barcodes = (item.barcodes || []).filter((b) => b !== last.barcode);
-      const nextCount = Math.max(0, barcodes.length);
-      if (nextCount === 0) {
+      const existingQty = Number.parseInt(item.quantity || '0', 10) || 0;
+      const nextQty = Math.max(0, existingQty - 1);
+      if (nextQty === 0) {
         next.splice(idx, 1);
-        return next;
+      } else {
+        next[idx] = { ...item, quantity: String(nextQty) };
       }
-      next[idx] = { ...item, barcodes, quantity: String(nextCount) };
       return next;
     });
   };
 
   const clearScans = () => {
+    // Reduce quantities only for items added via scans. Since we don't know which were manual,
+    // safest behavior: clear scan list only (does not auto-remove items).
     setScanHistory([]);
-    // Only clear items that were created by barcode mode
-    setItems((prev) => prev.filter((it) => !it.barcodes || it.barcodes.length === 0));
+    setScanError(null);
   };
 
   const removeItem = (index: number) => {
     const removed = items[index];
     setItems(items.filter((_, i) => i !== index));
-
-    // If this item was created by barcode scans, also purge scan history for those barcodes
-    if (removed?.barcodes?.length) {
-      const removeSet = new Set(removed.barcodes);
-      setScanHistory((prev) => prev.filter((s) => !removeSet.has(s.barcode)));
+    if (removed?.batch_id) {
+      setScanHistory((prev) => prev.filter((s) => s.batch_id !== removed.batch_id));
     }
   };
 
@@ -377,12 +376,6 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
     onSubmit({
       ...formData,
       items,
-      // Extra metadata for debugging / future enhancements (safe to ignore in parent)
-      __barcode_scan: {
-        mode: addMode,
-        scanned_count: scanHistory.length,
-        scanned_barcodes: scanHistory.map((s) => s.barcode),
-      },
     });
   };
 
@@ -520,7 +513,7 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
               )}
             </div>
 
-            {/* Add mode toggle */}
+            {/* Add mode toggle (manual batch vs barcode scan) */}
             <div className="flex items-center gap-2 mb-3">
               <button
                 type="button"
@@ -541,6 +534,7 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                 onClick={() => {
                   setAddMode('barcode');
                   setScanError(null);
+                  setTimeout(() => scanInputRef.current?.focus(), 0);
                 }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1 ${
                   addMode === 'barcode'
@@ -552,19 +546,19 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
               </button>
               {addMode === 'barcode' && (
                 <span className="text-xs text-gray-500 dark:text-gray-400">
-                  Each scan adds <b>1 unit</b> and auto-groups by batch.
+                  Each scan adds <b>1 unit</b> to the matching batch.
                 </span>
               )}
             </div>
 
-            {/* Barcode scan UI */}
             {addMode === 'barcode' && (
-              <div className="mb-4">
+              <div className="mb-3">
                 <div className="grid grid-cols-12 gap-2">
-                  <div className="col-span-8">
+                  <div className="col-span-7">
                     <div className="relative">
                       <Scan className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
+                        ref={scanInputRef}
                         type="text"
                         value={scanInput}
                         onChange={(e) => setScanInput(e.target.value)}
@@ -574,11 +568,7 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                             void handleBarcodeScan();
                           }
                         }}
-                        placeholder={
-                          formData.source_store_id
-                            ? 'Scan barcode (press Enter)…'
-                            : 'Select source store first'
-                        }
+                        placeholder={formData.source_store_id ? 'Scan barcode and press Enter…' : 'Select source store first'}
                         disabled={!formData.source_store_id || scanning}
                         className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm disabled:bg-gray-100 dark:disabled:bg-gray-600"
                       />
@@ -589,21 +579,30 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                       type="button"
                       onClick={handleBarcodeScan}
                       disabled={!formData.source_store_id || scanning || !scanInput.trim()}
-                      className="w-full px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center justify-center gap-2"
+                      className="w-full px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center justify-center"
                       title="Scan & add"
                     >
-                      {scanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Scan className="w-4 h-4" />}
+                      <Scan className="w-4 h-4" />
                     </button>
                   </div>
-                  <div className="col-span-2 flex gap-2">
+                  <div className="col-span-3 flex gap-2">
                     <button
                       type="button"
                       onClick={removeLastScan}
                       disabled={scanHistory.length === 0 || scanning}
-                      className="w-full px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 rounded-lg text-sm flex items-center justify-center"
+                      className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 rounded-lg text-sm flex items-center justify-center"
                       title="Undo last scan"
                     >
                       <RotateCcw className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearScans}
+                      disabled={scanHistory.length === 0 || scanning}
+                      className="flex-1 px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50 text-gray-800 dark:text-gray-200 rounded-lg text-xs"
+                      title="Clear scan list"
+                    >
+                      Clear
                     </button>
                   </div>
                 </div>
@@ -616,35 +615,29 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                 )}
 
                 {scanHistory.length > 0 && (
-                  <div className="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                  <div className="mt-2 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                     <div className="flex items-center justify-between px-3 py-2 bg-gray-50 dark:bg-gray-700">
                       <div className="text-xs font-semibold text-gray-700 dark:text-gray-200">
                         Scanned ({scanHistory.length})
                       </div>
-                      <button
-                        type="button"
-                        onClick={clearScans}
-                        className="text-xs text-red-600 dark:text-red-400 hover:underline"
-                      >
-                        Clear scan list
-                      </button>
+                      <div className="text-[11px] text-gray-500 dark:text-gray-400">
+                        Latest first
+                      </div>
                     </div>
-                    <div className="max-h-32 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
-                      {scanHistory.slice(0, 12).map((s, idx) => (
-                        <div key={s.barcode} className="px-3 py-2 flex items-center justify-between">
-                          <div className="min-w-0">
-                            <div className="text-xs font-mono text-gray-900 dark:text-white truncate">
-                              {idx + 1}. {s.barcode}
-                            </div>
-                            <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                              {s.product_name} • {s.batch_number}
-                            </div>
+                    <div className="max-h-28 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
+                      {scanHistory.slice(0, 10).map((s, idx) => (
+                        <div key={s.barcode} className="px-3 py-2">
+                          <div className="text-xs font-mono text-gray-900 dark:text-white truncate">
+                            {idx + 1}. {s.barcode}
+                          </div>
+                          <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                            {s.product_name} • {s.batch_number}
                           </div>
                         </div>
                       ))}
-                      {scanHistory.length > 12 && (
+                      {scanHistory.length > 10 && (
                         <div className="px-3 py-2 text-[11px] text-gray-500 dark:text-gray-400">
-                          +{scanHistory.length - 12} more…
+                          +{scanHistory.length - 10} more…
                         </div>
                       )}
                     </div>
@@ -653,7 +646,6 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
               </div>
             )}
 
-            {/* Manual batch select UI (existing) */}
             <div className={`grid grid-cols-12 gap-2 mb-3 ${addMode === 'barcode' ? 'opacity-50 pointer-events-none' : ''}`}>
               <div className="col-span-6">
                 <select

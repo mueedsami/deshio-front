@@ -21,9 +21,7 @@ interface Toast {
 export default function DispatchManagementPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  // Current user's store id is stored by authService in localStorage.
-  const [currentStoreId, setCurrentStoreId] = useState<number | null>(null);
-  const [userRole, setUserRole] = useState<string>('');
+  const [store, setStore] = useState<Store | null>(null);
   const [stores, setStores] = useState<Store[]>([]);
   const [dispatches, setDispatches] = useState<ProductDispatch[]>([]);
   const [statistics, setStatistics] = useState<DispatchStatistics | null>(null);
@@ -33,8 +31,6 @@ export default function DispatchManagementPage() {
   const [selectedDispatch, setSelectedDispatch] = useState<ProductDispatch | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showBarcodeScanModal, setShowBarcodeScanModal] = useState(false);
-
-  const [scanMode, setScanMode] = useState<'send' | 'receive'>('send');
   
   const [filterStatus, setFilterStatus] = useState('');
   const [filterSourceStore, setFilterSourceStore] = useState('');
@@ -55,15 +51,6 @@ export default function DispatchManagementPage() {
   };
 
   useEffect(() => {
-    // Read store id once (client-only)
-    const storeId = typeof window !== 'undefined' ? localStorage.getItem('storeId') : null;
-    const role = typeof window !== 'undefined' ? localStorage.getItem('userRole') : null;
-    if (role) setUserRole(role);
-    if (storeId) {
-      const parsed = parseInt(storeId, 10);
-      if (!Number.isNaN(parsed)) setCurrentStoreId(parsed);
-    }
-
     fetchStores();
     fetchDispatches();
     fetchStatistics();
@@ -183,12 +170,21 @@ export default function DispatchManagementPage() {
   const handleMarkDelivered = async (id: number) => {
     try {
       setLoading(true);
-
-      // In barcode-based dispatch flow, backend will validate:
-      // - all items scanned at source
-      // - all scanned barcodes received at destination
-      // and then process inventory movements accordingly.
-      await dispatchService.markDelivered(id);
+      
+      // Get dispatch details to construct delivery data
+      const dispatchResponse = await dispatchService.getDispatch(id);
+      const dispatch = dispatchResponse.data;
+      
+      const deliveryData = {
+        items: dispatch.items.map((item: any) => ({
+          item_id: item.id,
+          received_quantity: item.quantity,
+          damaged_quantity: 0,
+          missing_quantity: 0,
+        })),
+      };
+      
+      await dispatchService.markDelivered(id, deliveryData);
       showToast('Dispatch marked as delivered successfully! 🎉', 'success');
       fetchDispatches();
       fetchStatistics();
@@ -233,17 +229,7 @@ export default function DispatchManagementPage() {
     try {
       // Fetch full dispatch details including items
       const response = await dispatchService.getDispatch(dispatch.id);
-      const fullDispatch = response.data as ProductDispatch;
-      setSelectedDispatch(fullDispatch);
-
-      // Decide whether the current user should "send" or "receive" scan
-      if (currentStoreId && fullDispatch) {
-        if (currentStoreId === fullDispatch.source_store.id) {
-          setScanMode('send');
-        } else if (currentStoreId === fullDispatch.destination_store.id) {
-          setScanMode('receive');
-        }
-      }
+      setSelectedDispatch(response.data);
       setShowBarcodeScanModal(true);
     } catch (error) {
       console.error('Error fetching dispatch details:', error);
@@ -257,9 +243,16 @@ export default function DispatchManagementPage() {
     fetchStatistics();
   };
 
-  const handleMarkDeliveredFromScan = async (dispatchId: number) => {
-    await handleMarkDelivered(dispatchId);
+  const handleMarkDeliveredFromScan = async () => {
+    if (!selectedDispatch) return;
+    
+    // Close the scan modal first
     setShowBarcodeScanModal(false);
+    
+    // Then mark as delivered
+    await handleMarkDelivered(selectedDispatch.id);
+    
+    // Clear selected dispatch
     setSelectedDispatch(null);
   };
 
@@ -360,7 +353,7 @@ export default function DispatchManagementPage() {
               onMarkDelivered={handleMarkDelivered}
               onCancel={handleCancel}
               onScanBarcodes={handleScanBarcodes}
-              currentStoreId={currentStoreId ?? undefined}
+              currentStoreId={store?.id}
             />
           </main>
         </div>
@@ -373,7 +366,7 @@ export default function DispatchManagementPage() {
         onSubmit={handleCreateDispatch}
         stores={stores}
         loading={loading}
-        defaultSourceStoreId={undefined}
+        defaultSourceStoreId={store?.id}
       />
 
       {/* Barcode Scan Modal */}
@@ -382,7 +375,6 @@ export default function DispatchManagementPage() {
           isOpen={showBarcodeScanModal}
           onClose={() => setShowBarcodeScanModal(false)}
           dispatch={selectedDispatch}
-          mode={scanMode}
           onComplete={handleBarcodeScanComplete}
           onMarkDelivered={handleMarkDeliveredFromScan}
         />
