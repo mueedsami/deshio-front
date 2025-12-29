@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   Store,
+  BarChart3,
   FolderTree,
   Package,
   ClipboardList,
@@ -51,6 +52,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
 
   const menuItems: MenuItem[] = [
     { icon: LayoutDashboard, label: 'Dashboard', href: '/dashboard' },
+    { icon: BarChart3, label: 'Stores Summary', href: '/dashboard/stores-summary' },
     { icon: Store, label: 'Store', href: '/store' },
     { icon: FolderTree, label: 'Category', href: '/category' },
     { icon: Truck,
@@ -78,6 +80,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'Manage Stock', href: '/inventory/manage_stock' },
         { label: 'View Inventory', href: '/inventory/view' },
         { label: 'Price Adjustment', href: '/inventory/batch-price-update' },
+        { label: 'Dispatches', href: '/inventory/outlet-stock' },
         { label: 'Reports', href: '/inventory/reports' },
       ],
     },

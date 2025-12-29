@@ -27,6 +27,16 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
 }) => {
   const getStatusBadge = (status: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
+      draft: {
+        bg: 'bg-gray-100 dark:bg-gray-700',
+        text: 'text-gray-800 dark:text-gray-300',
+        label: 'Draft',
+      },
+      pending_approval: {
+        bg: 'bg-yellow-100 dark:bg-yellow-900/30',
+        text: 'text-yellow-800 dark:text-yellow-300',
+        label: 'Pending Approval',
+      },
       pending: {
         bg: 'bg-yellow-100 dark:bg-yellow-900/30',
         text: 'text-yellow-800 dark:text-yellow-300',
@@ -207,7 +217,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                         </button>
 
                         {/* SOURCE STORE ACTIONS */}
-                        {atSource && dispatch.status === 'pending' && !dispatch.approved_by && (
+                        {atSource && ['pending', 'pending_approval'].includes(dispatch.status) && !dispatch.approved_by && (
                           <>
                             <button
                               onClick={() => onApprove(dispatch.id)}
@@ -226,7 +236,10 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                           </>
                         )}
 
-                        {atSource && dispatch.status === 'pending' && dispatch.approved_by && (
+                        {atSource && (
+                          dispatch.status === 'approved' ||
+                          (['pending', 'pending_approval'].includes(dispatch.status) && !!dispatch.approved_by)
+                        ) && (
                           <>
                             <button
                               onClick={() => onMarkDispatched(dispatch.id)}
@@ -246,21 +259,28 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                           </>
                         )}
 
+                        {/* BARCODE SCANNING IN TRANSIT */}
+                        {dispatch.status === 'in_transit' && onScanBarcodes && atSource && (
+                          <button
+                            onClick={() => onScanBarcodes(dispatch)}
+                            className="px-3 py-1 bg-indigo-100 dark:bg-indigo-900/30 hover:bg-indigo-200 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
+                            title="Scan barcodes at source (sending)"
+                          >
+                            <Scan className="w-3 h-3" />
+                            Scan to Send
+                          </button>
+                        )}
+
                         {/* DESTINATION STORE ACTIONS */}
-                        {atDestination && dispatch.status === 'in_transit' && (
-                          <>
-                            {/* Optional Barcode Scanning for Verification */}
-                            {onScanBarcodes && (
-                              <button
-                                onClick={() => onScanBarcodes(dispatch)}
-                                className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 hover:bg-purple-200 dark:hover:bg-purple-900/40 text-purple-700 dark:text-purple-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
-                                title="Optional: Scan Barcodes for Verification"
-                              >
-                                <Scan className="w-3 h-3" />
-                                Scan Barcodes
-                              </button>
-                            )}
-                          </>
+                        {atDestination && dispatch.status === 'in_transit' && onScanBarcodes && (
+                          <button
+                            onClick={() => onScanBarcodes(dispatch)}
+                            className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
+                            title="Scan barcodes at destination (receiving)"
+                          >
+                            <Scan className="w-3 h-3" />
+                            Receive Items
+                          </button>
                         )}
                       </div>
                     </td>

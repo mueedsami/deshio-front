@@ -7,7 +7,15 @@ import axiosInstance from '@/lib/axios';
 export interface ProductDispatch {
   id: number;
   dispatch_number: string;
-  status: 'pending' | 'approved' | 'in_transit' | 'delivered' | 'cancelled';
+  // Backend may use older (pending) or newer (draft/pending_approval) flows.
+  status:
+    | 'draft'
+    | 'pending'
+    | 'pending_approval'
+    | 'approved'
+    | 'in_transit'
+    | 'delivered'
+    | 'cancelled';
   delivery_status: string;
   source_store: {
     id: number;
@@ -153,6 +161,26 @@ export interface ScannedBarcodesResponse {
   scanned_barcodes: ScannedBarcode[];
 }
 
+export interface ReceivedBarcode {
+  id: number;
+  barcode: string;
+  received_at: string;
+  received_by_id?: number;
+  received_by?: string;
+  current_store?: {
+    id: number;
+    name: string;
+  };
+}
+
+export interface ReceivedBarcodesResponse {
+  dispatch_item_id: number;
+  total_sent: number;
+  received_count: number;
+  pending_count: number;
+  received_barcodes: ReceivedBarcode[];
+}
+
 // ============================================================================
 // DISPATCH SERVICE
 // ============================================================================
@@ -226,10 +254,10 @@ class DispatchService {
   /**
    * Mark dispatch as delivered
    */
-  async markDelivered(id: number, data: DeliverDispatchData) {
+  async markDelivered(id: number, data?: DeliverDispatchData | Record<string, any>) {
     const response = await axiosInstance.patch(
       `${this.basePath}/${id}/deliver`,
-      data
+      data || {}
     );
     return response.data;
   }
@@ -296,11 +324,32 @@ class DispatchService {
   }
 
   /**
+   * Receive barcode at destination store for dispatch item
+   */
+  async receiveBarcode(dispatchId: number, itemId: number, barcode: string) {
+    const response = await axiosInstance.post(
+      `${this.basePath}/${dispatchId}/items/${itemId}/receive-barcode`,
+      { barcode }
+    );
+    return response.data;
+  }
+
+  /**
    * Get scanned barcodes for dispatch item
    */
   async getScannedBarcodes(dispatchId: number, itemId: number) {
     const response = await axiosInstance.get(
       `${this.basePath}/${dispatchId}/items/${itemId}/scanned-barcodes`
+    );
+    return response.data;
+  }
+
+  /**
+   * Get received barcodes (destination progress) for dispatch item
+   */
+  async getReceivedBarcodes(dispatchId: number, itemId: number) {
+    const response = await axiosInstance.get(
+      `${this.basePath}/${dispatchId}/items/${itemId}/received-barcodes`
     );
     return response.data;
   }
