@@ -1119,11 +1119,6 @@ export default function CheckoutPage() {
                   <span>৳{summary.shipping_charge.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
                 </div>
 
-                <div className="flex justify-between text-gray-700">
-                  <span>Tax (5%)</span>
-                  <span>৳{summary.tax_amount.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
-                </div>
-
                 {summary.discount_amount > 0 && (
                   <div className="flex justify-between text-green-600">
                     <span>Discount</span>

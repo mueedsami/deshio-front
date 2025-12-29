@@ -107,6 +107,9 @@ const PaymentStatusBadge = ({ status }: { status: string }) => {
 };
 
 export default function PurchaseOrdersPage() {
+  // VAT is inclusive in pricing; keep values for future use, but hide from UI.
+  const VAT_UI_ENABLED = false;
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -754,12 +757,14 @@ export default function PurchaseOrdersPage() {
                     ৳{formatCurrency(selectedPO.subtotal_amount)}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Tax</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
-                    ৳{formatCurrency(selectedPO.tax_amount)}
-                  </span>
-                </div>
+                {VAT_UI_ENABLED && (
+                  <div className="flex justify-between">
+                    <span className="text-gray-600 dark:text-gray-400">Tax</span>
+                    <span className="font-medium text-gray-900 dark:text-gray-100">
+                      ৳{formatCurrency(selectedPO.tax_amount)}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-gray-600 dark:text-gray-400">Discount</span>
                   <span className="font-medium text-red-600 dark:text-red-400">
@@ -807,16 +812,18 @@ export default function PurchaseOrdersPage() {
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Amount</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editForm.tax_amount}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, tax_amount: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                </div>
+                {VAT_UI_ENABLED && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editForm.tax_amount}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, tax_amount: e.target.value }))}
+                      className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discount Amount</label>
                   <input

@@ -8,6 +8,9 @@ import axios from '@/lib/axios';
 import defectIntegrationService from '@/services/defectIntegrationService';
 import Toast from '@/components/Toast';
 
+// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
+const VAT_UI_ENABLED = false;
+
 interface PaymentMethod {
   id: number;
   code: string;
@@ -44,7 +47,7 @@ export default function AmountDetailsPage() {
   const [orderData, setOrderData] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const [vatRate, setVatRate] = useState('5');
+  const [vatRate, setVatRate] = useState('0');
   const [transportCost, setTransportCost] = useState('0');
 
   // Advanced payment options
@@ -123,7 +126,9 @@ export default function AmountDetailsPage() {
     return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
 
-  const vat = useMemo(() => (subtotal * parseNumber(vatRate)) / 100, [subtotal, vatRate]);
+  const effectiveVatRate = useMemo(() => (VAT_UI_ENABLED ? parseNumber(vatRate) : 0), [vatRate]);
+
+  const vat = useMemo(() => (subtotal * effectiveVatRate) / 100, [subtotal, effectiveVatRate]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
   const total = useMemo(() => subtotal + vat + transport, [subtotal, vat, transport]);
 
@@ -481,7 +486,6 @@ export default function AmountDetailsPage() {
                         );
                       })}
                     </div>
-                  </div>
 
                   {/* Totals */}
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
@@ -493,10 +497,12 @@ export default function AmountDetailsPage() {
                       <span className="text-gray-700 dark:text-gray-300">Discount</span>
                       <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">VAT ({vatRate}%)</span>
-                      <span className="text-gray-900 dark:text-white">৳{vat.toFixed(2)}</span>
-                    </div>
+                    {VAT_UI_ENABLED && (
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-700 dark:text-gray-300">VAT ({vatRate}%)</span>
+                        <span className="text-gray-900 dark:text-white">৳{vat.toFixed(2)}</span>
+                      </div>
+                    )}
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Transport</span>
                       <span className="text-gray-900 dark:text-white">৳{transport.toFixed(2)}</span>
@@ -512,22 +518,23 @@ export default function AmountDetailsPage() {
                       </div>
                     )}
                   </div>
-                </div>
 
                 {/* Right: Amount & Payment */}
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-6">
                   <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">Charges & Payments</h2>
 
                   {/* VAT + Transport */}
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">VAT %</label>
-                      <input
-                        value={vatRate}
-                        onChange={(e) => setVatRate(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      />
-                    </div>
+                  <div className={`grid gap-3 mb-4 ${VAT_UI_ENABLED ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    {VAT_UI_ENABLED && (
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">VAT %</label>
+                        <input
+                          value={vatRate}
+                          onChange={(e) => setVatRate(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                        />
+                      </div>
+                    )}
                     <div>
                       <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transport (৳)</label>
                       <input
@@ -536,6 +543,7 @@ export default function AmountDetailsPage() {
                         className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       />
                     </div>
+
                   </div>
 
                   {/* Payment Option */}
@@ -585,7 +593,6 @@ export default function AmountDetailsPage() {
                         </div>
                       </label>
                     </div>
-                  </div>
 
                   {/* Payment Details */}
                   <div className="space-y-3">
@@ -693,7 +700,6 @@ export default function AmountDetailsPage() {
                           </div>
                         )}
                       </div>
-                    </div>
 
                     <button
                       onClick={handlePlaceOrder}
@@ -703,8 +709,6 @@ export default function AmountDetailsPage() {
                       {isProcessing ? 'Processing...' : 'Place Order'}
                     </button>
                   </div>
-                </div>
-              </div>
 
               {showToast && (
                 <Toast
@@ -716,7 +720,5 @@ export default function AmountDetailsPage() {
             </div>
           </main>
         </div>
-      </div>
-    </div>
   );
 }

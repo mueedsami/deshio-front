@@ -82,6 +82,9 @@ interface Store {
 }
 
 export default function PurchaseHistoryPage() {
+  // VAT is inclusive in pricing; keep functionality but hide VAT from UI.
+  const VAT_UI_ENABLED = false;
+
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -895,7 +898,9 @@ export default function PurchaseHistoryPage() {
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Qty</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Price</th>
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Discount</th>
-                                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Tax</th>
+                                        {VAT_UI_ENABLED && (
+                                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Tax</th>
+                                        )}
                                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-700 dark:text-gray-300">Amount</th>
                                       </tr>
                                     </thead>
@@ -917,7 +922,9 @@ export default function PurchaseHistoryPage() {
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">{item.quantity}</td>
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.unit_price ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.discount_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
-                                          <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.tax_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
+                                          {VAT_UI_ENABLED && (
+                                            <td className="px-3 py-2 text-gray-900 dark:text-white">৳{Number(String(item.tax_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</td>
+                                          )}
                                           <td className="px-3 py-2 text-gray-900 dark:text-white font-medium">
                                             ৳{Number(String(item.total_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}
                                           </td>
@@ -941,10 +948,12 @@ export default function PurchaseHistoryPage() {
                                     <span className="text-gray-600 dark:text-gray-400">Discount</span>
                                     <span className="text-gray-900 dark:text-white">৳{Number(String(order.discount_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
                                   </div>
-                                  <div className="flex justify-between">
-                                    <span className="text-gray-600 dark:text-gray-400">Tax/VAT</span>
-                                    <span className="text-gray-900 dark:text-white">৳{Number(String(order.tax_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
-                                  </div>
+                                  {VAT_UI_ENABLED && (
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-600 dark:text-gray-400">Tax/VAT</span>
+                                      <span className="text-gray-900 dark:text-white">৳{Number(String(order.tax_amount ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>
+                                    </div>
+                                  )}
                                   <div className="flex justify-between">
                                     <span className="text-gray-600 dark:text-gray-400">Shipping</span>
                                     <span className="text-gray-900 dark:text-white">৳{Number(String(order.shipping_cost ?? "0").replace(/[^0-9.-]/g, "")).toFixed(2)}</span>

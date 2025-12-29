@@ -62,6 +62,9 @@ const Alert = ({ type, message }: { type: 'success' | 'error'; message: string }
 );
 
 export default function VendorPaymentPage() {
+  // VAT is inclusive in pricing; keep values for future use, but hide from UI.
+  const VAT_UI_ENABLED = false;
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1118,8 +1121,9 @@ export default function VendorPaymentPage() {
             ))}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div>
+          <div className={`grid ${VAT_UI_ENABLED ? 'grid-cols-3' : 'grid-cols-2'} gap-4`}>
+            {VAT_UI_ENABLED && (
+              <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Tax Amount (৳)
               </label>
@@ -1132,6 +1136,7 @@ export default function VendorPaymentPage() {
                 placeholder="0.00"
               />
             </div>
+            )}
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

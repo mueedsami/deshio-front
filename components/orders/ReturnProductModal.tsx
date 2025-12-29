@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { X, RotateCcw, Calculator, ChevronDown } from 'lucide-react';
 
+
+// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
+const VAT_UI_ENABLED = false;
+
 interface ReturnProductModalProps {
   order: any;
   onClose: () => void;
@@ -73,7 +77,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       return sum + product.amount;
     }, 0);
 
-    const vatRate = order.amounts.vatRate || 0;
+    const vatRate = VAT_UI_ENABLED ? (order.amounts.vatRate || 0) : 0;
     const vatAmount = Math.round(newSubtotal * (vatRate / 100));
     const transportCost = order.amounts.transportCost || 0;
     const totalNewAmount = newSubtotal + vatAmount + transportCost;
@@ -335,10 +339,17 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                       <span className="font-semibold text-gray-900 dark:text-white">৳{totals.newSubtotal.toLocaleString()}</span>
                     </div>
                     
-                    <div className="flex justify-between text-sm mb-2">
-                      <span className="text-gray-600 dark:text-gray-400">VAT ({totals.vatRate}%):</span>
-                      <span className="font-semibold text-gray-900 dark:text-white">৳{totals.vatAmount.toLocaleString()}</span>
-                    </div>
+                    {VAT_UI_ENABLED && (
+                    
+                      <div className="flex justify-between text-sm mb-2">
+                    
+                        <span className="text-gray-600 dark:text-gray-400">VAT ({totals.vatRate}%):</span>
+                    
+                        <span className="font-semibold text-gray-900 dark:text-white">৳{totals.vatAmount.toLocaleString()}</span>
+                    
+                      </div>
+                    
+                    )}
                     
                     <div className="flex justify-between text-sm mb-2">
                       <span className="text-gray-600 dark:text-gray-400">Transport:</span>
