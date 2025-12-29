@@ -208,8 +208,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const total =
     parseMoney(order?.amounts?.total) ||
     parseMoney(order?.total_amount) ||
-    // VAT is inclusive in pricing for this system; we don't add it on top in UI totals.
-    (subtotal - discount + shipping);
+    (subtotal - discount + tax + shipping);
 
   const paid =
     parseMoney(order?.payments?.paid) ||

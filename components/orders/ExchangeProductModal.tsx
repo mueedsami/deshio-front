@@ -1,10 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X, Search, ArrowRightLeft, Calculator, ChevronDown } from 'lucide-react';
 
-
-// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
-const VAT_UI_ENABLED = false;
-
 interface ExchangeProductModalProps {
   order: any;
   onClose: () => void;
@@ -288,7 +284,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     }, 0);
 
     const newSubtotal = replacementProducts.reduce((sum, p) => sum + p.amount, 0);
-    const vatRate = VAT_UI_ENABLED ? (order.amounts.vatRate || 0) : 0;
+    const vatRate = order.amounts.vatRate || 0;
     const vatAmount = Math.round(newSubtotal * (vatRate / 100));
     const totalNewAmount = newSubtotal + vatAmount;
     const difference = totalNewAmount - originalAmount;

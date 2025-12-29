@@ -1,8 +1,7 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import BatchForm from '@/components/BatchForm';
@@ -22,7 +21,6 @@ export default function BatchPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [stores, setStores] = useState<Store[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
-  const [batchSearchQuery, setBatchSearchQuery] = useState('');
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductName, setSelectedProductName] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
@@ -49,21 +47,6 @@ export default function BatchPage() {
   useEffect(() => {
     loadInitialData();
   }, []);
-
-  const filteredBatches = useMemo(() => {
-    const q = batchSearchQuery.trim().toLowerCase();
-    if (!q) return batches;
-    return batches.filter((b) => {
-      const productName = String(b.product?.name || '').toLowerCase();
-      const productSku = String((b as any).product?.sku || '').toLowerCase();
-      const batchNo = String(b.batch_number || '').toLowerCase();
-      return (
-        productName.includes(q) ||
-        productSku.includes(q) ||
-        batchNo.includes(q)
-      );
-    });
-  }, [batches, batchSearchQuery]);
 
   const loadInitialData = async () => {
     try {
@@ -267,49 +250,28 @@ export default function BatchPage() {
               </div>
             )}
 
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex items-end gap-3">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Recent Batches
-                </h2>
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {filteredBatches.length} batch{filteredBatches.length !== 1 ? 'es' : ''}
-                  {batchSearchQuery.trim() ? (
-                    <span className="ml-1">(filtered)</span>
-                  ) : null}
-                </span>
-              </div>
-
-              {/* Search (Product-wise / Batch-wise) */}
-              <div className="w-full md:w-[420px]">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    value={batchSearchQuery}
-                    onChange={(e) => setBatchSearchQuery(e.target.value)}
-                    placeholder="Search by product name, SKU, or batch number..."
-                    className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-              </div>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Recent Batches
+              </h2>
+              <span className="text-sm text-gray-500 dark:text-gray-400">
+                {batches.length} batch{batches.length !== 1 ? 'es' : ''}
+              </span>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredBatches.length === 0 && !loading ? (
+              {batches.length === 0 && !loading ? (
                 <div className="col-span-3 text-center py-12 bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
                   <svg className="w-16 h-16 mx-auto text-gray-400 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
-                  <p className="text-gray-500 dark:text-gray-400 font-medium">
-                    {batchSearchQuery.trim() ? 'No batches match your search' : 'No batches created yet'}
-                  </p>
+                  <p className="text-gray-500 dark:text-gray-400 font-medium">No batches created yet</p>
                   <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-                    {batchSearchQuery.trim() ? 'Try a different keyword (product name / SKU / batch number).' : 'Create your first batch to get started'}
+                    Create your first batch to get started
                   </p>
                 </div>
               ) : (
-                filteredBatches.map(batch => (
+                batches.map(batch => (
                   <BatchCard 
                     key={batch.id} 
                     batch={batch}

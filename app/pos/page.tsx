@@ -1,6 +1,5 @@
 'use client';
 
-
 import { useState, useEffect } from 'react';
 import {
   ChevronDown,
@@ -33,9 +32,6 @@ import InputModeSelector from '@/components/pos/InputModeSelector';
 
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
-
-// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
-const VAT_UI_ENABLED = false;
 
 interface Store {
   id: number;
@@ -167,7 +163,7 @@ export default function POSPage() {
   }, [customerLookup.customer, autoCustomerId]);
 
   // Payment
-  const [vatRate, setVatRate] = useState(0);
+  const [vatRate, setVatRate] = useState(5);
   const [transportCost, setTransportCost] = useState(0);
   const [cashPaid, setCashPaid] = useState(0);
   const [cardPaid, setCardPaid] = useState(0);
@@ -458,8 +454,7 @@ export default function POSPage() {
 
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
-  const effectiveVatRate = VAT_UI_ENABLED ? vatRate : 0;
-  const vat = (subtotal * effectiveVatRate) / 100;
+  const vat = (subtotal * vatRate) / 100;
   const total = subtotal + vat + transportCost;
   const totalPaid = cashPaid + cardPaid + bkashPaid + nagadPaid;
 
@@ -518,7 +513,7 @@ export default function POSPage() {
       }
 
       // ✅ FIXED: Calculate tax amount for each item based on VAT rate and proportional distribution
-      const vatAmount = (subtotal * effectiveVatRate) / 100;
+      const vatAmount = (subtotal * vatRate) / 100;
 
       // Distribute VAT proportionally based on each item's share of subtotal
       const itemsWithTax = cart.map((item) => {
@@ -1458,7 +1453,6 @@ export default function POSPage() {
                       </span>
                     </div>
 
-                    {VAT_UI_ENABLED && (
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
@@ -1483,8 +1477,6 @@ export default function POSPage() {
                         />
                       </div>
                     </div>
-                    )}
-
 
                     <div>
                       <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">

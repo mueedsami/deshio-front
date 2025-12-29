@@ -6,9 +6,6 @@ export async function POST(request: NextRequest) {
   try {
     const order = await request.json();
 
-    // VAT is inclusive in pricing; keep fields for future use but hide from receipt UI.
-    const VAT_UI_ENABLED = false;
-
     // Create PDF
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -112,35 +109,26 @@ export async function POST(request: NextRequest) {
 
     // Calculations
     const calcStartX = pageWidth - 90;
-
-    const subtotalVal = Number(order.amounts?.subtotal ?? order.subtotal ?? 0);
-    const discountVal = Number(order.amounts?.totalDiscount ?? 0);
-    const transportVal = Number(order.amounts?.transportCost ?? 0);
-    const vatVal = Number(order.amounts?.vat ?? 0);
-    const totalVal = order.amounts
-      ? subtotalVal - discountVal + transportVal + (VAT_UI_ENABLED ? vatVal : 0)
-      : subtotalVal;
     
     addText('Subtotal', calcStartX, yPos, { fontSize: 9 });
-    addText(`৳${subtotalVal.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
+    addText(`৳${(order.amounts?.subtotal || order.subtotal).toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
     yPos += 6;
 
-    if (order.amounts && discountVal > 0) {
+    if (order.amounts && order.amounts.totalDiscount > 0) {
       addText('Discount', calcStartX, yPos, { fontSize: 9 });
-      addText(`-৳${discountVal.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
+      addText(`-৳${order.amounts.totalDiscount.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
       yPos += 6;
     }
 
-    if (VAT_UI_ENABLED && order.amounts) {
-      const rate = Number(order.amounts?.vatRate ?? 0);
-      addText(`VAT (${rate}%)`, calcStartX, yPos, { fontSize: 9 });
-      addText(`৳${vatVal.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
+    if (order.amounts) {
+      addText(`VAT (${order.amounts.vatRate}%)`, calcStartX, yPos, { fontSize: 9 });
+      addText(`৳${order.amounts.vat.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
       yPos += 6;
     }
 
-    if (order.amounts && transportVal > 0) {
+    if (order.amounts && order.amounts.transportCost > 0) {
       addText('Transport Cost', calcStartX, yPos, { fontSize: 9 });
-      addText(`৳${transportVal.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
+      addText(`৳${order.amounts.transportCost.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 9, align: 'right' });
       yPos += 6;
     }
 
@@ -150,7 +138,7 @@ export async function POST(request: NextRequest) {
     yPos += 7;
 
     addText('Total Amount', calcStartX, yPos, { fontSize: 11, fontStyle: 'bold' });
-    addText(`৳${totalVal.toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 11, fontStyle: 'bold', align: 'right' });
+    addText(`৳${(order.amounts?.total || order.subtotal).toLocaleString()}`, pageWidth - 20, yPos, { fontSize: 11, fontStyle: 'bold', align: 'right' });
     yPos += 10;
 
     // Paid amount (gray background simulation)

@@ -6,10 +6,6 @@ import { Order } from '@/types/order';
 import { checkQZStatus, printReceipt, getPrinters } from '@/lib/qz-tray';
 import shipmentService from '@/services/shipmentService';
 
-
-// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
-const VAT_UI_ENABLED = false;
-
 interface OrderDetailsModalProps {
   order: Order;
   onClose: () => void;
@@ -469,7 +465,7 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                       <span className="font-medium text-green-600 dark:text-green-400">-৳{order.amounts.totalDiscount.toLocaleString()}</span>
                     </div>
                   )}
-                  {VAT_UI_ENABLED && order.amounts.vat > 0 && (
+                  {order.amounts.vat > 0 && (
                     <div className="flex justify-between items-center text-sm">
                       <span className="text-gray-600 dark:text-gray-400">VAT ({order.amounts.vatRate}%)</span>
                       <span className="font-medium text-gray-900 dark:text-white">৳{order.amounts.vat.toLocaleString()}</span>

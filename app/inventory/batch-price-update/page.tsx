@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Loader2, Save, CheckCircle2, AlertCircle, Pencil, X, Check } from 'lucide-react';
+import { Search, Loader2, Save, CheckCircle2, AlertCircle } from 'lucide-react';
 
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -36,11 +36,6 @@ export default function BatchPriceUpdatePage() {
 
   // Batches
   const [batches, setBatches] = useState<Batch[]>([]);
-
-  // Per-batch cost price editing
-  const [costEditBatchId, setCostEditBatchId] = useState<number | null>(null);
-  const [costEditValue, setCostEditValue] = useState('');
-  const [costSavingBatchId, setCostSavingBatchId] = useState<number | null>(null);
   const [isLoadingBatches, setIsLoadingBatches] = useState(false);
 
   // Update price
@@ -133,42 +128,6 @@ export default function BatchPriceUpdatePage() {
     load();
   }, [selectedProduct?.id]);
 
-  const startCostEdit = (batch: Batch) => {
-    setError(null);
-    setSuccessMsg(null);
-    setCostEditBatchId(batch.id);
-    setCostEditValue(String(batch.cost_price ?? ''));
-  };
-
-  const cancelCostEdit = () => {
-    setCostEditBatchId(null);
-    setCostEditValue('');
-    setCostSavingBatchId(null);
-  };
-
-  const saveCostPrice = async (batch: Batch) => {
-    const costNum = Number(costEditValue);
-    if (!costEditValue || Number.isNaN(costNum) || costNum < 0) {
-      setError('Enter a valid cost price (0 or greater).');
-      return;
-    }
-
-    setError(null);
-    setSuccessMsg(null);
-    setCostSavingBatchId(batch.id);
-
-    try {
-      await batchService.updateBatch(batch.id, { cost_price: costNum });
-      setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, cost_price: costNum } : b)));
-      setSuccessMsg(`Cost price updated for batch ${batch.batch_number}.`);
-      cancelCostEdit();
-    } catch (err: any) {
-      console.error(err);
-      setError(err?.response?.data?.message || 'Failed to update cost price.');
-      setCostSavingBatchId(null);
-    }
-  };
-
   const summary = useMemo(() => {
     if (!batches.length) return null;
 
@@ -230,7 +189,7 @@ export default function BatchPriceUpdatePage() {
         product_id: selectedProduct.id,
         per_page: 200,
       });
-      setBatches(list.batches || []);
+      setBatches(list);
     } catch (e: any) {
       setError(e?.response?.data?.message || e?.message || 'Failed to update batch prices.');
     } finally {
@@ -385,107 +344,6 @@ export default function BatchPriceUpdatePage() {
                   </button>
                 </div>
               </div>
-
-              {/* Per-batch cost price update */}
-              {selectedProduct && (
-                <div className="mt-6 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-                  <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                    <div>
-                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                        Update cost price (specific batch)
-                      </h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Cost price changes only the selected batch. Selling price changes all batches using the button above.
-                      </p>
-                    </div>
-
-                    {isLoadingBatches && (
-                      <div className="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Loading batches...
-                      </div>
-                    )}
-                  </div>
-
-                  {!isLoadingBatches && batches.length === 0 && (
-                    <div className="mt-4 rounded-lg border border-dashed border-gray-300 dark:border-gray-700 p-4 text-sm text-gray-600 dark:text-gray-400">
-                      No batches found for this product.
-                    </div>
-                  )}
-
-                  {!isLoadingBatches && batches.length > 0 && (
-                    <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-                      <table className="min-w-full text-sm">
-                        <thead className="bg-gray-50 dark:bg-gray-900/40">
-                          <tr className="text-left">
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Batch No</th>
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Store</th>
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Qty</th>
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Cost Price</th>
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Sell Price</th>
-                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {batches.map((b) => {
-                            const isEditing = costEditBatchId === b.id;
-                            const isRowSaving = costSavingBatchId === b.id;
-                            return (
-                              <tr key={b.id} className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
-                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{b.batch_number || `#${b.id}`}</td>
-                                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{b.store?.name || '-'}</td>
-                                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{b.quantity ?? '-'}</td>
-                                <td className="px-3 py-2">
-                                  {isEditing ? (
-                                    <input
-                                      value={costEditValue}
-                                      onChange={(e) => setCostEditValue(e.target.value)}
-                                      type="number"
-                                      step="0.01"
-                                      min="0"
-                                      className="w-32 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-gray-900 dark:text-white"
-                                    />
-                                  ) : (
-                                    <span className="text-gray-900 dark:text-gray-100">{b.cost_price ?? '-'}</span>
-                                  )}
-                                </td>
-                                <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{b.sell_price ?? '-'}</td>
-                                <td className="px-3 py-2">
-                                  {isEditing ? (
-                                    <div className="flex items-center gap-2">
-                                      <button
-                                        onClick={() => saveCostPrice(b)}
-                                        disabled={isRowSaving}
-                                        className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 px-2 py-1 font-semibold text-white"
-                                      >
-                                        {isRowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                                        Save
-                                      </button>
-                                      <button
-                                        onClick={cancelCostEdit}
-                                        disabled={isRowSaving}
-                                        className="inline-flex items-center gap-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-gray-800 dark:text-gray-200"
-                                      >
-                                        <X className="h-4 w-4" /> Cancel
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => startCostEdit(b)}
-                                      className="inline-flex items-center gap-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-gray-800 dark:text-gray-200"
-                                    >
-                                      <Pencil className="h-4 w-4" /> Edit
-                                    </button>
-                                  )}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              )}
 
               {/* Updated list */}
               {updates.length > 0 && (

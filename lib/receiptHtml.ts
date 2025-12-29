@@ -20,9 +20,6 @@ function money(n: any, currency?: string) {
   return `${symbol}${formatted}`;
 }
 
-// VAT is inclusive in pricing; keep values for future use, but hide from receipt UI.
-const SHOW_TAX_ON_RECEIPT = false;
-
 function receiptBody(r: ReceiptOrder) {
   const itemsHtml = (r.items || [])
     .map((it) => {
@@ -72,7 +69,7 @@ function receiptBody(r: ReceiptOrder) {
           <td class="right">${escapeHtml(money(r.totals?.subtotal ?? 0))}</td>
         </tr>
         ${(r.totals?.discount ?? 0) > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(r.totals?.discount ?? 0))}</td></tr>` : ''}
-        ${SHOW_TAX_ON_RECEIPT && (r.totals?.tax ?? 0) > 0 ? `<tr><td>Tax/VAT</td><td class="right">${escapeHtml(money(r.totals?.tax ?? 0))}</td></tr>` : ''}
+        ${(r.totals?.tax ?? 0) > 0 ? `<tr><td>Tax/VAT</td><td class="right">${escapeHtml(money(r.totals?.tax ?? 0))}</td></tr>` : ''}
         ${(r.totals?.shipping ?? 0) > 0 ? `<tr><td>Shipping</td><td class="right">${escapeHtml(money(r.totals?.shipping ?? 0))}</td></tr>` : ''}
         <tr class="total">
           <td><b>Grand Total</b></td>

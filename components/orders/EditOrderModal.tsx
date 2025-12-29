@@ -4,10 +4,6 @@ import { useState, useEffect } from 'react';
 import { X, Save, User, MapPin, Package, CreditCard, Plus, Trash2, Search } from 'lucide-react';
 import { Order, Product } from '@/types/order';
 
-
-// VAT is inclusive in pricing. Hide VAT controls/lines in UI for now, but keep code paths for future.
-const VAT_UI_ENABLED = false;
-
 interface EditOrderModalProps {
   order: Order;
   onClose: () => void;
@@ -196,8 +192,7 @@ export default function EditOrderModal({ order, onClose, onSave }: EditOrderModa
   const recalculateTotals = (products: Product[]) => {
     const subtotal = products.reduce((sum, p) => sum + p.amount, 0);
     const totalDiscount = products.reduce((sum, p) => sum + p.discount, 0);
-    const effectiveVatRate = VAT_UI_ENABLED ? formData.amounts.vatRate : 0;
-    const vat = Math.round(subtotal * (effectiveVatRate / 100));
+    const vat = Math.round(subtotal * (formData.amounts.vatRate / 100));
     const total = subtotal + vat + formData.amounts.transportCost;
     
     const totalPaid = formData.payments.sslCommerz + formData.payments.advance;
@@ -234,22 +229,18 @@ export default function EditOrderModal({ order, onClose, onSave }: EditOrderModa
 
   const handleAmountsChange = (field: keyof Order['amounts'], value: number) => {
     const updatedAmounts = { ...formData.amounts, [field]: value };
-
-    // VAT is inclusive; when VAT UI is disabled, force VAT to 0 to avoid inflating totals.
-    const vatRate = VAT_UI_ENABLED ? updatedAmounts.vatRate : 0;
-    updatedAmounts.vatRate = vatRate;
-    updatedAmounts.vat = Math.round(updatedAmounts.subtotal * (vatRate / 100));
-
+    
+    if (field === 'vatRate') {
+      updatedAmounts.vat = Math.round(updatedAmounts.subtotal * (value / 100));
+    }
+    
     if (field === 'transportCost' || field === 'vatRate') {
       updatedAmounts.total = updatedAmounts.subtotal + updatedAmounts.vat + updatedAmounts.transportCost;
       const totalPaid = formData.payments.sslCommerz + formData.payments.advance;
       setFormData({
         ...formData,
         amounts: updatedAmounts,
-        payments: {
-          ...formData.payments,
-          due: updatedAmounts.total - totalPaid
-        }
+        payments: { ...formData.payments, due: updatedAmounts.total - totalPaid }
       });
     } else {
       setFormData({ ...formData, amounts: updatedAmounts });
@@ -715,7 +706,6 @@ export default function EditOrderModal({ order, onClose, onSave }: EditOrderModa
               <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
                 <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-4">Amounts</h3>
                 <div className="space-y-3">
-                  {VAT_UI_ENABLED && (
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">VAT Rate (%)</label>
                     <input
@@ -727,7 +717,6 @@ export default function EditOrderModal({ order, onClose, onSave }: EditOrderModa
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-gray-500 outline-none"
                     />
                   </div>
-                  )}
                   <div>
                     <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase mb-2">Transport Cost</label>
                     <input
@@ -744,12 +733,10 @@ export default function EditOrderModal({ order, onClose, onSave }: EditOrderModa
                       <span className="text-gray-600 dark:text-gray-400">Subtotal:</span>
                       <span className="font-semibold text-gray-900 dark:text-white">৳{formData.amounts.subtotal.toLocaleString()}</span>
                     </div>
-                    {VAT_UI_ENABLED && (
-                                          <div className="flex justify-between text-sm mb-2">
-                        <span className="text-gray-600 dark:text-gray-400">VAT:</span>
-                        <span className="font-semibold text-gray-900 dark:text-white">৳{formData.amounts.vat.toLocaleString()}</span>
-                      </div>
-                    )}
+                    <div className="flex justify-between text-sm mb-2">
+                      <span className="text-gray-600 dark:text-gray-400">VAT:</span>
+                      <span className="font-semibold text-gray-900 dark:text-white">৳{formData.amounts.vat.toLocaleString()}</span>
+                    </div>
                     <div className="flex justify-between text-base font-bold">
                       <span className="text-gray-900 dark:text-white">Total:</span>
                       <span className="text-gray-900 dark:text-white">৳{formData.amounts.total.toLocaleString()}</span>

@@ -27,9 +27,6 @@ function normalizeTag(input: string): string {
 }
 
 export default function CustomerTagManager({ customerId, initialTags = [], onTagsChange, compact }: Props) {
-  // UI choice: hide the "add existing tag" dropdown for now (per requirement),
-  // but keep all underlying functionality for future re-enable.
-  const SHOW_EXISTING_TAG_PICKER = false;
   const [tags, setTags] = useState<string[]>(Array.isArray(initialTags) ? initialTags : []);
   const [allTags, setAllTags] = useState<string[]>([]);
   const [selectedExisting, setSelectedExisting] = useState('');
@@ -119,13 +116,7 @@ export default function CustomerTagManager({ customerId, initialTags = [], onTag
   };
 
   return (
-    <div
-      className={
-        compact
-          ? 'mt-2'
-          : 'mt-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3'
-      }
-    >
+    <div className={compact ? 'mt-2' : 'mt-3'}>
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <Tag className="w-4 h-4 text-gray-600 dark:text-gray-300" />
@@ -164,33 +155,23 @@ export default function CustomerTagManager({ customerId, initialTags = [], onTag
       </div>
 
       {/* Add tag controls */}
-      <div
-        className={
-          compact
-            ? 'mt-2 flex flex-col gap-2'
-            : SHOW_EXISTING_TAG_PICKER
-              ? 'mt-3 grid grid-cols-1 md:grid-cols-3 gap-2'
-              : 'mt-3 grid grid-cols-1 md:grid-cols-5 gap-2'
-        }
-      >
-        {SHOW_EXISTING_TAG_PICKER && (
-          <select
-            value={selectedExisting}
-            onChange={(e) => {
-              setSelectedExisting(e.target.value);
-              if (e.target.value) setCustomInput('');
-            }}
-            disabled={busy}
-            className="w-full px-3 py-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-          >
-            <option value="">Add existing tag…</option>
-            {availableToAdd.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        )}
+      <div className={compact ? 'mt-2 flex flex-col gap-2' : 'mt-3 grid grid-cols-1 md:grid-cols-3 gap-2'}>
+        <select
+          value={selectedExisting}
+          onChange={(e) => {
+            setSelectedExisting(e.target.value);
+            if (e.target.value) setCustomInput('');
+          }}
+          disabled={busy}
+          className="w-full px-3 py-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+        >
+          <option value="">Add existing tag…</option>
+          {availableToAdd.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
 
         <input
           value={customInput}
@@ -200,10 +181,7 @@ export default function CustomerTagManager({ customerId, initialTags = [], onTag
           }}
           placeholder="Or type new tag (e.g., high-spender)"
           disabled={busy}
-          className={
-            `w-full px-3 py-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 ` +
-            (SHOW_EXISTING_TAG_PICKER ? '' : 'md:col-span-4')
-          }
+          className="w-full px-3 py-2 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400"
         />
 
         <button

@@ -8,15 +8,11 @@ import { ArrowLeft, Save, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import storeService, { StoreFormData } from '@/services/storeService';
 
-type AddStorePageProps = {
-  /** Next.js App Router query params (e.g. /store/add-store?id=123) */
-  searchParams?: {
-    id?: string;
-  };
-};
+interface AddStorePageProps {
+  editId?: string | null;
+}
 
-export default function AddStorePage({ searchParams }: AddStorePageProps) {
-  const editId = searchParams?.id ? String(searchParams.id) : null;
+export default function AddStorePage({ editId }: AddStorePageProps) {
   const [darkMode, setDarkMode] = useState(false);
   const [isTypeOpen, setIsTypeOpen] = useState(false);
   const [loading, setLoading] = useState(false);
