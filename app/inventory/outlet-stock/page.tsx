@@ -373,7 +373,7 @@ export default function DispatchManagementPage() {
         onSubmit={handleCreateDispatch}
         stores={stores}
         loading={loading}
-        defaultSourceStoreId={userRole === 'store_manager' ? (currentStoreId ?? undefined) : undefined}
+        defaultSourceStoreId={undefined}
       />
 
       {/* Barcode Scan Modal */}
