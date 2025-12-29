@@ -701,6 +701,8 @@ export default function AmountDetailsPage() {
                         )}
                       </div>
 
+                    </div>
+
                     <button
                       onClick={handlePlaceOrder}
                       disabled={isProcessing}
