@@ -86,7 +86,10 @@ export default function AmountDetailsPage() {
       }));
 
       if (!parsedOrder.subtotal || parsedOrder.subtotal === 0) {
-        parsedOrder.subtotal = parsedOrder.items.reduce((sum: number, item: any) => sum + calculateItemAmount(item), 0);
+        parsedOrder.subtotal = parsedOrder.items.reduce(
+          (sum: number, item: any) => sum + calculateItemAmount(item),
+          0
+        );
       }
     }
 
@@ -96,14 +99,16 @@ export default function AmountDetailsPage() {
       try {
         const response = await axios.get('/payment-methods', { params: { customer_type: 'social_commerce' } });
         const payload = response.data?.data ?? response.data;
-        const methods: PaymentMethod[] = payload?.payment_methods || payload?.data?.payment_methods || payload?.methods || payload || [];
+        const methods: PaymentMethod[] =
+          payload?.payment_methods || payload?.data?.payment_methods || payload?.methods || payload || [];
 
         const normalized = Array.isArray(methods) ? methods : [];
         setPaymentMethods(normalized);
 
         // Defaults: mobile_banking for advance/full, cash for COD
         const mobile = normalized.find((m) => m.type === 'mobile_banking') || normalized[0];
-        const cash = normalized.find((m) => m.type === 'cash') || normalized.find((m) => m.code?.toLowerCase?.() === 'cash');
+        const cash =
+          normalized.find((m) => m.type === 'cash') || normalized.find((m) => m.code?.toLowerCase?.() === 'cash');
 
         if (mobile) setSelectedPaymentMethod(String(mobile.id));
         if (cash) setCodPaymentMethod(String(cash.id));
@@ -136,6 +141,7 @@ export default function AmountDetailsPage() {
     () => paymentMethods.find((m) => String(m.id) === String(selectedPaymentMethod)),
     [paymentMethods, selectedPaymentMethod]
   );
+
   const codMethod = useMemo(
     () => paymentMethods.find((m) => String(m.id) === String(codPaymentMethod)),
     [paymentMethods, codPaymentMethod]
@@ -179,13 +185,11 @@ export default function AmountDetailsPage() {
   }
 
   const handlePlaceOrder = async () => {
-    // Store must already be selected in the first page
     if (!orderData.store_id) {
       displayToast('Store is missing. Please go back and select a store.', 'error');
       return;
     }
 
-    // Validation: payment methods
     if (paymentOption === 'full' || paymentOption === 'partial') {
       if (!selectedPaymentMethod) {
         displayToast('Please select a payment method', 'error');
@@ -218,7 +222,6 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      // 1) Create order (sanitize payload)
       const orderPayload: any = {
         order_type: orderData.order_type || 'social_commerce',
         store_id: parseInt(String(orderData.store_id), 10),
@@ -240,23 +243,24 @@ export default function AmountDetailsPage() {
         shipping_amount: transport,
         notes:
           (orderData.notes || 'Social Commerce order.') +
-          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : `Full COD ৳${codAmount.toFixed(2)}`}.`,
+          ` Payment: ${
+            paymentOption === 'full'
+              ? 'Full'
+              : paymentOption === 'partial'
+                ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}`
+                : `Full COD ৳${codAmount.toFixed(2)}`
+          }.`,
       };
 
-      console.log('📦 Creating order:', orderPayload);
       const createOrderResponse = await axios.post('/orders', orderPayload);
-
       if (!createOrderResponse.data?.success) {
         throw new Error(createOrderResponse.data?.message || 'Failed to create order');
       }
 
       const createdOrder = createOrderResponse.data.data;
-      console.log('✅ Order created:', createdOrder.order_number);
 
-      // 2) Defective items
       const defectiveItems = orderData.defectiveItems || [];
       if (defectiveItems.length > 0) {
-        console.log('🏷️ Processing defective items:', defectiveItems.length);
         for (const defectItem of defectiveItems) {
           try {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
@@ -271,7 +275,6 @@ export default function AmountDetailsPage() {
         }
       }
 
-      // 3) Payments
       if (paymentOption === 'full') {
         const paymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
@@ -304,9 +307,7 @@ export default function AmountDetailsPage() {
             bank_name: selectedMethod.name,
           };
         } else {
-          paymentData.payment_data = {
-            notes: paymentNotes || `Payment via ${selectedMethod?.name}`,
-          };
+          paymentData.payment_data = { notes: paymentNotes || `Payment via ${selectedMethod?.name}` };
         }
 
         const paymentResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, paymentData);
@@ -330,39 +331,11 @@ export default function AmountDetailsPage() {
           advancePaymentData.external_reference = transactionReference;
         }
 
-        if (selectedMethod?.type === 'mobile_banking' && transactionReference) {
-          advancePaymentData.payment_data = {
-            mobile_number: orderData.customer?.phone,
-            provider: selectedMethod.name,
-            transaction_id: transactionReference,
-            payment_stage: 'advance',
-          };
-        } else if (selectedMethod?.type === 'card' && transactionReference) {
-          advancePaymentData.payment_data = {
-            card_reference: transactionReference,
-            payment_method: selectedMethod.name,
-            payment_stage: 'advance',
-          };
-        } else if (selectedMethod?.type === 'bank_transfer' && transactionReference) {
-          advancePaymentData.payment_data = {
-            transfer_reference: transactionReference,
-            bank_name: selectedMethod.name,
-            payment_stage: 'advance',
-          };
-        } else {
-          advancePaymentData.payment_data = {
-            notes: `Advance payment - COD remaining: ৳${codAmount.toFixed(2)}`,
-            payment_stage: 'advance',
-          };
-        }
-
         const advanceResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, advancePaymentData);
         if (!advanceResponse.data?.success) {
           throw new Error(advanceResponse.data?.message || 'Failed to process advance payment');
         }
       }
-
-      // paymentOption === 'none' => no payment now
 
       const msg =
         paymentOption === 'full'
@@ -403,7 +376,9 @@ export default function AmountDetailsPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
                 {/* Left: Order Summary */}
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-6">
-                  <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">Order Summary</h2>
+                  <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    Order Summary
+                  </h2>
 
                   {/* Customer */}
                   <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800">
@@ -428,11 +403,11 @@ export default function AmountDetailsPage() {
                           {shippingForUi?.city || ''}
                           {shippingForUi?.state ? `, ${shippingForUi.state}` : ''}, {shippingForUi?.country || ''}
                         </p>
-                        {shippingForUi?.postalCode || shippingForUi?.postal_code ? (
+                        {(shippingForUi?.postalCode || shippingForUi?.postal_code) && (
                           <p className="text-xs text-gray-600 dark:text-gray-400">
                             Postal Code: {shippingForUi?.postalCode || shippingForUi?.postal_code}
                           </p>
-                        ) : null}
+                        )}
                         <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
                           {shippingForUi?.address || shippingForUi?.street || orderData.customer?.address || ''}
                         </p>
@@ -471,7 +446,9 @@ export default function AmountDetailsPage() {
                         return (
                           <div key={idx} className="flex justify-between items-start p-2 rounded bg-gray-50 dark:bg-gray-700">
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
+                              <p className="text-sm text-gray-900 dark:text-white truncate">
+                                {item.productName || `Product #${item.product_id}`}
+                              </p>
                               <p className="text-xs text-gray-600 dark:text-gray-400">
                                 Qty: {item.quantity} × ৳{parseNumber(item.unit_price).toFixed(2)}
                               </p>
@@ -481,11 +458,14 @@ export default function AmountDetailsPage() {
                                 </p>
                               )}
                             </div>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white ml-2">৳{itemAmount.toFixed(2)}</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white ml-2">
+                              ৳{itemAmount.toFixed(2)}
+                            </p>
                           </div>
                         );
                       })}
                     </div>
+                  </div>
 
                   {/* Totals */}
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
@@ -497,20 +477,24 @@ export default function AmountDetailsPage() {
                       <span className="text-gray-700 dark:text-gray-300">Discount</span>
                       <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
+
                     {VAT_UI_ENABLED && (
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-700 dark:text-gray-300">VAT ({vatRate}%)</span>
                         <span className="text-gray-900 dark:text-white">৳{vat.toFixed(2)}</span>
                       </div>
                     )}
+
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Transport</span>
                       <span className="text-gray-900 dark:text-white">৳{transport.toFixed(2)}</span>
                     </div>
+
                     <div className="flex justify-between text-base font-semibold mt-2">
                       <span className="text-gray-900 dark:text-white">Total</span>
                       <span className="text-gray-900 dark:text-white">৳{total.toFixed(2)}</span>
                     </div>
+
                     {totalFees > 0 && (
                       <div className="flex justify-between text-xs mt-1">
                         <span className="text-gray-600 dark:text-gray-400">Estimated gateway fees</span>
@@ -518,10 +502,13 @@ export default function AmountDetailsPage() {
                       </div>
                     )}
                   </div>
+                </div>
 
                 {/* Right: Amount & Payment */}
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-6">
-                  <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">Charges & Payments</h2>
+                  <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    Charges & Payments
+                  </h2>
 
                   {/* VAT + Transport */}
                   <div className={`grid gap-3 mb-4 ${VAT_UI_ENABLED ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -535,6 +522,7 @@ export default function AmountDetailsPage() {
                         />
                       </div>
                     )}
+
                     <div>
                       <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transport (৳)</label>
                       <input
@@ -543,7 +531,6 @@ export default function AmountDetailsPage() {
                         className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       />
                     </div>
-
                   </div>
 
                   {/* Payment Option */}
@@ -593,6 +580,7 @@ export default function AmountDetailsPage() {
                         </div>
                       </label>
                     </div>
+                  </div>
 
                   {/* Payment Details */}
                   <div className="space-y-3">
@@ -617,7 +605,9 @@ export default function AmountDetailsPage() {
 
                         {paymentOption === 'partial' && (
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Advance Amount (৳)</label>
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
+                              Advance Amount (৳)
+                            </label>
                             <input
                               value={advanceAmount}
                               onChange={(e) => setAdvanceAmount(e.target.value)}
@@ -633,7 +623,9 @@ export default function AmountDetailsPage() {
 
                         {selectedMethod?.requires_reference && (
                           <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transaction Reference</label>
+                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
+                              Transaction Reference
+                            </label>
                             <input
                               value={transactionReference}
                               onChange={(e) => setTransactionReference(e.target.value)}
@@ -700,7 +692,6 @@ export default function AmountDetailsPage() {
                           </div>
                         )}
                       </div>
-
                     </div>
 
                     <button
@@ -711,16 +702,14 @@ export default function AmountDetailsPage() {
                       {isProcessing ? 'Processing...' : 'Place Order'}
                     </button>
                   </div>
+                </div>
+              </div>
 
-              {showToast && (
-                <Toast
-                  message={toastMessage}
-                  type={toastType}
-                  onClose={() => setShowToast(false)}
-                />
-              )}
+              {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
             </div>
           </main>
         </div>
+      </div>
+    </div>
   );
 }
