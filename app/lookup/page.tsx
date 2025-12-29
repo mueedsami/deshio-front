@@ -9,7 +9,7 @@ import customerService, { Customer, CustomerOrder } from '@/services/customerSer
 import orderService from '@/services/orderService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
-import barcodeOrderMapper from '@/services/barcodeOrderMapper';
+import lookupService from '@/services/lookupService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 
 type LookupTab = 'customer' | 'order' | 'barcode' | 'batch';
@@ -431,8 +431,43 @@ export default function LookupPage() {
     }
   };
 
+  const normalizeLookupOrderToSingleOrder = (payload: any) => {
+    const o = payload?.order || {};
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+
+    return {
+      id: o.id ?? payload?.id ?? 0,
+      order_number: o.order_number ?? '',
+      order_type: o.order_type ?? 'unknown',
+      status: o.status ?? 'unknown',
+      payment_status: o.payment_status ?? 'unknown',
+      subtotal: o.subtotal,
+      total_amount: o.total_amount ?? o.total ?? o.total_price,
+      created_at: o.order_date ?? o.created_at ?? null,
+      updated_at: o.updated_at ?? null,
+      items: items.map((it: any, idx: number) => {
+        const barcodeVal = it?.barcode?.barcode ?? it?.barcode ?? null;
+        const barcodesArr = Array.isArray(it?.barcodes) ? it.barcodes : [];
+        const finalBarcodes: string[] = barcodeVal
+          ? [String(barcodeVal)]
+          : barcodesArr.map((b: any) => String(b?.barcode ?? b)).filter(Boolean);
+
+        return {
+          id: it?.item_id ?? it?.id ?? idx,
+          product_id: it?.product?.id ?? it?.product_id ?? null,
+          product_name: it?.product?.name ?? it?.product_name ?? 'Unknown Product',
+          product_sku: it?.product?.sku ?? it?.product_sku ?? 'N/A',
+          quantity: it?.quantity ?? 0,
+          unit_price: it?.unit_price ?? it?.sale_price ?? it?.price ?? null,
+          total_amount: it?.total_amount ?? it?.total ?? null,
+          barcodes: finalBarcodes,
+        };
+      }),
+    };
+  };
+
   // -----------------------
-  // Open order by ID (ensures barcodes are fetched)
+  // Open order by ID (Lookup API)
   // -----------------------
   const openOrderById = async (orderId: number) => {
     setLoading(true);
@@ -442,26 +477,32 @@ export default function LookupPage() {
     setOrders([]);
 
     try {
-      const orderWithBarcodes: any = await barcodeOrderMapper.getOrderWithBarcodes(orderId);
-      const orderData = normalizeOrderToCustomerOrder(orderWithBarcodes);
+      const res: any = await lookupService.getOrder(orderId);
+      if (!res?.success) {
+        throw new Error(res?.message || 'Order not found');
+      }
 
-      setOrderNumber(orderWithBarcodes.order_number || `#${orderId}`);
+      const payload = res.data;
+      const orderData = normalizeLookupOrderToSingleOrder(payload);
+
+      setOrderNumber(payload?.order?.order_number || `#${orderId}`);
       setSingleOrder(orderData);
 
-      if (orderWithBarcodes.customer) {
+      if (payload?.customer) {
+        // Cast/shape to our Customer model as best-effort
         const customerData: Customer = {
-          id: orderWithBarcodes.customer.id,
-          customer_code: orderWithBarcodes.customer.customer_code,
-          name: orderWithBarcodes.customer.name,
-          phone: orderWithBarcodes.customer.phone,
-          email: orderWithBarcodes.customer.email,
-          customer_type: orderWithBarcodes.customer.customer_type || 'unknown',
+          id: payload.customer.id,
+          customer_code: payload.customer.customer_code,
+          name: payload.customer.name,
+          phone: payload.customer.phone,
+          email: payload.customer.email,
+          customer_type: payload.customer.customer_type || 'unknown',
           status: 'active',
-          tags: orderWithBarcodes.customer.tags,
-          total_orders: orderWithBarcodes.customer.total_orders,
-          total_purchases: orderWithBarcodes.customer.total_purchases,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
+          tags: payload.customer.tags,
+          total_orders: payload.customer.total_orders,
+          total_purchases: payload.customer.total_purchases,
+          created_at: payload.customer.created_at || new Date().toISOString(),
+          updated_at: payload.customer.updated_at || new Date().toISOString(),
         };
         setCustomer(customerData);
       }
