@@ -23,6 +23,7 @@ export default function DispatchManagementPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Current user's store id is stored by authService in localStorage.
   const [currentStoreId, setCurrentStoreId] = useState<number | null>(null);
+  const [userRole, setUserRole] = useState<string>('');
   const [stores, setStores] = useState<Store[]>([]);
   const [dispatches, setDispatches] = useState<ProductDispatch[]>([]);
   const [statistics, setStatistics] = useState<DispatchStatistics | null>(null);
@@ -56,6 +57,8 @@ export default function DispatchManagementPage() {
   useEffect(() => {
     // Read store id once (client-only)
     const storeId = typeof window !== 'undefined' ? localStorage.getItem('storeId') : null;
+    const role = typeof window !== 'undefined' ? localStorage.getItem('userRole') : null;
+    if (role) setUserRole(role);
     if (storeId) {
       const parsed = parseInt(storeId, 10);
       if (!Number.isNaN(parsed)) setCurrentStoreId(parsed);
@@ -370,7 +373,7 @@ export default function DispatchManagementPage() {
         onSubmit={handleCreateDispatch}
         stores={stores}
         loading={loading}
-        defaultSourceStoreId={currentStoreId ?? undefined}
+        defaultSourceStoreId={userRole === 'store_manager' ? (currentStoreId ?? undefined) : undefined}
       />
 
       {/* Barcode Scan Modal */}
