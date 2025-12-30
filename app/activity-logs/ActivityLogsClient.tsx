@@ -130,8 +130,11 @@ export default function ActivityLogsClient() {
   }, [entries, employeeId, q]);
 
   return (
-    <div className={darkMode ? 'dark' : ''}>
-      <div className="min-h-screen bg-white dark:bg-black">
+  <div className={darkMode ? 'dark' : ''}>
+    <div className="flex h-screen bg-white dark:bg-black">
+      <Sidebar darkMode={darkMode} isOpen={sidebarOpen} />
+
+      <div className="flex-1 flex flex-col overflow-hidden">
         <Header
           darkMode={darkMode}
           setDarkMode={setDarkMode}
@@ -139,9 +142,8 @@ export default function ActivityLogsClient() {
           setSidebarOpen={setSidebarOpen}
           title="Business History"
         />
-        <Sidebar darkMode={darkMode} isOpen={sidebarOpen} />
 
-        <main className={`pt-16 ${sidebarOpen ? 'lg:pl-72' : ''}`}>
+        <main className="flex-1 overflow-auto bg-white dark:bg-black">
           <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
             <div className="flex flex-col gap-4">
               {/* Filters */}
@@ -192,7 +194,8 @@ export default function ActivityLogsClient() {
                       <option value="">Any</option>
                       {users.map((u) => (
                         <option key={u.id} value={u.id}>
-                          {u.name}{u.email ? ` (${u.email})` : ''}
+                          {u.name}
+                          {u.email ? ` (${u.email})` : ''}
                         </option>
                       ))}
                     </select>
@@ -244,9 +247,7 @@ export default function ActivityLogsClient() {
 
                   <div className="text-xs text-gray-600 dark:text-gray-400">
                     Showing <span className="font-medium">{filtered.length}</span> activities
-                    {category === 'all' && (
-                      <span className="ml-1">(combined)</span>
-                    )}
+                    {category === 'all' && <span className="ml-1">(combined)</span>}
                   </div>
                 </div>
               </div>
@@ -268,16 +269,17 @@ export default function ActivityLogsClient() {
               </div>
             </div>
           </div>
-        </main>
 
-        {toast.show && (
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onClose={() => setToast((t) => ({ ...t, show: false }))}
-          />
-        )}
+          {toast.show && (
+            <Toast
+              message={toast.message}
+              type={toast.type}
+              onClose={() => setToast((t) => ({ ...t, show: false }))}
+            />
+          )}
+        </main>
       </div>
     </div>
-  );
+  </div>
+);
 }
