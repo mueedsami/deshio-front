@@ -28,7 +28,6 @@ export interface BusinessHistoryWhat {
   description: string;
   fields_changed?: string[];
   changes?: BusinessHistoryChanges;
-  // some endpoints can add extra fields (old_store/new_store, defect_reason, etc.)
   [key: string]: any;
 }
 
@@ -83,32 +82,74 @@ const endpointForCategory: Record<Exclude<BusinessHistoryCategory, 'all'>, strin
   products: '/business-history/products',
 };
 
+/**
+ * Supports BOTH response shapes:
+ * 1) Docs shape:      { data: [...], links, meta }
+ * 2) Your controller: { success:true, data:{ activities:[...], pagination:{...} } }
+ */
+function extractItemsAndMeta(payload: any): { items: any[]; meta?: any; links?: any } {
+  // Controller shape
+  if (payload?.data?.activities && Array.isArray(payload.data.activities)) {
+    return { items: payload.data.activities, meta: payload.data.pagination, links: payload.links };
+  }
+  // Docs shape
+  if (Array.isArray(payload?.data)) {
+    return { items: payload.data, meta: payload.meta, links: payload.links };
+  }
+  // Fallbacks (just in case)
+  if (Array.isArray(payload?.activities)) {
+    return { items: payload.activities, meta: payload.pagination, links: payload.links };
+  }
+  return { items: [], meta: payload?.meta, links: payload?.links };
+}
+
 function normalizeEntry(category: Exclude<BusinessHistoryCategory, 'all'>, e: any): ActivityLogEntry {
+  // Backend controller returns description at root: e.description
+  const rootDescription = e?.description ? String(e.description) : '';
+
+  // Backend controller returns subject_type/subject_id/subject (model)
+  const subjectId =
+    Number(e?.subject?.id ?? e?.subject_id ?? e?.subjectId ?? 0);
+
+  const subjectType =
+    String(e?.subject?.type ?? e?.subject_type ?? e?.subjectType ?? '');
+
+  // Build a consistent "subject.data"
+  const subjectData =
+    e?.subject?.data ?? e?.subject ?? e?.subject_data ?? undefined;
+
+  const whatObj = (e?.what && typeof e.what === 'object') ? e.what : {};
+
   return {
     id: Number(e?.id),
     category,
+
     who: {
       id: Number(e?.who?.id ?? 0),
       type: String(e?.who?.type ?? ''),
       name: String(e?.who?.name ?? 'Unknown'),
       email: e?.who?.email ? String(e.who.email) : undefined,
     },
+
     when: {
       timestamp: String(e?.when?.timestamp ?? ''),
       formatted: String(e?.when?.formatted ?? e?.when?.timestamp ?? ''),
       human: e?.when?.human ? String(e.when.human) : undefined,
     },
+
     what: {
-      action: String(e?.what?.action ?? ''),
-      description: String(e?.what?.description ?? ''),
-      fields_changed: Array.isArray(e?.what?.fields_changed) ? e.what.fields_changed : [],
-      changes: e?.what?.changes && typeof e.what.changes === 'object' ? e.what.changes : {},
-      ...(e?.what && typeof e.what === 'object' ? e.what : {}),
+      // Backend has what.action but not what.description -> fallback to root description
+      action: String(whatObj?.action ?? ''),
+      description: String(whatObj?.description ?? rootDescription ?? ''),
+      fields_changed: Array.isArray(whatObj?.fields_changed) ? whatObj.fields_changed : [],
+      changes: whatObj?.changes && typeof whatObj.changes === 'object' ? whatObj.changes : {},
+      ...(typeof whatObj === 'object' ? whatObj : {}),
     },
+
     subject: {
-      id: Number(e?.subject?.id ?? 0),
-      type: String(e?.subject?.type ?? ''),
-      data: e?.subject?.data,
+      id: subjectId,
+      type: subjectType,
+      data: subjectData,
     },
   };
 }
@@ -118,22 +159,37 @@ async function fetchCategory(
   params: ActivityLogParams
 ): Promise<Paginated<ActivityLogEntry>> {
   const url = endpointForCategory[category];
+
   // Pass through endpoint-specific filters (e.g., order_id, product_id, dispatch_id, etc.)
   const { category: _cat, ...rest } = params as any;
+
+  // Your backend controllers currently use start_date/end_date
+  // Your docs/front use date_from/date_to
+  // So send BOTH to be safe.
+  const date_from = params.date_from;
+  const date_to = params.date_to;
+
   const res = await axios.get(url, {
     params: {
       ...rest,
       per_page: params.per_page ?? 50,
       page: params.page ?? 1,
+
+      // both naming conventions
+      date_from,
+      date_to,
+      start_date: date_from,
+      end_date: date_to,
     },
   });
 
   const payload = res.data;
-  const items = Array.isArray(payload?.data) ? payload.data : [];
+  const { items, meta, links } = extractItemsAndMeta(payload);
+
   return {
     data: items.map((e: any) => normalizeEntry(category, e)),
-    links: payload?.links,
-    meta: payload?.meta,
+    links,
+    meta,
   };
 }
 
@@ -146,6 +202,7 @@ const activityService = {
    */
   async getLogs(params: ActivityLogParams): Promise<Paginated<ActivityLogEntry>> {
     const category = params.category ?? 'all';
+
     if (category !== 'all') {
       return fetchCategory(category, params);
     }
@@ -163,15 +220,18 @@ const activityService = {
     );
 
     const merged = results.flatMap((r) => r.data);
+
+    // Sort newest first (timestamp ISO string)
     merged.sort((a, b) => (b.when.timestamp || '').localeCompare(a.when.timestamp || ''));
 
     return {
       data: merged,
       meta: {
-        ...results[0]?.meta,
         combined: true,
         combined_categories: cats,
         combined_count: merged.length,
+        // keep some pagination info if it exists
+        ...(results[0]?.meta ? { sample_pagination: results[0].meta } : {}),
       },
     };
   },
@@ -183,9 +243,16 @@ const activityService = {
 
   async getStatistics(date_from?: string, date_to?: string): Promise<StatsResponse> {
     const res = await axios.get('/business-history/statistics', {
-      params: { date_from, date_to },
+      params: {
+        date_from,
+        date_to,
+        start_date: date_from,
+        end_date: date_to,
+      },
     });
-    return res.data as StatsResponse;
+
+    // Your controller returns { success:true, data:{...stats} }
+    return (res.data?.data ?? res.data) as StatsResponse;
   },
 };
 
