@@ -84,6 +84,59 @@ function formatMoney(n: number): string {
   return fixed;
 }
 
+function parseCsvText(csv: string, maxRows = 60): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < csv.length; i++) {
+    const c = csv[i];
+
+    if (inQuotes) {
+      if (c === '"') {
+        if (csv[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+
+    if (c === '"') {
+      inQuotes = true;
+      continue;
+    }
+    if (c === ',') {
+      row.push(field);
+      field = '';
+      continue;
+    }
+    if (c === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+      if (rows.length >= maxRows) break;
+      continue;
+    }
+    if (c === '\r') continue;
+
+    field += c;
+  }
+
+  if (rows.length < maxRows && (field.length > 0 || row.length > 0)) {
+    row.push(field);
+    rows.push(row);
+  }
+
+  return rows;
+}
+
 export default function InventoryReportsPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -107,6 +160,97 @@ export default function InventoryReportsPage() {
     pending: false,
   });
 
+  // CSV export (Reporting API)
+  const [csvStoreId, setCsvStoreId] = useState<string>('');
+  const [csvStatus, setCsvStatus] = useState<string>(''); // empty = all
+  const [csvCustomerId, setCsvCustomerId] = useState<string>(''); // only for sales report
+  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
+  const [csvPreviewOpen, setCsvPreviewOpen] = useState(false);
+  const [csvPreviewTitle, setCsvPreviewTitle] = useState('');
+  const [csvPreviewRows, setCsvPreviewRows] = useState<string[][]>([]);
+  const [csvPreviewError, setCsvPreviewError] = useState<string>('');
+
+  const buildCsvParams = (extra?: Record<string, string>) => {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set('date_from', dateFrom);
+    if (dateTo) p.set('date_to', dateTo);
+    if (csvStoreId.trim()) p.set('store_id', csvStoreId.trim());
+    if (csvStatus.trim()) p.set('status', csvStatus.trim());
+    if (extra) {
+      Object.entries(extra).forEach(([k, v]) => {
+        if (v?.trim()) p.set(k, v.trim());
+      });
+    }
+    return p;
+  };
+
+  const getAuthHeader = () => {
+    if (typeof window === 'undefined') return {};
+    const token = localStorage.getItem('authToken');
+    if (!token) return {};
+    return { Authorization: `Bearer ${token}` };
+  };
+
+  const downloadCsv = async (endpoint: string, params: URLSearchParams, busyKey: 'category' | 'sales') => {
+    try {
+      setCsvBusy((b) => ({ ...b, [busyKey]: true }));
+      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: getAuthHeader() });
+      if (!res.ok) throw new Error(`Failed to download CSV (${res.status})`);
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const match = cd.match(/filename="?([^";]+)"?/i);
+      const filename = match?.[1] || 'report.csv';
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setCsvPreviewError(e?.message || 'Failed to download CSV');
+      setCsvPreviewOpen(true);
+      setCsvPreviewTitle('CSV Export Error');
+      setCsvPreviewRows([[e?.message || 'Failed to download CSV']]);
+    } finally {
+      setCsvBusy((b) => ({ ...b, [busyKey]: false }));
+    }
+  };
+
+  const previewCsv = async (title: string, endpoint: string, params: URLSearchParams, busyKey: 'category' | 'sales') => {
+    try {
+      setCsvBusy((b) => ({ ...b, [busyKey]: true }));
+      setCsvPreviewError('');
+      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: getAuthHeader() });
+      if (!res.ok) throw new Error(`Failed to load CSV (${res.status})`);
+      const text = await res.text();
+      const parsed = parseCsvText(text, 60);
+      setCsvPreviewTitle(title);
+      setCsvPreviewRows(parsed);
+      setCsvPreviewOpen(true);
+    } catch (e: any) {
+      setCsvPreviewError(e?.message || 'Failed to preview CSV');
+      setCsvPreviewTitle(title);
+      setCsvPreviewRows([[e?.message || 'Failed to preview CSV']]);
+      setCsvPreviewOpen(true);
+    } finally {
+      setCsvBusy((b) => ({ ...b, [busyKey]: false }));
+    }
+  };
+
+  // CSV Reporting (Downloads + Preview)
+  const [csvStoreId, setCsvStoreId] = useState<string>('');
+  const [csvStatus, setCsvStatus] = useState<string>(''); // empty = all statuses
+  const [csvCustomerId, setCsvCustomerId] = useState<string>('');
+  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
+
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTitle, setPreviewTitle] = useState('');
+  const [previewHead, setPreviewHead] = useState<string[]>([]);
+  const [previewRows, setPreviewRows] = useState<string[][]>([]);
+  const [previewErr, setPreviewErr] = useState('');
+
   // Data states
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -121,6 +265,68 @@ export default function InventoryReportsPage() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const buildCsvParams = (extra?: Record<string, string>) => {
+    const p = new URLSearchParams();
+    if (dateFrom) p.set('date_from', dateFrom);
+    if (dateTo) p.set('date_to', dateTo);
+    if (csvStoreId.trim()) p.set('store_id', csvStoreId.trim());
+    if (csvStatus) p.set('status', csvStatus);
+    if (extra) Object.entries(extra).forEach(([k, v]) => v && p.set(k, v));
+    return p;
+  };
+
+  const getAuthHeader = () => {
+    if (typeof window === 'undefined') return {};
+    const token = localStorage.getItem('authToken');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const downloadCsv = async (endpoint: string, params: URLSearchParams, kind: 'category' | 'sales') => {
+    try {
+      setCsvBusy((s) => ({ ...s, [kind]: true }));
+      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: { ...getAuthHeader() } });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') || '';
+      const match = cd.match(/filename="?([^\"]+)"?/i);
+      const filename = match?.[1] || (kind === 'category' ? 'category-sales-report.csv' : 'sales-report.csv');
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to download CSV');
+    } finally {
+      setCsvBusy((s) => ({ ...s, [kind]: false }));
+    }
+  };
+
+  const previewCsv = async (title: string, endpoint: string, params: URLSearchParams) => {
+    setPreviewErr('');
+    setPreviewTitle(title);
+    setPreviewHead([]);
+    setPreviewRows([]);
+    setPreviewOpen(true);
+    try {
+      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: { ...getAuthHeader() } });
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      const text = await res.text();
+      const parsed = parseCsvText(text, 60);
+      const head = parsed[0] || [];
+      const body = parsed.slice(1);
+      setPreviewHead(head);
+      setPreviewRows(body);
+    } catch (e: any) {
+      setPreviewErr(e?.message || 'Failed to preview');
+    }
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -208,6 +414,95 @@ export default function InventoryReportsPage() {
     const uniq = new Map<number, ApiOrder>();
     for (const o of all) uniq.set(o.id, o);
     return { orders: Array.from(uniq.values()), isTruncated: truncated };
+  };
+
+  const buildReportQuery = (extra?: { customer_id?: string }) => {
+    const q = new URLSearchParams();
+    if (dateFrom) q.set('date_from', dateFrom);
+    if (dateTo) q.set('date_to', dateTo);
+    if (csvStoreId) q.set('store_id', csvStoreId);
+    if (csvStatus) q.set('status', csvStatus);
+    if (extra?.customer_id) q.set('customer_id', extra.customer_id);
+    return q;
+  };
+
+  const getAuthHeader = () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
+  const downloadCsv = async (endpoint: string, query: URLSearchParams) => {
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(msg || 'Failed to download report');
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="?([^";]+)"?/i);
+    const filename = m?.[1] || 'report.csv';
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const previewCsv = async (endpoint: string, query: URLSearchParams) => {
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(msg || 'Failed to load report');
+    }
+    const text = await res.text();
+    const parsed = parseCsvText(text, 60);
+    const header = parsed[0] || [];
+    const body = parsed.slice(1);
+    return { header, body };
+  };
+
+  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewTitle, setPreviewTitle] = useState('');
+  const [previewHeader, setPreviewHeader] = useState<string[]>([]);
+  const [previewBody, setPreviewBody] = useState<string[][]>([]);
+  const [previewError, setPreviewError] = useState('');
+
+  const doDownloadCategory = async () => {
+    setCsvBusy((s) => ({ ...s, category: true }));
+    try {
+      await downloadCsv('/api/reporting/csv/category-sales', buildReportQuery());
+    } finally {
+      setCsvBusy((s) => ({ ...s, category: false }));
+    }
+  };
+
+  const doDownloadSales = async () => {
+    setCsvBusy((s) => ({ ...s, sales: true }));
+    try {
+      await downloadCsv('/api/reporting/csv/sales', buildReportQuery({ customer_id: csvCustomerId }));
+    } finally {
+      setCsvBusy((s) => ({ ...s, sales: false }));
+    }
+  };
+
+  const doPreview = async (type: 'category' | 'sales') => {
+    setPreviewError('');
+    try {
+      const endpoint = type === 'category' ? '/api/reporting/csv/category-sales' : '/api/reporting/csv/sales';
+      const q = type === 'category' ? buildReportQuery() : buildReportQuery({ customer_id: csvCustomerId });
+      const { header, body } = await previewCsv(endpoint, q);
+      setPreviewTitle(type === 'category' ? 'Category Sales CSV' : 'Sales CSV');
+      setPreviewHeader(header);
+      setPreviewBody(body);
+      setPreviewOpen(true);
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to preview CSV');
+    }
   };
 
   const categoryName = (categoryId: number): string => {
@@ -952,6 +1247,115 @@ export default function InventoryReportsPage() {
               </div>
             </div>
 
+            {/* CSV Exports */}
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
+                <BarChart3 className="w-5 h-5" />
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">CSV Exports</h2>
+              </div>
+              <div className="p-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
+                    <input
+                      value={csvStoreId}
+                      onChange={(e) => setCsvStoreId(e.target.value)}
+                      placeholder="e.g. 1"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
+                    <select
+                      value={csvStatus}
+                      onChange={(e) => setCsvStatus(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                    >
+                      <option value="">All statuses</option>
+                      <option value="completed">completed</option>
+                      <option value="confirmed">confirmed</option>
+                      <option value="pending">pending</option>
+                      <option value="pending_assignment">pending_assignment</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (Sales CSV only)</label>
+                    <input
+                      value={csvCustomerId}
+                      onChange={(e) => setCsvCustomerId(e.target.value)}
+                      placeholder="e.g. 25"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                    />
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <button
+                      onClick={() => loadAll()}
+                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                    >
+                      Refresh data
+                    </button>
+                  </div>
+                </div>
+
+                {previewError && (
+                  <div className="mt-3 p-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-sm text-red-700 dark:text-red-300">
+                    {previewError}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">Category Sales CSV</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Grouped by product category with VAT (7.5) and net breakdown.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => doPreview('category')}
+                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        disabled={csvBusy.category}
+                        onClick={doDownloadCategory}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvBusy.category ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">Sales CSV</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Order-level export (customer, products, delivery, payment, status).
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => doPreview('sales')}
+                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        disabled={csvBusy.sales}
+                        onClick={doDownloadSales}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvBusy.sales ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 text-xs text-gray-500 dark:text-gray-400">
+                  Uses the same date range currently selected above: <span className="font-semibold">{dateFrom}</span> →{' '}
+                  <span className="font-semibold">{dateTo}</span>.
+                </div>
+              </div>
+            </div>
+
             {/* Weekly report */}
             <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="p-4 border-b border-gray-200 dark:border-gray-700">
@@ -1016,6 +1420,63 @@ export default function InventoryReportsPage() {
                 </table>
               </div>
             </div>
+
+            {/* CSV Preview Modal */}
+            {previewOpen && (
+              <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setPreviewOpen(false)}>
+                <div
+                  className="w-full max-w-5xl max-h-[85vh] bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{previewTitle}</h3>
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Showing first {previewBody.length} rows</p>
+                    </div>
+                    <button
+                      onClick={() => setPreviewOpen(false)}
+                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="overflow-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 dark:bg-gray-900/40 sticky top-0">
+                        <tr>
+                          {previewHeader.map((h, idx) => (
+                            <th
+                              key={idx}
+                              className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap"
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewBody.map((r, ridx) => (
+                          <tr key={ridx} className="border-t border-gray-100 dark:border-gray-700">
+                            {r.map((c, cidx) => (
+                              <td key={cidx} className="py-2 px-3 text-gray-900 dark:text-white whitespace-nowrap">
+                                {c}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {previewBody.length === 0 && (
+                          <tr>
+                            <td colSpan={previewHeader.length || 1} className="py-10 text-center text-gray-600 dark:text-gray-400">
+                              No rows.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
           </main>
         </div>
       </div>
