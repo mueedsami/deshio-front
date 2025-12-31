@@ -84,49 +84,56 @@ function formatMoney(n: number): string {
   return fixed;
 }
 
-function parseCsvText(csv: string, maxRows = 60): string[][] {
+// Minimal CSV parser (supports quoted fields + commas + newlines)
+function parseCsvText(text: string, maxRows = 60): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = '';
   let inQuotes = false;
 
-  for (let i = 0; i < csv.length; i++) {
-    const c = csv[i];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
 
     if (inQuotes) {
-      if (c === '"') {
-        if (csv[i + 1] === '"') {
+      if (ch === '"') {
+        const next = text[i + 1];
+        if (next === '"') {
           field += '"';
           i++;
         } else {
           inQuotes = false;
         }
       } else {
-        field += c;
+        field += ch;
       }
       continue;
     }
 
-    if (c === '"') {
+    if (ch === '"') {
       inQuotes = true;
       continue;
     }
-    if (c === ',') {
+
+    if (ch === ',') {
       row.push(field);
       field = '';
       continue;
     }
-    if (c === '\n') {
+
+    if (ch === '\n') {
       row.push(field);
+      field = '';
       rows.push(row);
       row = [];
-      field = '';
       if (rows.length >= maxRows) break;
       continue;
     }
-    if (c === '\r') continue;
 
-    field += c;
+    if (ch === '\r') {
+      continue;
+    }
+
+    field += ch;
   }
 
   if (rows.length < maxRows && (field.length > 0 || row.length > 0)) {
@@ -160,96 +167,16 @@ export default function InventoryReportsPage() {
     pending: false,
   });
 
-  // CSV export (Reporting API)
-  const [csvStoreId, setCsvStoreId] = useState<string>('');
-  const [csvStatus, setCsvStatus] = useState<string>(''); // empty = all
-  const [csvCustomerId, setCsvCustomerId] = useState<string>(''); // only for sales report
+  // CSV Exports (Reporting API)
+  const [csvStoreId, setCsvStoreId] = useState('');
+  const [csvStatus, setCsvStatus] = useState(''); // empty = all statuses
+  const [csvCustomerId, setCsvCustomerId] = useState(''); // Sales CSV only
   const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
-  const [csvPreviewOpen, setCsvPreviewOpen] = useState(false);
-  const [csvPreviewTitle, setCsvPreviewTitle] = useState('');
-  const [csvPreviewRows, setCsvPreviewRows] = useState<string[][]>([]);
-  const [csvPreviewError, setCsvPreviewError] = useState<string>('');
-
-  const buildCsvParams = (extra?: Record<string, string>) => {
-    const p = new URLSearchParams();
-    if (dateFrom) p.set('date_from', dateFrom);
-    if (dateTo) p.set('date_to', dateTo);
-    if (csvStoreId.trim()) p.set('store_id', csvStoreId.trim());
-    if (csvStatus.trim()) p.set('status', csvStatus.trim());
-    if (extra) {
-      Object.entries(extra).forEach(([k, v]) => {
-        if (v?.trim()) p.set(k, v.trim());
-      });
-    }
-    return p;
-  };
-
-  const getAuthHeader = () => {
-    if (typeof window === 'undefined') return {};
-    const token = localStorage.getItem('authToken');
-    if (!token) return {};
-    return { Authorization: `Bearer ${token}` };
-  };
-
-  const downloadCsv = async (endpoint: string, params: URLSearchParams, busyKey: 'category' | 'sales') => {
-    try {
-      setCsvBusy((b) => ({ ...b, [busyKey]: true }));
-      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: getAuthHeader() });
-      if (!res.ok) throw new Error(`Failed to download CSV (${res.status})`);
-      const blob = await res.blob();
-      const cd = res.headers.get('content-disposition') || '';
-      const match = cd.match(/filename="?([^";]+)"?/i);
-      const filename = match?.[1] || 'report.csv';
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setCsvPreviewError(e?.message || 'Failed to download CSV');
-      setCsvPreviewOpen(true);
-      setCsvPreviewTitle('CSV Export Error');
-      setCsvPreviewRows([[e?.message || 'Failed to download CSV']]);
-    } finally {
-      setCsvBusy((b) => ({ ...b, [busyKey]: false }));
-    }
-  };
-
-  const previewCsv = async (title: string, endpoint: string, params: URLSearchParams, busyKey: 'category' | 'sales') => {
-    try {
-      setCsvBusy((b) => ({ ...b, [busyKey]: true }));
-      setCsvPreviewError('');
-      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: getAuthHeader() });
-      if (!res.ok) throw new Error(`Failed to load CSV (${res.status})`);
-      const text = await res.text();
-      const parsed = parseCsvText(text, 60);
-      setCsvPreviewTitle(title);
-      setCsvPreviewRows(parsed);
-      setCsvPreviewOpen(true);
-    } catch (e: any) {
-      setCsvPreviewError(e?.message || 'Failed to preview CSV');
-      setCsvPreviewTitle(title);
-      setCsvPreviewRows([[e?.message || 'Failed to preview CSV']]);
-      setCsvPreviewOpen(true);
-    } finally {
-      setCsvBusy((b) => ({ ...b, [busyKey]: false }));
-    }
-  };
-
-  // CSV Reporting (Downloads + Preview)
-  const [csvStoreId, setCsvStoreId] = useState<string>('');
-  const [csvStatus, setCsvStatus] = useState<string>(''); // empty = all statuses
-  const [csvCustomerId, setCsvCustomerId] = useState<string>('');
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
-
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTitle, setPreviewTitle] = useState('');
-  const [previewHead, setPreviewHead] = useState<string[]>([]);
-  const [previewRows, setPreviewRows] = useState<string[][]>([]);
-  const [previewErr, setPreviewErr] = useState('');
+  const [previewHeader, setPreviewHeader] = useState<string[]>([]);
+  const [previewBody, setPreviewBody] = useState<string[][]>([]);
+  const [previewError, setPreviewError] = useState('');
 
   // Data states
   const [loading, setLoading] = useState(true);
@@ -265,68 +192,6 @@ export default function InventoryReportsPage() {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const buildCsvParams = (extra?: Record<string, string>) => {
-    const p = new URLSearchParams();
-    if (dateFrom) p.set('date_from', dateFrom);
-    if (dateTo) p.set('date_to', dateTo);
-    if (csvStoreId.trim()) p.set('store_id', csvStoreId.trim());
-    if (csvStatus) p.set('status', csvStatus);
-    if (extra) Object.entries(extra).forEach(([k, v]) => v && p.set(k, v));
-    return p;
-  };
-
-  const getAuthHeader = () => {
-    if (typeof window === 'undefined') return {};
-    const token = localStorage.getItem('authToken');
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
-
-  const downloadCsv = async (endpoint: string, params: URLSearchParams, kind: 'category' | 'sales') => {
-    try {
-      setCsvBusy((s) => ({ ...s, [kind]: true }));
-      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: { ...getAuthHeader() } });
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
-
-      const blob = await res.blob();
-      const cd = res.headers.get('content-disposition') || '';
-      const match = cd.match(/filename="?([^\"]+)"?/i);
-      const filename = match?.[1] || (kind === 'category' ? 'category-sales-report.csv' : 'sales-report.csv');
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, [kind]: false }));
-    }
-  };
-
-  const previewCsv = async (title: string, endpoint: string, params: URLSearchParams) => {
-    setPreviewErr('');
-    setPreviewTitle(title);
-    setPreviewHead([]);
-    setPreviewRows([]);
-    setPreviewOpen(true);
-    try {
-      const res = await fetch(`${endpoint}?${params.toString()}`, { headers: { ...getAuthHeader() } });
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      const text = await res.text();
-      const parsed = parseCsvText(text, 60);
-      const head = parsed[0] || [];
-      const body = parsed.slice(1);
-      setPreviewHead(head);
-      setPreviewRows(body);
-    } catch (e: any) {
-      setPreviewErr(e?.message || 'Failed to preview');
-    }
-  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -416,13 +281,14 @@ export default function InventoryReportsPage() {
     return { orders: Array.from(uniq.values()), isTruncated: truncated };
   };
 
+  // --- CSV Exports (Reporting API) helpers ---
   const buildReportQuery = (extra?: { customer_id?: string }) => {
     const q = new URLSearchParams();
     if (dateFrom) q.set('date_from', dateFrom);
     if (dateTo) q.set('date_to', dateTo);
-    if (csvStoreId) q.set('store_id', csvStoreId);
-    if (csvStatus) q.set('status', csvStatus);
-    if (extra?.customer_id) q.set('customer_id', extra.customer_id);
+    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
+    if (csvStatus.trim()) q.set('status', csvStatus.trim());
+    if (extra?.customer_id?.trim()) q.set('customer_id', extra.customer_id.trim());
     return q;
   };
 
@@ -465,17 +331,13 @@ export default function InventoryReportsPage() {
     return { header, body };
   };
 
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTitle, setPreviewTitle] = useState('');
-  const [previewHeader, setPreviewHeader] = useState<string[]>([]);
-  const [previewBody, setPreviewBody] = useState<string[][]>([]);
-  const [previewError, setPreviewError] = useState('');
-
   const doDownloadCategory = async () => {
     setCsvBusy((s) => ({ ...s, category: true }));
+    setPreviewError('');
     try {
       await downloadCsv('/api/reporting/csv/category-sales', buildReportQuery());
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download CSV');
     } finally {
       setCsvBusy((s) => ({ ...s, category: false }));
     }
@@ -483,8 +345,11 @@ export default function InventoryReportsPage() {
 
   const doDownloadSales = async () => {
     setCsvBusy((s) => ({ ...s, sales: true }));
+    setPreviewError('');
     try {
       await downloadCsv('/api/reporting/csv/sales', buildReportQuery({ customer_id: csvCustomerId }));
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download CSV');
     } finally {
       setCsvBusy((s) => ({ ...s, sales: false }));
     }
@@ -1307,9 +1172,7 @@ export default function InventoryReportsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                     <h3 className="font-semibold text-gray-900 dark:text-white">Category Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Grouped by product category with VAT (7.5) and net breakdown.
-                    </p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Grouped by product category with VAT (7.5) and net breakdown.</p>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => doPreview('category')}
@@ -1326,11 +1189,10 @@ export default function InventoryReportsPage() {
                       </button>
                     </div>
                   </div>
+
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                     <h3 className="font-semibold text-gray-900 dark:text-white">Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Order-level export (customer, products, delivery, payment, status).
-                    </p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order-level export (customer, products, delivery, payment, status).</p>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => doPreview('sales')}
@@ -1440,6 +1302,7 @@ export default function InventoryReportsPage() {
                       Close
                     </button>
                   </div>
+
                   <div className="overflow-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-gray-50 dark:bg-gray-900/40 sticky top-0">
