@@ -1,6 +1,87 @@
 // services/cartService.ts
 
 import axiosInstance from '@/lib/axios';
+import catalogService from '@/services/catalogService';
+
+export const GUEST_CART_STORAGE_KEY = 'guest_cart_v1' as const;
+
+type GuestCartStorageItem = {
+  id: number;
+  product_id: number;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  variant_options?: VariantOptions | null;
+  notes?: string;
+  product_snapshot: CartProduct;
+  added_at: string;
+  updated_at: string;
+};
+
+type GuestCartStorage = {
+  items: GuestCartStorageItem[];
+  updated_at: string;
+};
+
+function hasCustomerToken(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!localStorage.getItem('auth_token');
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function safeParseGuestCart(): GuestCartStorage {
+  if (typeof window === 'undefined') {
+    return { items: [], updated_at: nowIso() };
+  }
+
+  try {
+    const raw = localStorage.getItem(GUEST_CART_STORAGE_KEY);
+    if (!raw) return { items: [], updated_at: nowIso() };
+    const parsed = JSON.parse(raw) as GuestCartStorage;
+    if (!parsed || !Array.isArray(parsed.items)) return { items: [], updated_at: nowIso() };
+    return { items: parsed.items, updated_at: parsed.updated_at || nowIso() };
+  } catch {
+    return { items: [], updated_at: nowIso() };
+  }
+}
+
+function saveGuestCart(cart: GuestCartStorage) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(GUEST_CART_STORAGE_KEY, JSON.stringify(cart));
+  // Let UI refresh cart badge etc.
+  window.dispatchEvent(new Event('cart-updated'));
+}
+
+function normalizeCartProductFromCatalog(product: any): CartProduct {
+  const images = Array.isArray(product?.images)
+    ? product.images.map((img: any, idx: number) => ({
+        id: Number(img.id || idx + 1),
+        image_url: String(img.image_url || img.thumbnail_url || ''),
+        is_primary: Boolean(img.is_primary),
+      }))
+    : [];
+
+  return {
+    id: Number(product.id),
+    name: String(product.name || ''),
+    selling_price: product.selling_price ?? product.price ?? 0,
+    images,
+    category: product.category?.name || product.category || undefined,
+    stock_quantity: Number(product.stock_quantity ?? 0),
+    in_stock: Boolean(product.in_stock ?? true),
+    sku: product.sku || undefined,
+  };
+}
+
+function variantKey(variant_options?: VariantOptions | null): string {
+  if (!variant_options) return '';
+  const color = variant_options.color || '';
+  const size = variant_options.size || '';
+  return `${color}::${size}`;
+}
 
 export interface CartProduct {
   id: number;
@@ -96,11 +177,47 @@ export interface ApiResponse<T> {
 }
 
 class CartService {
+  private buildGuestCart(storage: GuestCartStorage): Cart {
+    const cart_items: CartItem[] = storage.items.map((it) => ({
+      id: it.id,
+      product_id: it.product_id,
+      product: it.product_snapshot,
+      variant_options: it.variant_options || null,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      total_price: it.total_price,
+      notes: it.notes,
+      added_at: it.added_at,
+      updated_at: it.updated_at,
+    }));
+
+    const total_items = cart_items.reduce((s, i) => s + i.quantity, 0);
+    const total_amount = cart_items.reduce((s, i) => {
+      const n = typeof i.total_price === 'string' ? parseFloat(i.total_price) : (i.total_price as number);
+      return s + (Number.isFinite(n) ? n : 0);
+    }, 0);
+
+    return {
+      cart_items,
+      summary: {
+        total_items,
+        total_amount,
+        currency: 'BDT',
+        has_items: total_items > 0,
+      },
+    };
+  }
+
   /**
    * Get customer's cart
    */
   async getCart(): Promise<Cart> {
     try {
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        return this.buildGuestCart(safeParseGuestCart());
+      }
+
       const response = await axiosInstance.get<ApiResponse<Cart>>('/cart');
       
       if (!response.data.success) {
@@ -124,6 +241,86 @@ class CartService {
   }> {
     try {
       console.log('🛒 Adding to cart:', payload);
+
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        const storage = safeParseGuestCart();
+        const productDetail = await catalogService.getProduct(payload.product_id);
+        const productSnapshot = normalizeCartProductFromCatalog(productDetail.product);
+
+        const vKey = variantKey(payload.variant_options || null);
+        const existingIndex = storage.items.findIndex(
+          (it) => it.product_id === payload.product_id && variantKey(it.variant_options) === vKey
+        );
+
+        const unitPriceNum = Number(productSnapshot.selling_price) || 0;
+        const ts = nowIso();
+
+        if (existingIndex >= 0) {
+          const existing = storage.items[existingIndex];
+          const newQty = existing.quantity + Math.max(1, payload.quantity);
+          const updated: GuestCartStorageItem = {
+            ...existing,
+            quantity: newQty,
+            unit_price: unitPriceNum,
+            total_price: unitPriceNum * newQty,
+            notes: payload.notes ?? existing.notes,
+            product_snapshot: productSnapshot,
+            updated_at: ts,
+          };
+          storage.items[existingIndex] = updated;
+          storage.updated_at = ts;
+          saveGuestCart(storage);
+          return {
+            cart_item: {
+              id: updated.id,
+              product_id: updated.product_id,
+              product: updated.product_snapshot,
+              variant_options: updated.variant_options || null,
+              quantity: updated.quantity,
+              unit_price: updated.unit_price,
+              total_price: updated.total_price,
+              notes: updated.notes,
+              added_at: updated.added_at,
+              updated_at: updated.updated_at,
+            },
+          };
+        }
+
+        const newId = Date.now() + Math.floor(Math.random() * 1000);
+        const qty = Math.max(1, payload.quantity);
+        const item: GuestCartStorageItem = {
+          id: newId,
+          product_id: payload.product_id,
+          quantity: qty,
+          unit_price: unitPriceNum,
+          total_price: unitPriceNum * qty,
+          variant_options: payload.variant_options || null,
+          notes: payload.notes,
+          product_snapshot: productSnapshot,
+          added_at: ts,
+          updated_at: ts,
+        };
+
+        storage.items.unshift(item);
+        storage.updated_at = ts;
+        saveGuestCart(storage);
+
+        return {
+          cart_item: {
+            id: item.id,
+            product_id: item.product_id,
+            product: item.product_snapshot,
+            variant_options: item.variant_options || null,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            notes: item.notes,
+            added_at: item.added_at,
+            updated_at: item.updated_at,
+          },
+        };
+      }
       
       const response = await axiosInstance.post<ApiResponse<{ cart_item: CartItem }>>(
         '/cart/add',
@@ -174,6 +371,51 @@ class CartService {
   }> {
     try {
       console.log(`🔄 Updating cart item ${cartItemId}:`, payload);
+
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        const storage = safeParseGuestCart();
+        const idx = storage.items.findIndex((it) => it.id === cartItemId);
+        if (idx === -1) throw new Error('Cart item not found');
+
+        const qty = Math.max(0, Number(payload.quantity || 0));
+        const ts = nowIso();
+
+        if (qty === 0) {
+          storage.items.splice(idx, 1);
+          storage.updated_at = ts;
+          saveGuestCart(storage);
+          return {
+            cart_item: {
+              id: cartItemId,
+              quantity: 0,
+              unit_price: 0,
+              total_price: 0,
+            },
+          };
+        }
+
+        const existing = storage.items[idx];
+        const unit = Number(existing.unit_price) || 0;
+        const updated: GuestCartStorageItem = {
+          ...existing,
+          quantity: qty,
+          total_price: unit * qty,
+          updated_at: ts,
+        };
+        storage.items[idx] = updated;
+        storage.updated_at = ts;
+        saveGuestCart(storage);
+
+        return {
+          cart_item: {
+            id: updated.id,
+            quantity: updated.quantity,
+            unit_price: updated.unit_price,
+            total_price: updated.total_price,
+          },
+        };
+      }
       
       const response = await axiosInstance.put<ApiResponse<{
         cart_item: {
@@ -220,6 +462,16 @@ class CartService {
   async removeFromCart(cartItemId: number): Promise<void> {
     try {
       console.log(`🗑️ Removing cart item ${cartItemId}`);
+
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        const storage = safeParseGuestCart();
+        const next = storage.items.filter((it) => it.id !== cartItemId);
+        storage.items = next;
+        storage.updated_at = nowIso();
+        saveGuestCart(storage);
+        return;
+      }
       
       const response = await axiosInstance.delete<ApiResponse<any>>(
         `/cart/remove/${cartItemId}`
@@ -247,6 +499,12 @@ class CartService {
    */
   async clearCart(): Promise<void> {
     try {
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        saveGuestCart({ items: [], updated_at: nowIso() });
+        return;
+      }
+
       const response = await axiosInstance.delete<ApiResponse<any>>('/cart/clear');
       
       if (!response.data.success) {
@@ -345,6 +603,11 @@ class CartService {
    */
   async getCartSummary(): Promise<CartSummary> {
     try {
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        return this.buildGuestCart(safeParseGuestCart()).summary;
+      }
+
       const response = await axiosInstance.get<ApiResponse<CartSummary>>('/cart/summary');
       
       if (!response.data.success) {
@@ -368,6 +631,43 @@ class CartService {
    */
   async validateCart(): Promise<CartValidation> {
     try {
+      // Guest cart (localStorage)
+      if (!hasCustomerToken()) {
+        const cart = this.buildGuestCart(safeParseGuestCart());
+        const issues: CartValidationIssue[] = [];
+
+        for (const item of cart.cart_items) {
+          const available = Number(item.product.stock_quantity ?? 0);
+          if (item.product.in_stock === false) {
+            issues.push({
+              item_id: item.id,
+              product_name: item.product.name,
+              issue: 'Out of stock',
+              available_quantity: 0,
+            });
+          } else if (available > 0 && item.quantity > available) {
+            issues.push({
+              item_id: item.id,
+              product_name: item.product.name,
+              issue: 'Insufficient stock',
+              available_quantity: available,
+            });
+          }
+        }
+
+        const total_amount = typeof cart.summary.total_amount === 'string'
+          ? parseFloat(cart.summary.total_amount)
+          : (cart.summary.total_amount as number);
+
+        return {
+          is_valid: issues.length === 0 && cart.summary.total_items > 0,
+          valid_items_count: Math.max(0, cart.cart_items.length - issues.length),
+          total_items_count: cart.cart_items.length,
+          issues,
+          total_amount,
+        };
+      }
+
       const response = await axiosInstance.post<ApiResponse<CartValidation>>('/cart/validate');
       
       // Note: Backend may return success: false when there are issues

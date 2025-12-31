@@ -20,6 +20,9 @@ const PUBLIC_ROUTES = [
   '/customer-auth/password/reset',
   '/customer-auth/email/verify',
   '/customer-auth/email/resend',
+  // Guest checkout (no auth)
+  '/guest-checkout',
+  '/guest-orders/by-phone',
   '/payment-method',
 ];
 

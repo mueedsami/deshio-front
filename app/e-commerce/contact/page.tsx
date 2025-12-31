@@ -1,140 +1,98 @@
-"use client";
+'use client';
 
-import React from "react";
-import Navigation from "@/components/ecommerce/Navigation";
-import { Phone, MapPin, MessageCircle } from "lucide-react";
+import React from 'react';
+import Link from 'next/link';
+import Navigation from '@/components/ecommerce/Navigation';
+import Footer from '@/components/ecommerce/Footer';
+import { Mail, MapPin, Phone, Clock, Facebook, MessageCircle } from 'lucide-react';
 
-const locations = [
-  {
-    title: "Mirpur 12",
-    address: "Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12",
-    phone: "01942565664",
-  },
-  {
-    title: "Jamuna",
-    address: "3C-17A, Level 3, Jamuna",
-    phone: "01307130535",
-  },
-  {
-    title: "Bashundhara",
-    address: "38, 39, 40, Block D, Level 5, Bashundhara",
-    phone: "01336041064",
-  },
-];
+import {
+  CLIENT_NAME,
+  CLIENT_EMAIL,
+  CLIENT_PHONE,
+  CLIENT_MOBILE,
+  CLIENT_ADDRESS,
+  CLIENT_SUPPORT_HOURS,
+  CLIENT_FACEBOOK,
+} from '@/lib/constants';
 
 export default function ContactPage() {
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-gray-50">
       <Navigation />
 
-      {/* Header */}
-      <section className="relative overflow-hidden">
-        <div className="absolute inset-0">
-          <div className="absolute -top-24 -left-24 h-80 w-80 rounded-full bg-rose-100/60 blur-3xl" />
-          <div className="absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-red-100/50 blur-3xl" />
-          <div className="absolute inset-0 bg-gradient-to-b from-white via-white/95 to-white" />
-        </div>
-
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-14 md:py-18">
-          <p className="text-[11px] uppercase tracking-widest text-gray-500">
-            Contact Errum
-          </p>
-          <h1 className="mt-2 text-3xl sm:text-4xl font-bold text-gray-900">
-            We&apos;re here to help.
-          </h1>
-          <p className="mt-4 max-w-2xl text-sm sm:text-base text-gray-600">
-            Visit one of our stores or reach us on phone/WhatsApp for quick
-            assistance and international orders.
-          </p>
-        </div>
-      </section>
-
-      {/* Locations */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="grid md:grid-cols-3 gap-6">
-          {locations.map((loc) => (
-            <div
-              key={loc.title}
-              className="rounded-2xl border border-gray-100 bg-white p-6 shadow-sm hover:shadow-md transition"
-            >
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-8 md:p-10">
+            <p className="text-[11px] uppercase tracking-widest text-gray-500">Contact {CLIENT_NAME}</p>
+            <h1 className="mt-2 text-3xl sm:text-4xl font-bold text-gray-900">We&apos;re here to help</h1>
+            <p className="mt-4 max-w-2xl text-sm sm:text-base text-gray-600">
+              Need order help, product info, or delivery support? Reach us anytime during our support hours.
+            </p>
+
+            <div className="mt-8 grid md:grid-cols-3 gap-6">
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/40 p-6">
+                <div className="flex items-center gap-2">
+                  <Phone className="h-5 w-5 text-red-700" />
+                  <h3 className="text-base font-bold text-gray-900">Call</h3>
+                </div>
+                <div className="mt-4 space-y-2 text-sm">
+                  <p className="text-gray-700">
+                    <span className="font-semibold">Phone:</span> {CLIENT_PHONE}
+                  </p>
+                  <p className="text-gray-700">
+                    <span className="font-semibold">Mobile:</span> {CLIENT_MOBILE}
+                  </p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/40 p-6">
+                <div className="flex items-center gap-2">
+                  <Mail className="h-5 w-5 text-red-700" />
+                  <h3 className="text-base font-bold text-gray-900">Email</h3>
+                </div>
+                <p className="mt-4 text-sm text-gray-700">{CLIENT_EMAIL}</p>
+              </div>
+
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/40 p-6">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-red-700" />
+                  <h3 className="text-base font-bold text-gray-900">Support Hours</h3>
+                </div>
+                <p className="mt-4 text-sm text-gray-700">{CLIENT_SUPPORT_HOURS}</p>
+              </div>
+            </div>
+
+            <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-6">
               <div className="flex items-center gap-2">
                 <MapPin className="h-5 w-5 text-red-700" />
-                <h3 className="text-base font-bold text-gray-900">
-                  {loc.title}
-                </h3>
+                <h3 className="text-base font-bold text-gray-900">Address</h3>
               </div>
-              <p className="mt-3 text-sm text-gray-600 leading-relaxed">
-                {loc.address}
-              </p>
-
-              <div className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gray-50 border border-gray-100 px-3 py-2">
-                <Phone className="h-4 w-4 text-gray-700" />
-                <span className="text-sm font-semibold text-gray-900">
-                  {loc.phone}
-                </span>
-              </div>
+              <p className="mt-3 text-sm text-gray-700 leading-relaxed">{CLIENT_ADDRESS}</p>
             </div>
-          ))}
-        </div>
 
-        {/* WhatsApp + International */}
-        <div className="mt-10 rounded-2xl border border-gray-100 bg-gray-50/40 p-6">
-          <div className="flex items-start sm:items-center gap-3 sm:gap-4 flex-col sm:flex-row justify-between">
-            <div>
+            <div className="mt-6 rounded-2xl border border-gray-100 bg-white p-6">
               <div className="flex items-center gap-2">
                 <MessageCircle className="h-5 w-5 text-red-700" />
-                <h3 className="text-base font-bold text-gray-900">
-                  WhatsApp for International Orders ✈️
-                </h3>
+                <h3 className="text-base font-bold text-gray-900">Our Facebook</h3>
               </div>
-              <p className="mt-2 text-sm text-gray-600">
-                For overseas orders and fast support, message us directly.
+              <p className="mt-3 text-sm text-gray-700">
+                Follow updates, new arrivals & community posts on <span className="font-semibold">Deshio-দেশীয়</span>.
               </p>
-            </div>
-
-            <div className="rounded-xl bg-white border border-gray-100 px-4 py-2 text-sm font-semibold text-gray-900">
-              WhatsApp: 01942565664
+              <Link
+                href={CLIENT_FACEBOOK}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-50 border border-blue-100 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+              >
+                <Facebook size={18} /> Visit Facebook
+              </Link>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Optional simple contact form (no API required) */}
-      <section className="border-t border-gray-100">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-          <h2 className="text-xl font-bold text-gray-900">
-            Send us a message
-          </h2>
-          <p className="mt-2 text-sm text-gray-600">
-            This form is UI-only for now. You can connect it to your API later.
-          </p>
-
-          <div className="mt-6 grid gap-4">
-            <input
-              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-red-200"
-              placeholder="Your name"
-            />
-            <input
-              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-red-200"
-              placeholder="Your phone number"
-            />
-            <textarea
-              rows={5}
-              className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-red-200"
-              placeholder="Your message"
-            />
-            <button
-              type="button"
-              className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-5 py-3 text-xs sm:text-sm font-semibold text-white hover:bg-black transition"
-              onClick={() => {
-                alert("Message form is not connected yet.");
-              }}
-            >
-              Send message
-            </button>
-          </div>
-        </div>
-      </section>
+      <Footer />
     </div>
   );
 }

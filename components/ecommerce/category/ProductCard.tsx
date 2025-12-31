@@ -28,17 +28,8 @@ export default function ProductCard({ product, onCartOpen }: ProductCardProps) {
 
     setIsAdding(true);
 
-    // Keep your existing cart item shape to avoid breaking behavior
-    const cartItem = {
-      id: product.variations[0].id,
-      name: product.baseName,
-      image: product.image,
-      price: product.variations[0].price,
-      sku: product.variations[0].attributes?.SKU || "",
-      quantity: 1,
-    };
-
-    addToCart(cartItem as any, 1);
+    // Use persisted cart (works for both logged-in and guest users)
+    await addToCart(product.variations[0].id, 1);
 
     setTimeout(() => {
       setIsAdding(false);

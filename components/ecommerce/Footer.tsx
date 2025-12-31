@@ -1,45 +1,71 @@
 'use client';
 
+import Image from 'next/image';
+import Link from 'next/link';
 import React from 'react';
-import { Facebook, Twitter, Instagram, Youtube, Mail, Phone, MapPin } from 'lucide-react';
+import { Facebook, Instagram, Youtube, Mail, Phone, MapPin, Clock, Heart } from 'lucide-react';
+
+import {
+  CLIENT_NAME,
+  CLIENT_EMAIL,
+  CLIENT_PHONE,
+  CLIENT_MOBILE,
+  CLIENT_ADDRESS,
+  CLIENT_SUPPORT_HOURS,
+  CLIENT_FACEBOOK,
+} from '@/lib/constants';
 
 export default function Footer() {
   return (
     <footer className="bg-gray-900 text-gray-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        {/* Main Footer Content */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
-          {/* Company Info */}
+        {/* Main */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 mb-12">
+          {/* Column 1: Logo + text + social */}
           <div>
-            <h3 className="text-white text-2xl font-bold mb-6">
-              Deshio
-            </h3>
-            <p className="text-sm mb-6 leading-relaxed">
-              Your destination for authentic Bangladeshi handcrafted sarees. We bring you the finest collection from skilled artisans.
+            <div className="flex items-center gap-3 mb-5">
+              <div className="relative w-12 h-12 rounded-xl bg-white/10 overflow-hidden border border-white/10">
+                <Image
+                  src="/logo.png"
+                  alt={`${CLIENT_NAME} logo`}
+                  fill
+                  className="object-contain p-2"
+                  priority
+                />
+              </div>
+              <div>
+                <p className="text-white text-xl font-bold leading-none">{CLIENT_NAME}</p>
+                <p className="text-[11px] text-gray-400">বেস্ট প্রাইসে বেস্ট কোয়ালিটি</p>
+              </div>
+            </div>
+
+            <p className="text-sm leading-relaxed text-gray-300/90 mb-6">
+              “এটা কোনো বিজনেস পেজ না, বরং একটা ফ্যামিলি” — দেশীয় তে পাবেন মেয়েদের কুর্তি, থ্রি পিছ,
+              ব্লক ড্রেস, জামদানি/মণিপুরী/বাটিক শাড়ি এবং হোম ডেকোর আইটেম।
             </p>
-            
-            {/* Social Links */}
+
             <div className="flex gap-3">
-                <a 
-                href="#" 
-                className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
-                >
-                <Facebook size={18} className="group-hover:scale-110 transition-transform" />
-                </a>
-              <a 
-                href="#" 
+              <a
+                href={CLIENT_FACEBOOK}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Facebook"
                 className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
               >
-                <Twitter size={18} className="group-hover:scale-110 transition-transform" />
+                <Facebook size={18} className="group-hover:scale-110 transition-transform" />
               </a>
-              <a 
-                href="#" 
+
+              {/* Optional placeholders */}
+              <a
+                href="#"
+                aria-label="Instagram"
                 className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
               >
                 <Instagram size={18} className="group-hover:scale-110 transition-transform" />
               </a>
-              <a 
-                href="#" 
+              <a
+                href="#"
+                aria-label="YouTube"
                 className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
               >
                 <Youtube size={18} className="group-hover:scale-110 transition-transform" />
@@ -47,137 +73,87 @@ export default function Footer() {
             </div>
           </div>
 
-          {/* Quick Links */}
+          {/* Column 2: Links */}
           <div>
-            <h4 className="text-white font-semibold mb-6 text-lg">Quick Links</h4>
+            <h4 className="text-white font-semibold mb-6 text-lg">Explore</h4>
             <ul className="space-y-3 text-sm">
               <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
+                <Link href="/e-commerce/about-us" className="hover:text-red-400 transition-colors flex items-center">
                   → About Us
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Shop All
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
+                <Link href="/e-commerce/categories" className="hover:text-red-400 transition-colors flex items-center">
                   → Categories
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
+                <Link href="/e-commerce/our-story" className="hover:text-red-400 transition-colors flex items-center">
                   → Our Story
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Blog
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
+                <Link href="/e-commerce/contact" className="hover:text-red-400 transition-colors flex items-center">
                   → Contact
-                </a>
-              </li>
-            </ul>
-          </div>
-
-          {/* Customer Service */}
-          <div>
-            <h4 className="text-white font-semibold mb-6 text-lg">Customer Service</h4>
-            <ul className="space-y-3 text-sm">
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Shipping Information
-                </a>
+                </Link>
               </li>
               <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Returns & Exchange
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Size Guide
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
+                <Link href="/e-commerce/order-tracking" className="hover:text-red-400 transition-colors flex items-center">
                   → Track Order
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → FAQs
-                </a>
-              </li>
-              <li>
-                <a href="#" className="hover:text-red-400 transition-colors flex items-center">
-                  → Privacy Policy
-                </a>
+                </Link>
               </li>
             </ul>
           </div>
 
-          {/* Contact Info */}
+          {/* Column 3: Contact info */}
           <div>
-            <h4 className="text-white font-semibold mb-6 text-lg">Contact Info</h4>
+            <h4 className="text-white font-semibold mb-6 text-lg">Contact</h4>
+
             <ul className="space-y-4 text-sm">
               <li className="flex items-start gap-3">
                 <MapPin size={18} className="text-red-400 flex-shrink-0 mt-1" />
-                <span>123 Fashion Street, Dhaka 1205, Bangladesh</span>
+                <span>{CLIENT_ADDRESS}</span>
               </li>
+
               <li className="flex items-start gap-3">
                 <Phone size={18} className="text-red-400 flex-shrink-0 mt-1" />
                 <div>
-                  <p>+880 1XXX-XXXXXX</p>
-                  <p>+880 1YYY-YYYYYY</p>
+                  <p>Phone: {CLIENT_PHONE}</p>
+                  <p>Mobile: {CLIENT_MOBILE}</p>
                 </div>
               </li>
+
               <li className="flex items-start gap-3">
                 <Mail size={18} className="text-red-400 flex-shrink-0 mt-1" />
                 <div>
-                  <p>info@shareebazar.com</p>
-                  <p>support@shareebazar.com</p>
+                  <p>{CLIENT_EMAIL}</p>
                 </div>
               </li>
             </ul>
-            
+
             <div className="mt-6 p-4 bg-gray-800 rounded-lg">
-              <p className="text-xs text-gray-400 mb-1">Working Hours</p>
-              <p className="text-sm font-semibold text-white">Mon - Sat: 9AM - 9PM</p>
-              <p className="text-sm text-gray-400">Sunday: Closed</p>
+              <p className="text-xs text-gray-400 mb-1 flex items-center gap-2">
+                <Clock className="w-4 h-4" /> Support hours
+              </p>
+              <p className="text-sm font-semibold text-white">{CLIENT_SUPPORT_HOURS}</p>
             </div>
           </div>
         </div>
 
-        {/* Payment Methods */}
-        <div className="border-t border-gray-800 pt-8 mb-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <p className="text-sm text-gray-400">We Accept:</p>
-            <div className="flex items-center gap-4">
-              <div className="px-4 py-2 bg-gray-800 rounded text-xs font-semibold">Visa</div>
-              <div className="px-4 py-2 bg-gray-800 rounded text-xs font-semibold">Mastercard</div>
-              <div className="px-4 py-2 bg-gray-800 rounded text-xs font-semibold">bKash</div>
-              <div className="px-4 py-2 bg-gray-800 rounded text-xs font-semibold">Nagad</div>
-              <div className="px-4 py-2 bg-gray-800 rounded text-xs font-semibold">Rocket</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Bottom Footer */}
-        <div className="border-t border-gray-800 pt-8 text-center">
-          <p className="text-sm text-gray-400">
-            &copy; 2025 ShareeBazar. All rights reserved. Crafted with <span className="text-red-500">❤</span> in Bangladesh
-          </p>
-          <div className="flex items-center justify-center gap-6 mt-4 text-xs">
-            <a href="#" className="hover:text-red-400 transition-colors">Terms of Service</a>
-            <span className="text-gray-700">•</span>
-            <a href="#" className="hover:text-red-400 transition-colors">Privacy Policy</a>
-            <span className="text-gray-700">•</span>
-            <a href="#" className="hover:text-red-400 transition-colors">Cookie Policy</a>
+        {/* Bottom */}
+        <div className="border-t border-gray-800 pt-8">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-gray-400">
+            <p>
+              {CLIENT_NAME} &copy; 2026. All rights reserved. Crafted with{' '}
+              <span className="inline-flex items-center gap-1 text-red-500">
+                <Heart className="w-4 h-4" />
+              </span>{' '}
+              in Bangladesh.
+            </p>
+            <p>
+              Developed by{' '}
+              <span className="text-gray-200 font-medium">mADestic Digital</span>
+            </p>
           </div>
         </div>
       </div>

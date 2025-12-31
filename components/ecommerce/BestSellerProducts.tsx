@@ -170,25 +170,14 @@ export default function BestSellerProducts() {
     }
 
     setAddingProductId(product.id);
-    
+
     const variation = product.variations[0];
-    const cartItem = {
-      id: variation.id,
-      name: product.name,
-      image: product.image,
-      price: variation.price, // Use raw number price from variation
-      sku: variation.attributes.SKU || '',
-      quantity: 1,
-    };
-
-    // Log cart item for debugging
-    console.log('Adding to cart:', cartItem);
-
-    addToCart(cartItem, 1);
+    // Add to persisted cart (works for both logged-in and guest users)
+    await addToCart(variation.id, 1);
 
     setTimeout(() => {
       setAddingProductId(null);
-      setIsCartOpen(true); // Open cart sidebar after adding
+      setIsCartOpen(true); // keep local open state for this component
     }, 1200);
   };
 

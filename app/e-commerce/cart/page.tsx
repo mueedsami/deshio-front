@@ -17,19 +17,13 @@ export default function CartPage() {
   const [couponCode, setCouponCode] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  // ✅ FIX: Check for both token types
   const isAuthenticated = () => {
-    const token = localStorage.getItem('customer_token') || localStorage.getItem('auth_token');
+    const token = localStorage.getItem('auth_token');
     return !!token;
   };
 
-  // Fetch cart on mount
+  // Fetch cart on mount (supports guest cart)
   useEffect(() => {
-    if (!isAuthenticated()) {
-      router.push('/e-commerce/login');
-      return;
-    }
-
     fetchCart();
   }, []);
 
@@ -51,7 +45,15 @@ export default function CartPage() {
       setError(err.message || 'Failed to load cart');
       
       if (err.message?.includes('401') || err.message?.includes('Unauthenticated')) {
-        router.push('/e-commerce/login');
+        // If token expired, fall back to guest cart (localStorage)
+        localStorage.removeItem('auth_token');
+        try {
+          const cartData = await cartService.getCart();
+          setCart(cartData);
+          setError(null);
+        } catch {
+          // ignore
+        }
       }
     } finally {
       setIsLoading(false);

@@ -259,25 +259,6 @@ export default function ProductDetailPage() {
     const stockQty = Number(selectedVariant.stock_quantity ?? 0);
     if (stockQty <= 0) return;
 
-    if (!isAuthenticated()) {
-      const pendingCartItem = {
-        product_id: selectedVariant.id,
-        quantity: quantity,
-        name: selectedVariant.name,
-        price: Number(selectedVariant.selling_price ?? 0),
-        image: (selectedVariant.images && selectedVariant.images[0]?.url) || '',
-        variant_options: {
-          color: selectedVariant.color,
-          size: selectedVariant.size,
-        }
-      };
-
-      localStorage.setItem('pending-cart-item', JSON.stringify(pendingCartItem));
-      localStorage.setItem('cart-redirect', 'true');
-      router.push('/e-commerce/login');
-      return;
-    }
-
     setIsAdding(true);
 
     try {
@@ -303,33 +284,10 @@ export default function ProductDetailPage() {
       setIsAdding(false);
 
       const errorMessage = error.message || '';
-      const isAuthError =
-        errorMessage.includes('401') ||
-        errorMessage.includes('Unauthenticated') ||
-        errorMessage.includes('unauthorized');
-
-      if (isAuthError) {
-        const pendingCartItem = {
-          product_id: selectedVariant.id,
-          quantity: quantity,
-          name: selectedVariant.name,
-          price: Number(selectedVariant.selling_price ?? 0),
-          image: (selectedVariant.images && selectedVariant.images[0]?.url) || '',
-          variant_options: {
-            color: selectedVariant.color,
-            size: selectedVariant.size,
-          }
-        };
-
-        localStorage.setItem('pending-cart-item', JSON.stringify(pendingCartItem));
-        localStorage.setItem('cart-redirect', 'true');
-        router.push('/e-commerce/login');
-      } else {
-        const displayMessage = errorMessage.includes('Insufficient stock')
-          ? errorMessage
-          : 'Failed to add item to cart. Please try again.';
-        alert(displayMessage);
-      }
+      const displayMessage = errorMessage.includes('Insufficient stock')
+        ? errorMessage
+        : 'Failed to add item to cart. Please try again.';
+      alert(displayMessage);
     }
   };
 
@@ -337,25 +295,6 @@ export default function ProductDetailPage() {
     e.stopPropagation();
 
     if (!item.in_stock) return;
-
-    if (!isAuthenticated()) {
-      const color = extractColorFromName(item.name);
-      const size = extractSizeFromName(item.name);
-
-      const pendingCartItem = {
-        product_id: item.id,
-        quantity: 1,
-        name: item.name,
-        price: Number((item as any).selling_price ?? 0),
-        image: item.images?.[0]?.url || '/placeholder-product.jpg',
-        variant_options: { color, size }
-      };
-
-      localStorage.setItem('pending-cart-item', JSON.stringify(pendingCartItem));
-      localStorage.setItem('cart-redirect', 'true');
-      router.push('/e-commerce/login');
-      return;
-    }
 
     try {
       const color = extractColorFromName(item.name);
@@ -375,33 +314,10 @@ export default function ProductDetailPage() {
       console.error('Error adding to cart:', error);
 
       const errorMessage = error.message || '';
-      const isAuthError =
-        errorMessage.includes('401') ||
-        errorMessage.includes('Unauthenticated') ||
-        errorMessage.includes('unauthorized');
-
-      if (isAuthError) {
-        const color = extractColorFromName(item.name);
-        const size = extractSizeFromName(item.name);
-
-        const pendingCartItem = {
-          product_id: item.id,
-          quantity: 1,
-          name: item.name,
-          price: Number((item as any).selling_price ?? 0),
-          image: item.images?.[0]?.url || '/placeholder-product.jpg',
-          variant_options: { color, size }
-        };
-
-        localStorage.setItem('pending-cart-item', JSON.stringify(pendingCartItem));
-        localStorage.setItem('cart-redirect', 'true');
-        router.push('/e-commerce/login');
-      } else {
-        const displayMessage = errorMessage.includes('Insufficient stock')
-          ? errorMessage
-          : 'Failed to add item to cart. Please try again.';
-        alert(displayMessage);
-      }
+      const displayMessage = errorMessage.includes('Insufficient stock')
+        ? errorMessage
+        : 'Failed to add item to cart. Please try again.';
+      alert(displayMessage);
     }
   };
 

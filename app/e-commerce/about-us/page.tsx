@@ -18,13 +18,13 @@ export default function AboutPage() {
             <div className="grid gap-10 lg:grid-cols-[1.7fr,1.3fr] items-start">
               <div>
                 <h1 className="text-3xl sm:text-4xl md:text-5xl font-semibold tracking-tight text-gray-900 mb-4">
-                  Everyday fashion,
-                  <span className="block">crafted with intention.</span>
+                  “এটা কোনো বিজনেস পেজ না,
+                  <span className="block">বরং একটা ফ্যামিলি”</span>
                 </h1>
                 <p className="text-gray-600 text-sm sm:text-base max-w-xl">
-                  {CLIENT_NAME} is a home-grown fashion house from Bangladesh, built on a simple promise:
-                  thoughtful design, honest quality, and a shopping experience that respects your time.
-                  From daily essentials to statement pieces, every collection is curated for real life.
+                  {CLIENT_NAME} (দেশীয়) একটি জনপ্রিয় Facebook-ভিত্তিক অনলাইন প্ল্যাটফর্ম—যেখানে
+                  <span className="font-medium"> বেস্ট প্রাইসে বেস্ট কোয়ালিটি</span> দিয়ে কুর্তি, থ্রি-পিস,
+                  ব্লক ড্রেস, জামদানি/মণিপুরী/বাটিক শাড়ি এবং হোম ডেকোর—সবই এক জায়গায় পাওয়া যায়।
                 </p>
               </div>
 
@@ -35,24 +35,24 @@ export default function AboutPage() {
                 <dl className="grid grid-cols-2 gap-4 text-sm">
                   <div>
                     <dt className="text-gray-500 text-xs uppercase tracking-wide">Founded</dt>
-                    <dd className="text-gray-900 font-medium mt-1">Bangladesh</dd>
+                    <dd className="text-gray-900 font-medium mt-1">9 Aug 2020</dd>
                   </div>
                   <div>
-                    <dt className="text-gray-500 text-xs uppercase tracking-wide">Focus</dt>
-                    <dd className="text-gray-900 font-medium mt-1">Comfort-first fashion</dd>
+                    <dt className="text-gray-500 text-xs uppercase tracking-wide">Tagline</dt>
+                    <dd className="text-gray-900 font-medium mt-1">Best price, best quality</dd>
                   </div>
                   <div>
-                    <dt className="text-gray-500 text-xs uppercase tracking-wide">Collections</dt>
-                    <dd className="text-gray-900 font-medium mt-1">Limited-batch drops</dd>
+                    <dt className="text-gray-500 text-xs uppercase tracking-wide">Community</dt>
+                    <dd className="text-gray-900 font-medium mt-1">Family-first shoppers</dd>
                   </div>
                   <div>
                     <dt className="text-gray-500 text-xs uppercase tracking-wide">Service</dt>
-                    <dd className="text-gray-900 font-medium mt-1">Nationwide delivery</dd>
+                    <dd className="text-gray-900 font-medium mt-1">Nationwide delivery & support</dd>
                   </div>
                 </dl>
                 <p className="text-xs text-gray-500 leading-relaxed">
-                  Behind every product is a small team working on fabric selection, fit testing,
-                  and quality control—so what you see online is what you receive at your doorstep.
+                  We focus on trusted sourcing, consistent quality, and friendly support—so the experience
+                  feels like shopping with family.
                 </p>
               </div>
             </div>
@@ -67,20 +67,16 @@ export default function AboutPage() {
                 Our story
               </h2>
               <p className="text-gray-700 text-sm sm:text-base mb-4">
-                {CLIENT_NAME} began with a simple observation: most wardrobes in Bangladesh are built
-                around comfort, not just trends. Yet finding pieces that feel good, fit well,
-                and last beyond a season is harder than it should be.
+                {CLIENT_NAME} শুরু হয় ২০২০ সালের ৯ আগস্ট—দেশীয় প্রোডাক্টের রিকগ্নাইজড ব্র্যান্ডের অভাব থেকে।
+                জাহীর + ইসরাত (একজন প্রফেশনাল সিভিল ইঞ্জিনিয়ার ও অন্যজন লয়ার) প্রোফেশন চেঞ্জ করে
+                নিজেদের স্বপ্নের বিজনেস শুরু করেন।
               </p>
               <p className="text-gray-700 text-sm sm:text-base mb-4">
-                We set out to change that. Instead of chasing fast fashion, we focus on fabrics
-                that breathe in our climate, cuts that move with you, and designs you can style
-                in more than one way. Each collection is released in carefully planned batches
-                to keep things fresh without overwhelming you with endless options.
+                আজ দেশীয় শুধুই একটি শপ নয়—এটা একটা কমিউনিটি। কাস্টমারদের ভরসা আর ভালোবাসায় একের পর এক
+                যোগ হয়েছে Deshio Doi Ghor, Deshio Factory এবং Bideshio।
               </p>
               <p className="text-gray-700 text-sm sm:text-base">
-                From the first sketch to the final stitch, we ask one question:
-                <span className="font-medium"> “Would we wear this, again and again?”</span>
-                If the answer is no, it doesn’t make it to the rack.
+                পুরো স্টোরি জানতে আমাদের <span className="font-medium">Our Story</span> পেজটি দেখুন।
               </p>
             </div>
 

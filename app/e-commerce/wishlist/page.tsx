@@ -32,15 +32,8 @@ export default function WishlistPage() {
   const handleAddToCart = (item: WishlistItem) => {
     setAddingToCartId(item.id);
     
-    // Add to cart
-    addToCart({
-      id: item.id,
-      name: item.name,
-      image: item.image,
-      price: item.price,
-      sku: item.sku || '',
-      quantity: 1,
-    }, 1);
+    // Add to persisted cart (works for both logged-in and guest users)
+    addToCart(Number(item.id), 1);
 
     setTimeout(() => {
       setAddingToCartId(null);

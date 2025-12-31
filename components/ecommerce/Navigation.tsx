@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Menu, X, ShoppingCart, Search, User, ChevronDown, LogOut, Heart, Package } from 'lucide-react';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
@@ -28,29 +29,19 @@ const Navbar = () => {
     fetchCategories();
   }, []);
 
-  // Fetch cart count
+  // Fetch cart count (works for both guest and authenticated users)
   useEffect(() => {
-    if (isAuthenticated) {
-      fetchCartCount();
-    } else {
-      setCartCount(0);
-    }
+    fetchCartCount();
   }, [isAuthenticated]);
 
   // Listen for cart updates
   useEffect(() => {
     const handleCartUpdate = () => {
-      if (isAuthenticated) {
-        fetchCartCount();
-      }
+      fetchCartCount();
     };
 
     const handleAuthChange = () => {
-      if (isAuthenticated) {
-        fetchCartCount();
-      } else {
-        setCartCount(0);
-      }
+      fetchCartCount();
     };
 
     window.addEventListener('cart-updated', handleCartUpdate);
@@ -127,9 +118,19 @@ const Navbar = () => {
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
           <div className="flex-shrink-0">
-            <Link href="/e-commerce" className="flex items-center space-x-2">
-              <div className="text-red-700 font-bold text-3xl">
-                DESHIO
+            <Link href="/e-commerce" className="flex items-center gap-3">
+              <div className="relative w-10 h-10 rounded-xl overflow-hidden bg-white border border-gray-100">
+                <Image
+                  src="/logo.png"
+                  alt="Deshio logo"
+                  fill
+                  className="object-contain p-2"
+                  priority
+                />
+              </div>
+              <div className="leading-tight">
+                <div className="text-gray-900 font-bold text-xl">Deshio</div>
+                <div className="text-[11px] text-gray-500">বেস্ট প্রাইসে বেস্ট কোয়ালিটি</div>
               </div>
             </Link>
           </div>
@@ -191,12 +192,12 @@ const Navbar = () => {
               )}
             </div>
 
-            <Link href="/e-commerce/products" className="text-gray-700 hover:text-red-700 transition">
-              All Products
+            <Link href="/e-commerce/about-us" className="text-gray-700 hover:text-red-700 transition">
+              About Us
             </Link>
 
-            <Link href="/e-commerce/about" className="text-gray-700 hover:text-red-700 transition">
-              About
+            <Link href="/e-commerce/our-story" className="text-gray-700 hover:text-red-700 transition">
+              Our Story
             </Link>
 
             <Link href="/e-commerce/contact" className="text-gray-700 hover:text-red-700 transition">
@@ -428,19 +429,19 @@ const Navbar = () => {
             </div>
 
             <Link
-              href="/e-commerce/products"
+              href="/e-commerce/about-us"
               className="block py-2 text-gray-700 hover:text-red-700 transition"
               onClick={() => setIsOpen(false)}
             >
-              All Products
+              About Us
             </Link>
 
             <Link
-              href="/e-commerce/about"
+              href="/e-commerce/our-story"
               className="block py-2 text-gray-700 hover:text-red-700 transition"
               onClick={() => setIsOpen(false)}
             >
-              About
+              Our Story
             </Link>
 
             <Link
@@ -449,6 +450,14 @@ const Navbar = () => {
               onClick={() => setIsOpen(false)}
             >
               Contact
+            </Link>
+
+            <Link
+              href="/e-commerce/order-tracking"
+              className="block py-2 text-gray-700 hover:text-red-700 transition"
+              onClick={() => setIsOpen(false)}
+            >
+              Track Order
             </Link>
 
             {/* Mobile Icons */}

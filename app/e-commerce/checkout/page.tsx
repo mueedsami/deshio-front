@@ -7,6 +7,7 @@ import Navigation from '@/components/ecommerce/Navigation';
 import SSLCommerzPayment from '@/components/ecommerce/SSLCommerzPayment';
 import checkoutService, { Address, OrderItem, PaymentMethod } from '@/services/checkoutService';
 import cartService from '@/services/cartService';
+import guestCheckoutService, { GuestPaymentMethod } from '@/services/guestCheckoutService';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -52,6 +53,22 @@ export default function CheckoutPage() {
   const [appliedCoupon, setAppliedCoupon] = useState<{ discount: number; message: string } | null>(null);
   const [shippingCharge, setShippingCharge] = useState(60);
 
+  // Guest checkout state
+  const [guestPhone, setGuestPhone] = useState('');
+  const [guestName, setGuestName] = useState('');
+  const [guestEmail, setGuestEmail] = useState('');
+  const [guestPaymentMethod, setGuestPaymentMethod] = useState<GuestPaymentMethod>('cod');
+  const [guestAddress, setGuestAddress] = useState({
+    full_name: '',
+    phone: '',
+    address_line_1: '',
+    address_line_2: '',
+    city: 'Dhaka',
+    state: 'Dhaka',
+    postal_code: '',
+    country: 'Bangladesh',
+  });
+
   // ✅ NEW: SSLCommerz payment screen state
   const [showSSLCommerzPayment, setShowSSLCommerzPayment] = useState(false);
 
@@ -60,13 +77,21 @@ export default function CheckoutPage() {
     return !!token;
   };
 
-  // Redirect if not authenticated
-  useEffect(() => {
-    if (!isAuthenticated()) {
-      localStorage.setItem('checkout-redirect', 'true');
-      router.push('/e-commerce/login');
-    }
-  }, [router]);
+  const isGuestCheckout = () => !isAuthenticated();
+
+  const formatBDPhone = (input: string) => {
+    const cleaned = input.replace(/[^0-9+]/g, '');
+    if (cleaned.startsWith('+880')) return cleaned;
+    if (cleaned.startsWith('880')) return '+880' + cleaned.slice(3);
+    if (cleaned.startsWith('0')) return cleaned;
+    if (/^1[3-9]\d{8}$/.test(cleaned)) return '0' + cleaned;
+    return cleaned;
+  };
+
+  const isValidBDPhone = (phone: string) => {
+    const cleaned = phone.replace(/\D/g, '');
+    return /^(?:880|0)?1[3-9]\d{8}$/.test(cleaned);
+  };
 
   // ✅ FIXED: Load selected items directly from backend
   useEffect(() => {
@@ -232,6 +257,13 @@ export default function CheckoutPage() {
     }
   }, [selectedShippingAddressId, addresses]);
 
+  // Guest shipping charge (based on typed city)
+  useEffect(() => {
+    if (isGuestCheckout()) {
+      setShippingCharge(checkoutService.calculateDeliveryCharge(guestAddress.city || 'Dhaka'));
+    }
+  }, [guestAddress.city]);
+
   // Calculate totals
   const orderItems: OrderItem[] = selectedItems.map(item => {
     const unitPrice = typeof item.unit_price === 'string' ? parseFloat(item.unit_price) : item.unit_price;
@@ -357,6 +389,116 @@ export default function CheckoutPage() {
     }
   };
 
+  // --- Guest Checkout helpers ---
+  const cleanPhone = (input: string) => input.replace(/[^0-9+]/g, '');
+
+  const formatBDPhone = (input: string) => {
+    const cleaned = input.replace(/\D/g, '');
+    if (cleaned.startsWith('880')) return '+880' + cleaned.slice(3);
+    if (cleaned.startsWith('0')) return '0' + cleaned.slice(1);
+    if (cleaned.length === 10) return '0' + cleaned;
+    return input.trim();
+  };
+
+  const isValidBDPhone = (input: string) => {
+    const cleaned = input.replace(/\D/g, '');
+    return /^(?:880|0)?1[3-9]\d{8}$/.test(cleaned);
+  };
+
+  const handleGuestPlaceOrder = async () => {
+    setError(null);
+
+    if (selectedItems.length === 0) {
+      setError('Your cart is empty. Please add items first.');
+      return;
+    }
+
+    if (!guestPhone.trim() || !isValidBDPhone(guestPhone)) {
+      setError('Please enter a valid Bangladesh phone number (e.g. 017xxxxxxxx)');
+      return;
+    }
+
+    if (!guestAddress.full_name.trim()) {
+      setError('Delivery name is required');
+      return;
+    }
+
+    if (!guestAddress.address_line_1.trim()) {
+      setError('Delivery address is required');
+      return;
+    }
+
+    if (!guestAddress.city.trim()) {
+      setError('City is required');
+      return;
+    }
+
+    if (!guestAddress.postal_code.trim()) {
+      setError('Postal code is required');
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const payload = {
+        phone: cleanPhone(formatBDPhone(guestPhone)),
+        items: selectedItems.map((it) => ({
+          product_id: it.product_id,
+          quantity: it.quantity,
+          ...(it.variant_options ? { variant_options: it.variant_options } : {}),
+        })),
+        payment_method: guestPaymentMethod,
+        delivery_address: {
+          full_name: guestAddress.full_name,
+          ...(guestAddress.phone?.trim() ? { phone: cleanPhone(guestAddress.phone) } : {}),
+          address_line_1: guestAddress.address_line_1,
+          ...(guestAddress.address_line_2?.trim() ? { address_line_2: guestAddress.address_line_2 } : {}),
+          city: guestAddress.city,
+          ...(guestAddress.state?.trim() ? { state: guestAddress.state } : {}),
+          postal_code: guestAddress.postal_code,
+          country: guestAddress.country || 'Bangladesh',
+        },
+        ...(guestName.trim() ? { customer_name: guestName.trim() } : {}),
+        ...(guestEmail.trim() ? { customer_email: guestEmail.trim() } : {}),
+        ...(orderNotes.trim() ? { notes: orderNotes.trim() } : {}),
+      };
+
+      const resp: any = await guestCheckoutService.checkout(payload as any);
+
+      // SSLCommerz style response
+      const paymentUrl = resp?.data?.payment_url;
+      if (paymentUrl) {
+        window.location.href = paymentUrl;
+        return;
+      }
+
+      // COD style response
+      const orderNumber = resp?.data?.order?.order_number;
+      if (!orderNumber) {
+        throw new Error(resp?.message || 'Order created, but no order number returned');
+      }
+
+      // Remove checked-out items from cart
+      for (const it of selectedItems) {
+        try {
+          await cartService.removeFromCart(it.id);
+        } catch {
+          // ignore
+        }
+      }
+
+      localStorage.removeItem('checkout-selected-items');
+
+      alert(`🎉 Order placed successfully!\n\nOrder Number: ${orderNumber}\nTotal: ৳${summary.total_amount.toFixed(2)}\n\nWe will contact you for confirmation.`);
+      router.push(`/e-commerce/order-confirmation/${orderNumber}`);
+    } catch (err: any) {
+      console.error('❌ Guest checkout failed:', err);
+      setError(err?.response?.data?.message || err?.message || 'Failed to place order. Please try again.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   // ✅ FIXED: Handle place order with SSLCommerz detection
   const handlePlaceOrder = async () => {
     if (!selectedShippingAddressId) {
@@ -474,6 +616,250 @@ export default function CheckoutPage() {
               setShowSSLCommerzPayment(false);
             }}
           />
+        </div>
+      </div>
+    );
+  }
+
+  // Guest checkout UI (no login required)
+  if (isGuestCheckout()) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Navigation />
+
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-start justify-between gap-4 mb-6">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Quick Checkout</h1>
+              <p className="text-gray-600 mt-1">No account needed — just enter your phone and delivery details.</p>
+            </div>
+            <Link
+              href="/e-commerce/login"
+              className="hidden sm:inline-flex px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-100"
+            >
+              Login / Register
+            </Link>
+          </div>
+
+          {error && (
+            <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start">
+              <AlertCircle className="text-red-600 mr-3 mt-0.5" size={20} />
+              <div className="text-red-700">{error}</div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Form */}
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-white rounded-xl shadow-sm p-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Contact</h2>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number *</label>
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      placeholder="017XXXXXXXX"
+                      value={guestPhone}
+                      onChange={(e) => setGuestPhone(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">We’ll use this to confirm and track your order.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Your Name (optional)</label>
+                    <input
+                      type="text"
+                      placeholder="Your name"
+                      value={guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email (optional)</label>
+                    <input
+                      type="email"
+                      placeholder="you@example.com"
+                      value={guestEmail}
+                      onChange={(e) => setGuestEmail(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm p-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Delivery Address</h2>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name *</label>
+                    <input
+                      type="text"
+                      placeholder="Recipient name"
+                      value={guestAddress.full_name}
+                      onChange={(e) => setGuestAddress({ ...guestAddress, full_name: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 1 *</label>
+                    <input
+                      type="text"
+                      placeholder="House, road, area"
+                      value={guestAddress.address_line_1}
+                      onChange={(e) => setGuestAddress({ ...guestAddress, address_line_1: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Address Line 2 (optional)</label>
+                    <input
+                      type="text"
+                      placeholder="Apartment, floor, landmark"
+                      value={guestAddress.address_line_2}
+                      onChange={(e) => setGuestAddress({ ...guestAddress, address_line_2: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
+                    <input
+                      type="text"
+                      placeholder="Dhaka"
+                      value={guestAddress.city}
+                      onChange={(e) => setGuestAddress({ ...guestAddress, city: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Delivery charge updates automatically.</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code *</label>
+                    <input
+                      type="text"
+                      placeholder="1207"
+                      value={guestAddress.postal_code}
+                      onChange={(e) => setGuestAddress({ ...guestAddress, postal_code: e.target.value })}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Special Instructions (optional)</label>
+                    <textarea
+                      rows={3}
+                      value={orderNotes}
+                      onChange={(e) => setOrderNotes(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                      placeholder="e.g., deliver after 5 PM"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-xl shadow-sm p-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Payment Method</h2>
+
+                <div className="space-y-3">
+                  <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      name="guest_payment_method"
+                      value="cod"
+                      checked={guestPaymentMethod === 'cod'}
+                      onChange={() => setGuestPaymentMethod('cod')}
+                    />
+                    <div>
+                      <div className="font-medium text-gray-900">Cash on Delivery</div>
+                      <div className="text-sm text-gray-600">Pay when your order is delivered</div>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50">
+                    <input
+                      type="radio"
+                      name="guest_payment_method"
+                      value="sslcommerz"
+                      checked={guestPaymentMethod === 'sslcommerz'}
+                      onChange={() => setGuestPaymentMethod('sslcommerz')}
+                    />
+                    <div>
+                      <div className="font-medium text-gray-900">Pay Online (SSLCommerz)</div>
+                      <div className="text-sm text-gray-600">You’ll be redirected to complete payment</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Summary */}
+            <div className="lg:col-span-1">
+              <div className="bg-white rounded-xl shadow-sm p-6 sticky top-6">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Order Summary</h2>
+
+                <div className="space-y-3 max-h-64 overflow-auto pr-1">
+                  {selectedItems.map((item) => (
+                    <div key={item.id} className="flex items-center gap-3">
+                      <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={item.images?.[0]?.image_url || '/placeholder-product.jpg'}
+                          alt={item.name}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
+                        <p className="text-xs text-gray-600">Qty: {item.quantity}</p>
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">৳{Number(item.total_price).toFixed(0)}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="border-t mt-4 pt-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Subtotal</span>
+                    <span className="font-medium">৳{summary.subtotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Delivery</span>
+                    <span className="font-medium">৳{shippingCharge.toFixed(2)}</span>
+                  </div>
+                  {couponDiscount > 0 && (
+                    <div className="flex justify-between text-green-700">
+                      <span>Discount</span>
+                      <span className="font-medium">-৳{couponDiscount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-base">
+                    <span className="font-semibold">Total</span>
+                    <span className="font-bold">৳{summary.total_amount.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleGuestPlaceOrder}
+                  disabled={isProcessing}
+                  className="w-full mt-5 bg-red-700 hover:bg-red-800 text-white font-semibold py-3 rounded-lg disabled:opacity-60"
+                >
+                  {isProcessing ? 'Processing…' : `Place Order – ৳${summary.total_amount.toFixed(0)}`}
+                </button>
+
+                <p className="text-xs text-gray-500 mt-3">
+                  By placing your order, you agree to receive an order confirmation call/SMS.
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
