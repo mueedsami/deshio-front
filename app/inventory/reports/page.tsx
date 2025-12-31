@@ -170,8 +170,16 @@ export default function InventoryReportsPage() {
   // CSV Exports (Reporting API)
   const [csvStoreId, setCsvStoreId] = useState('');
   const [csvStatus, setCsvStatus] = useState(''); // empty = all statuses
-  const [csvCustomerId, setCsvCustomerId] = useState(''); // Sales CSV only
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean }>({ category: false, sales: false });
+  const [csvCustomerId, setCsvCustomerId] = useState(''); // Sales/Booking CSV only
+  const [csvCategoryId, setCsvCategoryId] = useState(''); // Stock CSV only
+  const [csvProductId, setCsvProductId] = useState(''); // Stock/Booking CSV only
+  const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
+  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean }>({
+    category: false,
+    sales: false,
+    stock: false,
+    booking: false,
+  });
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTitle, setPreviewTitle] = useState('');
   const [previewHeader, setPreviewHeader] = useState<string[]>([]);
@@ -282,13 +290,38 @@ export default function InventoryReportsPage() {
   };
 
   // --- CSV Exports (Reporting API) helpers ---
-  const buildReportQuery = (extra?: { customer_id?: string }) => {
+  const buildCategorySalesQuery = () => {
     const q = new URLSearchParams();
     if (dateFrom) q.set('date_from', dateFrom);
     if (dateTo) q.set('date_to', dateTo);
     if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
     if (csvStatus.trim()) q.set('status', csvStatus.trim());
-    if (extra?.customer_id?.trim()) q.set('customer_id', extra.customer_id.trim());
+    return q;
+  };
+
+  const buildSalesQuery = () => {
+    const q = buildCategorySalesQuery();
+    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
+    return q;
+  };
+
+  const buildStockQuery = () => {
+    const q = new URLSearchParams();
+    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
+    if (csvCategoryId.trim()) q.set('category_id', csvCategoryId.trim());
+    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
+    if (csvIncludeInactive) q.set('include_inactive', 'true');
+    return q;
+  };
+
+  const buildBookingQuery = () => {
+    const q = new URLSearchParams();
+    if (dateFrom) q.set('date_from', dateFrom);
+    if (dateTo) q.set('date_to', dateTo);
+    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
+    if (csvStatus.trim()) q.set('status', csvStatus.trim());
+    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
+    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
     return q;
   };
 
@@ -335,7 +368,7 @@ export default function InventoryReportsPage() {
     setCsvBusy((s) => ({ ...s, category: true }));
     setPreviewError('');
     try {
-      await downloadCsv('/api/reporting/csv/category-sales', buildReportQuery());
+      await downloadCsv('/api/reporting/csv/category-sales', buildCategorySalesQuery());
     } catch (e: any) {
       setPreviewError(e?.message || 'Failed to download CSV');
     } finally {
@@ -347,7 +380,7 @@ export default function InventoryReportsPage() {
     setCsvBusy((s) => ({ ...s, sales: true }));
     setPreviewError('');
     try {
-      await downloadCsv('/api/reporting/csv/sales', buildReportQuery({ customer_id: csvCustomerId }));
+      await downloadCsv('/api/reporting/csv/sales', buildSalesQuery());
     } catch (e: any) {
       setPreviewError(e?.message || 'Failed to download CSV');
     } finally {
@@ -355,13 +388,61 @@ export default function InventoryReportsPage() {
     }
   };
 
-  const doPreview = async (type: 'category' | 'sales') => {
+  const doDownloadStock = async () => {
+    setCsvBusy((s) => ({ ...s, stock: true }));
     setPreviewError('');
     try {
-      const endpoint = type === 'category' ? '/api/reporting/csv/category-sales' : '/api/reporting/csv/sales';
-      const q = type === 'category' ? buildReportQuery() : buildReportQuery({ customer_id: csvCustomerId });
+      await downloadCsv('/api/reporting/csv/stock', buildStockQuery());
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download CSV');
+    } finally {
+      setCsvBusy((s) => ({ ...s, stock: false }));
+    }
+  };
+
+  const doDownloadBooking = async () => {
+    setCsvBusy((s) => ({ ...s, booking: true }));
+    setPreviewError('');
+    try {
+      await downloadCsv('/api/reporting/csv/booking', buildBookingQuery());
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download CSV');
+    } finally {
+      setCsvBusy((s) => ({ ...s, booking: false }));
+    }
+  };
+
+  const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking') => {
+    setPreviewError('');
+    try {
+      const endpoint =
+        type === 'category'
+          ? '/api/reporting/csv/category-sales'
+          : type === 'sales'
+            ? '/api/reporting/csv/sales'
+            : type === 'stock'
+              ? '/api/reporting/csv/stock'
+              : '/api/reporting/csv/booking';
+
+      const q =
+        type === 'category'
+          ? buildCategorySalesQuery()
+          : type === 'sales'
+            ? buildSalesQuery()
+            : type === 'stock'
+              ? buildStockQuery()
+              : buildBookingQuery();
+
       const { header, body } = await previewCsv(endpoint, q);
-      setPreviewTitle(type === 'category' ? 'Category Sales CSV' : 'Sales CSV');
+      setPreviewTitle(
+        type === 'category'
+          ? 'Category Sales CSV'
+          : type === 'sales'
+            ? 'Sales CSV'
+            : type === 'stock'
+              ? 'Stock CSV'
+              : 'Booking CSV'
+      );
       setPreviewHeader(header);
       setPreviewBody(body);
       setPreviewOpen(true);
@@ -1119,7 +1200,7 @@ export default function InventoryReportsPage() {
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">CSV Exports</h2>
               </div>
               <div className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
                     <input
@@ -1160,6 +1241,43 @@ export default function InventoryReportsPage() {
                     >
                       Refresh data
                     </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Category ID (Stock CSV only)</label>
+                    <input
+                      value={csvCategoryId}
+                      onChange={(e) => setCsvCategoryId(e.target.value)}
+                      placeholder="e.g. 12"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Product ID (Stock/Booking CSV)</label>
+                    <input
+                      value={csvProductId}
+                      onChange={(e) => setCsvProductId(e.target.value)}
+                      placeholder="e.g. 105"
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                      <input
+                        type="checkbox"
+                        checked={csvIncludeInactive}
+                        onChange={(e) => setCsvIncludeInactive(e.target.checked)}
+                        className="w-4 h-4"
+                      />
+                      Include inactive batches (Stock)
+                    </label>
+                  </div>
+                  <div className="flex items-end">
+                    <div className="text-xs text-gray-500 dark:text-gray-400">
+                      Date range applies to: <span className="font-semibold">Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1211,9 +1329,54 @@ export default function InventoryReportsPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">Stock CSV</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Batch-wise stock with sold quantity + remaining stock value. Filters: store/category/product, include inactive.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => doPreview('stock')}
+                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        disabled={csvBusy.stock}
+                        onClick={doDownloadStock}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvBusy.stock ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">Booking CSV</h3>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Order-items export with barcode, batch pricing, and payable/paid/due. Filters: date/store/status/customer/product.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => doPreview('booking')}
+                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        disabled={csvBusy.booking}
+                        onClick={doDownloadBooking}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvBusy.booking ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-                  Uses the same date range currently selected above: <span className="font-semibold">{dateFrom}</span> →{' '}
-                  <span className="font-semibold">{dateTo}</span>.
+                  Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span> (applies to Category Sales, Sales, Booking).
                 </div>
               </div>
             </div>
