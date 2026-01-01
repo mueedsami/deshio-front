@@ -511,9 +511,9 @@ class CheckoutService {
     couponDiscount: number = 0
   ): OrderSummary {
     const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    const tax_amount = subtotal * 0.05; // 5% tax
+    const tax_amount = 0; // VAT is already included in product prices
     const discount_amount = couponDiscount;
-    const total_amount = subtotal + shippingCharge + tax_amount - discount_amount;
+    const total_amount = subtotal + shippingCharge - discount_amount;
 
     return {
       subtotal,

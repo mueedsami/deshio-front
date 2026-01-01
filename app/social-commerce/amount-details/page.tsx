@@ -43,8 +43,7 @@ export default function AmountDetailsPage() {
 
   const [orderData, setOrderData] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-
-  const [vatRate, setVatRate] = useState('5');
+  // VAT is inclusive in product prices; do not add extra VAT here
   const [transportCost, setTransportCost] = useState('0');
 
   // Advanced payment options
@@ -122,10 +121,8 @@ export default function AmountDetailsPage() {
   const totalDiscount = useMemo(() => {
     return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
-
-  const vat = useMemo(() => (subtotal * parseNumber(vatRate)) / 100, [subtotal, vatRate]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
-  const total = useMemo(() => subtotal + vat + transport, [subtotal, vat, transport]);
+  const total = useMemo(() => subtotal + transport, [subtotal, transport]);
 
   const selectedMethod = useMemo(
     () => paymentMethods.find((m) => String(m.id) === String(selectedPaymentMethod)),
@@ -494,10 +491,6 @@ export default function AmountDetailsPage() {
                       <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">VAT ({vatRate}%)</span>
-                      <span className="text-gray-900 dark:text-white">৳{vat.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Transport</span>
                       <span className="text-gray-900 dark:text-white">৳{transport.toFixed(2)}</span>
                     </div>
@@ -518,24 +511,14 @@ export default function AmountDetailsPage() {
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-6">
                   <h2 className="text-base md:text-lg font-semibold text-gray-900 dark:text-white mb-4">Charges & Payments</h2>
 
-                  {/* VAT + Transport */}
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">VAT %</label>
-                      <input
-                        value={vatRate}
-                        onChange={(e) => setVatRate(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transport (৳)</label>
-                      <input
-                        value={transportCost}
-                        onChange={(e) => setTransportCost(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      />
-                    </div>
+                  {/* Transport */}
+                  <div className="mb-4">
+                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transport (৳)</label>
+                    <input
+                      value={transportCost}
+                      onChange={(e) => setTransportCost(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    />
                   </div>
 
                   {/* Payment Option */}

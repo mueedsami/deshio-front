@@ -163,7 +163,6 @@ export default function POSPage() {
   }, [customerLookup.customer, autoCustomerId]);
 
   // Payment
-  const [vatRate, setVatRate] = useState(5);
   const [transportCost, setTransportCost] = useState(0);
   const [cashPaid, setCashPaid] = useState(0);
   const [cardPaid, setCardPaid] = useState(0);
@@ -454,8 +453,7 @@ export default function POSPage() {
 
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
-  const vat = (subtotal * vatRate) / 100;
-  const total = subtotal + vat + transportCost;
+  const total = subtotal + transportCost;
   const totalPaid = cashPaid + cardPaid + bkashPaid + nagadPaid;
 
   // ✅ FIXED: Calculate due and change correctly
@@ -512,30 +510,8 @@ export default function POSPage() {
         }
       }
 
-      // ✅ FIXED: Calculate tax amount for each item based on VAT rate and proportional distribution
-      const vatAmount = (subtotal * vatRate) / 100;
-
-      // Distribute VAT proportionally based on each item's share of subtotal
-      const itemsWithTax = cart.map((item) => {
-        const itemSubtotal = item.amount; // After discount
-        const itemTaxShare = subtotal > 0 ? (itemSubtotal / subtotal) * vatAmount : 0;
-        return {
-          item,
-          taxAmount: parseFloat(itemTaxShare.toFixed(2)),
-        };
-      });
-
-      console.log('📊 VAT Distribution:', {
-        subtotal: subtotal.toFixed(2),
-        vatRate: `${vatRate}%`,
-        totalVAT: vatAmount.toFixed(2),
-        itemDistribution: itemsWithTax.map(({ item, taxAmount }) => ({
-          product: item.productName,
-          itemAmount: item.amount.toFixed(2),
-          share: ((item.amount / subtotal) * 100).toFixed(2) + '%',
-          tax: taxAmount.toFixed(2),
-        })),
-      });
+      // VAT is inclusive in product prices; do not add extra tax in POS
+      const itemsWithTax = cart.map((item) => ({ item, taxAmount: 0 }));
 
       // Create order payload
       const orderPayload = {
@@ -554,7 +530,7 @@ export default function POSPage() {
             }
           : {}),
 
-        // ✅ Map cart items with proportional VAT distribution
+        // ✅ Map cart items (VAT inclusive — send tax_amount = 0)
         items: itemsWithTax.map(({ item, taxAmount }) => {
           const productId = parseInt(String(item.productId));
           const batchId = parseInt(String(item.batchId));
@@ -582,7 +558,7 @@ export default function POSPage() {
             quantity: quantity,
             unit_price: unitPrice,
             discount_amount: discountAmount,
-            tax_amount: taxAmount, // ✅ FIXED: Use proportionally distributed VAT
+            tax_amount: taxAmount, // VAT inclusive — no extra tax
           };
 
           // ✅ CRITICAL: Only include barcode for NON-defective items
@@ -594,7 +570,6 @@ export default function POSPage() {
             ...itemPayload,
             isDefective: item.isDefective,
             hasBarcode: !!item.barcode,
-            vatShare: `${((item.amount / subtotal) * 100).toFixed(2)}%`,
           });
 
           return itemPayload;
@@ -605,11 +580,9 @@ export default function POSPage() {
         shipping_amount: transportCost,
 
         // ✅ Add notes if any
-        ...(address || vatRate > 0
+        ...(address || change > 0
           ? {
-              notes: `${vatRate > 0 ? `VAT: ${vatRate}%` : ''}${
-                address ? `, Address: ${address}` : ''
-              }${change > 0 ? `, Change Given: ৳${change.toFixed(2)}` : ''}`.trim(),
+              notes: `${address ? `Address: ${address}` : ''}${address && change > 0 ? ', ' : ''}${change > 0 ? `Change Given: ৳${change.toFixed(2)}` : ''}`.trim(),
             }
           : {}),
       };
@@ -1424,7 +1397,6 @@ export default function POSPage() {
                     onUpdateQuantity={updateCartItemQuantity}
                     onUpdateDiscount={updateCartItemDiscount}
                     darkMode={darkMode}
-                    vatRate={vatRate}
                   />
                 </div>
 
@@ -1451,31 +1423,6 @@ export default function POSPage() {
                       <span className="text-gray-900 dark:text-white font-medium">
                         ৳{totalDiscount.toFixed(2)}
                       </span>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
-                          VAT
-                        </label>
-                        <input
-                          type="number"
-                          value={vat.toFixed(2)}
-                          readOnly
-                          className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
-                          VAT Rate %
-                        </label>
-                        <input
-                          type="number"
-                          value={vatRate}
-                          onChange={(e) => setVatRate(Number(e.target.value))}
-                          className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                        />
-                      </div>
                     </div>
 
                     <div>
