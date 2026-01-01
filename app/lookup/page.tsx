@@ -571,6 +571,10 @@ export default function LookupPage() {
       order_type: o.order_type ?? 'unknown',
       status: o.status ?? 'unknown',
       payment_status: o.payment_status ?? 'unknown',
+      // Keep store info so UI can show "Sold From" (some lookup endpoints only include store/store_id inside order)
+      store: o.store ?? payload?.store ?? null,
+      store_id: o.store_id ?? payload?.store_id ?? o?.store?.id ?? payload?.store?.id ?? null,
+      store_name: o.store_name ?? payload?.store_name ?? o?.store?.name ?? payload?.store?.name ?? null,
       subtotal: o.subtotal,
       total_amount: o.total_amount ?? o.total ?? o.total_price,
       // some UIs expect order_date; keep both
@@ -616,6 +620,20 @@ export default function LookupPage() {
 
       const payload = res.data;
       const orderData = normalizeLookupOrderToSingleOrder(payload);
+
+      // Some lookup endpoints do not include store/store_id inside the payload.
+      // In that case, enrich from the main Orders API so "Sold From" is always available.
+      try {
+        const hasStore = !!(orderData as any)?.store?.name || !!(orderData as any)?.store_name || !!(orderData as any)?.store_id;
+        if (!hasStore) {
+          const full = await orderService.getById(orderId);
+          (orderData as any).store = (full as any)?.store ?? (orderData as any).store;
+          (orderData as any).store_id = (full as any)?.store?.id ?? (full as any)?.store_id ?? (orderData as any).store_id;
+          (orderData as any).store_name = (full as any)?.store?.name ?? (full as any)?.store_name ?? (orderData as any).store_name;
+        }
+      } catch {
+        // Silent: lookup should still work even if enrichment fails
+      }
 
       setOrderNumber(payload?.order?.order_number || `#${orderId}`);
       setSingleOrder(orderData);
