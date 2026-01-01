@@ -67,6 +67,8 @@ const formatBDT = (value: any, decimals: 0 | 2 = 0) => {
   }
 };
 
+const normalize = (v: any) => String(v ?? '').trim().toLowerCase();
+
 export default function WarehouseFulfillmentPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -127,11 +129,21 @@ export default function WarehouseFulfillmentPage() {
       // Sort by date, newest first
       allOrders.sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
 
-      setPendingOrders(allOrders);
+      // Extra client-side safety: if an order is already confirmed/completed/delivered
+      // it should not stay in the warehouse packing queue even if the API returns it.
+      const filtered = allOrders.filter((o: any) => {
+        const st = normalize(o.status);
+        if (['confirmed', 'completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
+        const fs = normalize(o.fulfillment_status);
+        if (fs && fs !== 'pending_fulfillment') return false;
+        return true;
+      });
+
+      setPendingOrders(filtered);
       console.log('📦 Loaded pending orders:', {
         social_commerce: socialCommerceResponse.data?.length || 0,
         ecommerce: ecommerceResponse.data?.length || 0,
-        total: allOrders.length,
+        total: filtered.length,
       });
     } catch (error: any) {
       console.error('Error fetching orders:', error);
@@ -389,33 +401,26 @@ if (!matchingItem) {
       console.log('✅ Order fulfilled:', fulfillResult);
       displayToast('✅ Order fulfilled successfully!', 'success');
 
-      // Wait 1 second then auto-complete the order
-      setTimeout(async () => {
-        try {
-          console.log('🚀 Completing order...');
-          await orderService.complete(orderDetails.id);
-          console.log('✅ Order completed and inventory reduced');
-          displayToast('✅ Order completed! Inventory updated.', 'success');
+      // Immediately remove from the pending list so it doesn't linger in the packing queue UI.
+      setPendingOrders((prev) => prev.filter((o) => o.id !== orderDetails.id));
 
-          // Reset and go back to order list after 2 seconds
-          setTimeout(() => {
-            setSelectedOrderId(null);
-            setOrderDetails(null);
-            setScannedItems({});
-            setScanHistory([]);
-            fetchPendingOrders();
-          }, 2000);
-        } catch (completeError: any) {
-          console.error('❌ Complete error:', completeError);
-          displayToast('⚠️ Fulfilled but completion failed: ' + completeError.message, 'error');
-
-          // Still go back after showing error
-          setTimeout(() => {
-            setSelectedOrderId(null);
-            fetchPendingOrders();
-          }, 3000);
-        }
-      }, 1000);
+      // Auto-complete the order right after fulfillment to reduce inventory.
+      try {
+        console.log('🚀 Completing order...');
+        await orderService.complete(orderDetails.id);
+        console.log('✅ Order completed and inventory reduced');
+        displayToast('✅ Order completed! Inventory updated.', 'success');
+      } catch (completeError: any) {
+        console.error('❌ Complete error:', completeError);
+        displayToast('⚠️ Fulfilled but completion failed: ' + completeError.message, 'error');
+      } finally {
+        // Always reset the UI and refresh the pending queue.
+        setSelectedOrderId(null);
+        setOrderDetails(null);
+        setScannedItems({});
+        setScanHistory([]);
+        fetchPendingOrders();
+      }
     } catch (error: any) {
       console.error('❌ Fulfill error:', error);
       displayToast('❌ Fulfillment failed: ' + error.message, 'error');

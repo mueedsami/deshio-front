@@ -33,6 +33,11 @@ function fmtTime(iso: string) {
   }
 }
 
+function toNum(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
 export default function DispatchBarcodeScanModal({
   dispatch,
   isOpen,
@@ -61,25 +66,43 @@ export default function DispatchBarcodeScanModal({
 
   const canCompleteCurrentItem = useMemo(() => {
     if (!progress) return false;
-    if (progress.kind === 'send') return progress.remaining_count === 0;
-    return progress.pending_count === 0;
+    // Only allow completion when backend actually reports a non-zero requirement.
+    // (Some endpoints may return 0/undefined fields; in those cases we keep scanning enabled.)
+    if (progress.kind === 'send') {
+      const total = toNum((progress as any).required_quantity ?? (progress as any).total ?? 0);
+      const remaining = toNum((progress as any).remaining_count ?? (progress as any).remaining ?? 0);
+      return total > 0 && remaining === 0;
+    }
+    const total = toNum((progress as any).total_sent ?? (progress as any).required_quantity ?? (progress as any).total ?? 0);
+    const pendingRaw = (progress as any).pending_count ?? (progress as any).remaining_count ?? (progress as any).remaining;
+    const received = toNum((progress as any).received_count ?? (progress as any).scanned_count ?? 0);
+    const pending = pendingRaw != null ? toNum(pendingRaw) : Math.max(0, total - received);
+    return total > 0 && pending === 0;
   }, [progress]);
 
   const stats = useMemo(() => {
     if (!progress) return null;
     if (progress.kind === 'send') {
-      const total = progress.required_quantity || 0;
-      const done = progress.scanned_count || 0;
-      const remaining = progress.remaining_count || 0;
+      const total = toNum((progress as any).required_quantity ?? (progress as any).total ?? 0);
+      const done = toNum((progress as any).scanned_count ?? 0);
+      const remainingRaw = (progress as any).remaining_count ?? (progress as any).remaining;
+      const remaining = remainingRaw != null ? toNum(remainingRaw) : Math.max(0, total - done);
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       return { total, done, remaining, pct };
     }
-    const total = progress.total_sent || 0;
-    const done = progress.received_count || 0;
-    const remaining = progress.pending_count || 0;
+    // Receive endpoints sometimes use different key names. Be defensive.
+    const total = toNum((progress as any).total_sent ?? (progress as any).required_quantity ?? (progress as any).total ?? 0);
+    const done = toNum((progress as any).received_count ?? (progress as any).scanned_count ?? 0);
+    const pendingRaw = (progress as any).pending_count ?? (progress as any).remaining_count ?? (progress as any).remaining;
+    const remaining = pendingRaw != null ? toNum(pendingRaw) : Math.max(0, total - done);
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
     return { total, done, remaining, pct };
   }, [progress]);
+
+  const scanningLocked = useMemo(() => {
+    // Lock scanning only when we KNOW the item is complete.
+    return !!(stats && stats.total > 0 && stats.remaining <= 0);
+  }, [stats]);
 
   // When opening: pick first item and focus input
   useEffect(() => {
@@ -138,7 +161,14 @@ export default function DispatchBarcodeScanModal({
       const results = await Promise.all(
         dispatch.items.map((it) => dispatchService.getReceivedBarcodes(dispatch.id, it.id))
       );
-      const pending = results.reduce((sum, r) => sum + (r.data?.pending_count ?? 0), 0);
+      const pending = results.reduce((sum, r) => {
+        const d: any = r.data || {};
+        const total = toNum(d.total_sent ?? d.required_quantity ?? d.total ?? 0);
+        const received = toNum(d.received_count ?? d.scanned_count ?? 0);
+        const pRaw = d.pending_count ?? d.remaining_count ?? d.remaining;
+        const p = pRaw != null ? toNum(pRaw) : Math.max(0, total - received);
+        return sum + p;
+      }, 0);
       setOverall({ allComplete: pending === 0, pending });
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Failed to check overall progress');
@@ -365,12 +395,12 @@ export default function DispatchBarcodeScanModal({
                       }}
                       placeholder={mode === 'send' ? 'Scan barcode to send…' : 'Scan received barcode…'}
                       className="w-full pl-10 pr-3 py-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      disabled={loading || (stats ? stats.remaining <= 0 : false)}
+                      disabled={loading || scanningLocked}
                     />
                   </div>
                   <button
                     onClick={handleScan}
-                    disabled={loading || !barcode.trim() || (stats ? stats.remaining <= 0 : false)}
+                    disabled={loading || scanningLocked || !barcode.trim()}
                     className={`px-4 py-3 rounded-lg text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
                       mode === 'send' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'
                     }`}

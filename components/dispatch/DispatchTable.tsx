@@ -10,7 +10,7 @@ interface DispatchTableProps {
   onMarkDispatched: (id: number) => void;
   onMarkDelivered: (id: number) => void;
   onCancel: (id: number) => void;
-  onScanBarcodes?: (dispatch: ProductDispatch) => void;
+  onScanBarcodes?: (dispatch: ProductDispatch, mode: 'send' | 'receive') => void;
   currentStoreId?: number;
 }
 
@@ -262,7 +262,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                         {/* BARCODE SCANNING IN TRANSIT */}
                         {dispatch.status === 'in_transit' && onScanBarcodes && atSource && (
                           <button
-                            onClick={() => onScanBarcodes(dispatch)}
+                            onClick={() => onScanBarcodes(dispatch, 'send')}
                             className="px-3 py-1 bg-indigo-100 dark:bg-indigo-900/30 hover:bg-indigo-200 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
                             title="Scan barcodes at source (sending)"
                           >
@@ -274,7 +274,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                         {/* DESTINATION STORE ACTIONS */}
                         {atDestination && dispatch.status === 'in_transit' && onScanBarcodes && (
                           <button
-                            onClick={() => onScanBarcodes(dispatch)}
+                            onClick={() => onScanBarcodes(dispatch, 'receive')}
                             className="px-3 py-1 bg-emerald-100 dark:bg-emerald-900/30 hover:bg-emerald-200 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
                             title="Scan barcodes at destination (receiving)"
                           >

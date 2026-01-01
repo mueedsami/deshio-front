@@ -31,6 +31,7 @@ export default function DispatchManagementPage() {
   const [selectedDispatch, setSelectedDispatch] = useState<ProductDispatch | null>(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showBarcodeScanModal, setShowBarcodeScanModal] = useState(false);
+  const [barcodeScanMode, setBarcodeScanMode] = useState<'send' | 'receive'>('receive');
   
   const [filterStatus, setFilterStatus] = useState('');
   const [filterSourceStore, setFilterSourceStore] = useState('');
@@ -225,11 +226,12 @@ export default function DispatchManagementPage() {
     }
   };
 
-  const handleScanBarcodes = async (dispatch: ProductDispatch) => {
+  const handleScanBarcodes = async (dispatch: ProductDispatch, mode: 'send' | 'receive') => {
     try {
       // Fetch full dispatch details including items
       const response = await dispatchService.getDispatch(dispatch.id);
       setSelectedDispatch(response.data);
+      setBarcodeScanMode(mode);
       setShowBarcodeScanModal(true);
     } catch (error) {
       console.error('Error fetching dispatch details:', error);
@@ -375,6 +377,7 @@ export default function DispatchManagementPage() {
           isOpen={showBarcodeScanModal}
           onClose={() => setShowBarcodeScanModal(false)}
           dispatch={selectedDispatch}
+          mode={barcodeScanMode}
           onComplete={handleBarcodeScanComplete}
           onMarkDelivered={handleMarkDeliveredFromScan}
         />

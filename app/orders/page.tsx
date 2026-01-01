@@ -288,6 +288,35 @@ export default function OrdersDashboard() {
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
 
+  const formatAddress = (addr: any): string => {
+    if (addr == null) return '';
+    if (typeof addr === 'string') return addr;
+    if (Array.isArray(addr)) {
+      return addr.map(formatAddress).filter(Boolean).join(', ');
+    }
+    if (typeof addr === 'object') {
+      const a: any = addr;
+      const parts = [
+        a.address,
+        a.street,
+        a.area,
+        a.thana,
+        a.city,
+        a.state,
+        a.postcode,
+        a.zip,
+        a.country,
+      ].filter(Boolean);
+      if (parts.length) return parts.join(', ');
+      try {
+        return JSON.stringify(addr);
+      } catch {
+        return String(addr);
+      }
+    }
+    return String(addr);
+  };
+
   const derivePaymentStatus = (order: any) => {
     const raw = normalize(order?.payment_status);
     if (raw) return raw;
@@ -367,7 +396,7 @@ export default function OrdersDashboard() {
         name: order.customer_name ?? order.customer?.name ?? '',
         phone: order.customer_phone ?? order.customer?.phone ?? '',
         email: order.customer_email ?? order.customer?.email ?? '',
-        address: order.customer_address ?? order.shipping_address ?? '',
+        address: formatAddress(order.customer_address ?? order.shipping_address ?? order.customer?.address ?? ''),
       },
       items:
         order.items?.map((item: any) => {
