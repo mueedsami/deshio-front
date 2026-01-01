@@ -77,6 +77,8 @@ interface Order {
   storeId?: number;
   notes?: string;
 
+  shipping_address?: any;
+
   createdAt?: string;
   orderDateRaw?: string;
 }
@@ -196,6 +198,11 @@ const titleCase = (s: string) =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
+// Pathao lookup types (used for Social Commerce address editing)
+type PathaoCity = { city_id: number; city_name: string };
+type PathaoZone = { zone_id: number; zone_name: string };
+type PathaoArea = { area_id: number; area_name: string };
+
 export default function OrdersDashboard() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -239,6 +246,34 @@ export default function OrdersDashboard() {
   const [isProductLoading, setIsProductLoading] = useState(false);
   const [pickerBatches, setPickerBatches] = useState<any[]>([]);
   const [pickerStoreId, setPickerStoreId] = useState<number | null>(null);
+
+
+  // 📦 Address editing (Social Commerce: Pathao / International, E-commerce checkout)
+  const [scIsInternational, setScIsInternational] = useState(false);
+
+  const [pathaoCities, setPathaoCities] = useState<PathaoCity[]>([]);
+  const [pathaoZones, setPathaoZones] = useState<PathaoZone[]>([]);
+  const [pathaoAreas, setPathaoAreas] = useState<PathaoArea[]>([]);
+
+  const [pathaoCityId, setPathaoCityId] = useState<string>('');
+  const [pathaoZoneId, setPathaoZoneId] = useState<string>('');
+  const [pathaoAreaId, setPathaoAreaId] = useState<string>('');
+
+  const [scStreetAddress, setScStreetAddress] = useState('');
+  const [scPostalCode, setScPostalCode] = useState('');
+
+  const [scCountry, setScCountry] = useState('');
+  const [scState, setScState] = useState('');
+  const [scCity, setScCity] = useState('');
+  const [scInternationalPostalCode, setScInternationalPostalCode] = useState('');
+  const [scInternationalStreet, setScInternationalStreet] = useState('');
+
+  const [ecAddress1, setEcAddress1] = useState('');
+  const [ecAddress2, setEcAddress2] = useState('');
+  const [ecCity, setEcCity] = useState('');
+  const [ecState, setEcState] = useState('');
+  const [ecPostalCode, setEcPostalCode] = useState('');
+  const [ecLandmark, setEcLandmark] = useState('');
 
   // ✅ Bulk selection + operations (Pathao + Print)
   const [selectedOrders, setSelectedOrders] = useState<Set<number>>(new Set());
@@ -286,38 +321,170 @@ export default function OrdersDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
 
-  const formatAddress = (addr: any): string => {
-    if (addr == null) return '';
-    if (typeof addr === 'string') return addr;
-    if (Array.isArray(addr)) {
-      return addr.map(formatAddress).filter(Boolean).join(', ');
+  const formatShippingAddress = (shipping: any): string => {
+    if (!shipping) return '';
+    if (typeof shipping === 'string') return shipping;
+
+    const s: any = shipping || {};
+
+    // E-commerce pattern
+    if (s.address_line_1 || s.address_line_2) {
+      const parts: string[] = [];
+      if (s.address_line_1) parts.push(String(s.address_line_1));
+      if (s.address_line_2) parts.push(String(s.address_line_2));
+      const cityState = [s.city, s.state].filter(Boolean).join(', ');
+      const pc = s.postal_code || s.postalCode || '';
+      if (cityState) parts.push(pc ? `${cityState} ${pc}` : cityState);
+      else if (pc) parts.push(String(pc));
+      if (s.country) parts.push(String(s.country));
+      if (s.landmark) parts.push(`Landmark: ${String(s.landmark)}`);
+      return parts.filter(Boolean).join(', ');
     }
-    if (typeof addr === 'object') {
-      const a: any = addr;
-      const parts = [
-        a.address,
-        a.street,
-        a.area,
-        a.thana,
-        a.city,
-        a.state,
-        a.postcode,
-        a.zip,
-        a.country,
-      ].filter(Boolean);
-      if (parts.length) return parts.join(', ');
-      try {
-        return JSON.stringify(addr);
-      } catch {
-        return String(addr);
-      }
+
+    // Social commerce / Pathao pattern
+    if (s.street || s.city || s.area || s.zone || s.postal_code) {
+      const parts: string[] = [];
+      if (s.street) parts.push(String(s.street));
+      if (s.area) parts.push(String(s.area));
+      if (s.zone) parts.push(String(s.zone));
+      if (s.city) parts.push(String(s.city));
+      const pc = s.postal_code || s.postalCode || '';
+      const out = parts.filter(Boolean).join(', ');
+      return pc ? `${out}${out ? ' - ' : ''}${pc}` : out;
     }
-    return String(addr);
+
+    // Fallbacks
+    if (s.address) return String(s.address);
+    try {
+      return JSON.stringify(s);
+    } catch {
+      return String(s);
+    }
   };
 
-  const derivePaymentStatus = (order: any) => {
+
+  
+  // ✅ Pathao lookup helpers (for editing Social Commerce address)
+  const fetchPathaoCities = async () => {
+    try {
+      const res = await axios.get('/shipments/pathao/cities');
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoCities(data);
+    } catch (err) {
+      console.error('Failed to load Pathao cities', err);
+      setPathaoCities([]);
+    }
+  };
+
+  const fetchPathaoZones = async (cityId: number) => {
+    try {
+      const res = await axios.get(`/shipments/pathao/zones/${cityId}`);
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoZones(data);
+    } catch (err) {
+      console.error('Failed to load Pathao zones', err);
+      setPathaoZones([]);
+    }
+  };
+
+  const fetchPathaoAreas = async (zoneId: number) => {
+    try {
+      const res = await axios.get(`/shipments/pathao/areas/${zoneId}`);
+      const data = Array.isArray(res.data) ? res.data : res.data?.data ?? [];
+      setPathaoAreas(data);
+    } catch (err) {
+      console.error('Failed to load Pathao areas', err);
+      setPathaoAreas([]);
+    }
+  };
+
+  // Prefill address fields when opening the editor
+  useEffect(() => {
+    if (!showEditModal || !editableOrder) return;
+
+    const orderType = normalize(editableOrder.orderType);
+    const sa: any =
+      editableOrder.shipping_address && typeof editableOrder.shipping_address === 'object'
+        ? editableOrder.shipping_address
+        : {};
+
+    if (orderType === 'social_commerce') {
+      const isIntl = !!sa?.country && !sa?.pathao_city_id;
+      setScIsInternational(isIntl);
+
+      if (isIntl) {
+        setScCountry(sa.country || '');
+        setScState(sa.state || '');
+        setScCity(sa.city || '');
+        setScInternationalPostalCode(sa.postal_code || '');
+        setScInternationalStreet(sa.street || sa.address || '');
+      } else {
+        setPathaoCityId(sa.pathao_city_id ? String(sa.pathao_city_id) : '');
+        setPathaoZoneId(sa.pathao_zone_id ? String(sa.pathao_zone_id) : '');
+        setPathaoAreaId(sa.pathao_area_id ? String(sa.pathao_area_id) : '');
+        setScStreetAddress(sa.street || '');
+        setScPostalCode(sa.postal_code || '');
+      }
+    } else if (orderType === 'ecommerce') {
+      setEcAddress1(sa.address_line_1 || (typeof editableOrder.customer.address === 'string' ? editableOrder.customer.address : '') || '');
+      setEcAddress2(sa.address_line_2 || '');
+      setEcCity(sa.city || '');
+      setEcState(sa.state || '');
+      setEcPostalCode(sa.postal_code || '');
+      setEcLandmark(sa.landmark || '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEditModal, editableOrder?.id]);
+
+  // Load Pathao cities when editing a Social Commerce order
+  useEffect(() => {
+    if (!showEditModal) return;
+    if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
+    if (scIsInternational) return;
+
+    fetchPathaoCities();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showEditModal, editableOrder?.orderType, scIsInternational]);
+
+  // Cascading: City -> Zones
+  useEffect(() => {
+    if (!showEditModal) return;
+    if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
+    if (scIsInternational) return;
+
+    if (!pathaoCityId) {
+      setPathaoZones([]);
+      setPathaoZoneId('');
+      setPathaoAreas([]);
+      setPathaoAreaId('');
+      return;
+    }
+
+    fetchPathaoZones(Number(pathaoCityId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathaoCityId]);
+
+  // Cascading: Zone -> Areas
+  useEffect(() => {
+    if (!showEditModal) return;
+    if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
+    if (scIsInternational) return;
+
+    if (!pathaoZoneId) {
+      setPathaoAreas([]);
+      setPathaoAreaId('');
+      return;
+    }
+
+    fetchPathaoAreas(Number(pathaoZoneId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathaoZoneId]);
+
+
+const derivePaymentStatus = (order: any) => {
     const raw = normalize(order?.payment_status);
     if (raw) return raw;
     const total = parseMoney(order?.total_amount);
@@ -396,7 +563,7 @@ export default function OrdersDashboard() {
         name: order.customer_name ?? order.customer?.name ?? '',
         phone: order.customer_phone ?? order.customer?.phone ?? '',
         email: order.customer_email ?? order.customer?.email ?? '',
-        address: formatAddress(order.customer_address ?? order.shipping_address ?? order.customer?.address ?? ''),
+        address: order.customer_address != null ? order.customer_address : formatShippingAddress(order.shipping_address),
       },
       items:
         order.items?.map((item: any) => {
@@ -430,7 +597,9 @@ export default function OrdersDashboard() {
       store: order.store?.name || '',
       storeId: order.store?.id,
       notes: order.notes || '',
-      createdAt: order.created_at,
+      shipping_address: order.shipping_address ?? null,
+
+            createdAt: order.created_at,
       orderDateRaw: order.order_date,
     };
   };
@@ -1498,17 +1667,120 @@ export default function OrdersDashboard() {
     try {
       setIsSavingOrder(true);
 
-      const payload = {
-        customer_name: editableOrder.customer.name || null,
-        customer_phone: editableOrder.customer.phone || null,
-        customer_email: editableOrder.customer.email || null,
-        customer_address: editableOrder.customer.address || null,
+
+      const orderType = normalize(editableOrder.orderType);
+
+      const customerName = editableOrder.customer.name || null;
+      const customerPhone = editableOrder.customer.phone || null;
+      const customerEmail = editableOrder.customer.email || null;
+
+      let shipping_address: any =
+        editableOrder.shipping_address && typeof editableOrder.shipping_address === 'object'
+          ? { ...(editableOrder.shipping_address as any) }
+          : {};
+
+      let customer_address_text =
+        formatShippingAddress(shipping_address) ||
+        (typeof editableOrder.customer.address === 'string' ? editableOrder.customer.address : '') ||
+        '';
+
+      // Build shipping_address + customer_address based on order type
+      if (orderType === 'social_commerce') {
+        if (scIsInternational) {
+          shipping_address = {
+            ...shipping_address,
+            name: customerName ?? shipping_address.name ?? '',
+            phone: customerPhone ?? shipping_address.phone ?? '',
+            street: scInternationalStreet,
+            city: scCity,
+            state: scState || undefined,
+            country: scCountry,
+            postal_code: scInternationalPostalCode || undefined,
+          };
+
+          const parts = [scInternationalStreet, scCity, scState, scCountry].filter(Boolean);
+          customer_address_text = parts.join(', ') + (scInternationalPostalCode ? ` - ${scInternationalPostalCode}` : '');
+        } else {
+          const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+          const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+          const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+
+          const cityIdNum = pathaoCityId ? Number(pathaoCityId) : undefined;
+          const zoneIdNum = pathaoZoneId ? Number(pathaoZoneId) : undefined;
+          const areaIdNum = pathaoAreaId ? Number(pathaoAreaId) : undefined;
+
+          shipping_address = {
+            ...shipping_address,
+            name: customerName ?? shipping_address.name ?? '',
+            phone: customerPhone ?? shipping_address.phone ?? '',
+            street: scStreetAddress,
+            area: areaObj?.area_name || shipping_address.area || '',
+            city: cityObj?.city_name || shipping_address.city || '',
+            pathao_city_id: cityIdNum,
+            pathao_zone_id: zoneIdNum,
+            pathao_area_id: areaIdNum,
+            postal_code: scPostalCode || undefined,
+          };
+
+          const parts = [
+            scStreetAddress,
+            areaObj?.area_name || '',
+            zoneObj?.zone_name || '',
+            cityObj?.city_name || '',
+          ].filter(Boolean);
+
+          customer_address_text = parts.join(', ') + (scPostalCode ? ` - ${scPostalCode}` : '');
+        }
+      } else if (orderType === 'ecommerce') {
+        shipping_address = {
+          ...shipping_address,
+          name: customerName ?? shipping_address.name ?? '',
+          phone: customerPhone ?? shipping_address.phone ?? '',
+          email: customerEmail ?? shipping_address.email ?? undefined,
+          address_line_1: ecAddress1,
+          address_line_2: ecAddress2 || undefined,
+          city: ecCity,
+          state: ecState,
+          postal_code: ecPostalCode,
+          landmark: ecLandmark || undefined,
+        };
+
+        const parts = [ecAddress1, ecAddress2, ecCity, ecState].filter(Boolean);
+        customer_address_text = parts.join(', ') + (ecPostalCode ? ` ${ecPostalCode}` : '');
+      }
+
+      const payloadBase: any = {
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        customer_email: customerEmail,
+        customer_address: customer_address_text || null,
         discount_amount: editableOrder.discount ?? 0,
         shipping_amount: editableOrder.shipping ?? 0,
         notes: editableOrder.notes ?? '',
       };
 
-      const response = await axios.patch(`/orders/${editableOrder.id}`, payload);
+      const payloadWithShipping =
+        shipping_address && typeof shipping_address === 'object' && Object.keys(shipping_address).length > 0
+          ? { ...payloadBase, shipping_address }
+          : payloadBase;
+
+      let response: any;
+      try {
+        response = await axios.patch(`/orders/${editableOrder.id}`, payloadWithShipping);
+      } catch (error: any) {
+        // Fallback: if backend rejects shipping_address updates, retry without it
+        const backendData = error?.response?.data;
+        const txt = JSON.stringify(backendData || {}).toLowerCase();
+        const maybeShippingErr = txt.includes('shipping_address') || txt.includes('shipping address');
+
+        if (payloadWithShipping?.shipping_address && maybeShippingErr) {
+          response = await axios.patch(`/orders/${editableOrder.id}`, payloadBase);
+        } else {
+          throw error;
+        }
+      }
+
+
 
       if (response.data?.success) {
         const updated = transformOrder(response.data.data);
@@ -2327,20 +2599,253 @@ export default function OrdersDashboard() {
                       />
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Address</label>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Delivery Address (auto)</label>
                       <textarea
                         rows={2}
-                        value={editableOrder.customer.address ?? ''}
-                        onChange={(e) =>
-                          setEditableOrder((prev) => {
-                            if (!prev) return prev;
-                            return { ...prev, customer: { ...prev.customer, address: e.target.value } };
-                          })
-                        }
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        readOnly
+                        value={formatShippingAddress(editableOrder.shipping_address) || ''}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900 text-black dark:text-white text-sm"
                       />
+                      <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                        Edit below in the <span className="font-medium">Delivery Address</span> section.
+                      </p>
                     </div>
                   </div>
+                </div>
+
+
+                {/* Delivery Address */}
+                <div>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Delivery Address</h3>
+
+                  {normalize(editableOrder.orderType) === 'social_commerce' ? (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium text-gray-600 dark:text-gray-400">Mode</p>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setScIsInternational(false)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                              !scIsInternational
+                                ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            Domestic
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setScIsInternational(true)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                              scIsInternational
+                                ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                                : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                            }`}
+                          >
+                            International
+                          </button>
+                        </div>
+                      </div>
+
+                      {scIsInternational ? (
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Country*</label>
+                            <input
+                              type="text"
+                              value={scCountry}
+                              onChange={(e) => setScCountry(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              placeholder="e.g., United Arab Emirates"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">State/Province</label>
+                            <input
+                              type="text"
+                              value={scState}
+                              onChange={(e) => setScState(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City*</label>
+                            <input
+                              type="text"
+                              value={scCity}
+                              onChange={(e) => setScCity(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
+                            <input
+                              type="text"
+                              value={scInternationalPostalCode}
+                              onChange={(e) => setScInternationalPostalCode(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                            />
+                          </div>
+                          <div className="col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
+                            <textarea
+                              rows={2}
+                              value={scInternationalStreet}
+                              onChange={(e) => setScInternationalStreet(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              placeholder="House, Road, etc."
+                            />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City (Pathao)*</label>
+                            <select
+                              value={pathaoCityId}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setPathaoCityId(v);
+                                setPathaoZoneId('');
+                                setPathaoAreaId('');
+                                setPathaoZones([]);
+                                setPathaoAreas([]);
+                              }}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                            >
+                              <option value="">Select City</option>
+                              {pathaoCities.map((c) => (
+                                <option key={c.city_id} value={String(c.city_id)}>
+                                  {c.city_name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Zone (Pathao)*</label>
+                            <select
+                              value={pathaoZoneId}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setPathaoZoneId(v);
+                                setPathaoAreaId('');
+                                setPathaoAreas([]);
+                              }}
+                              disabled={!pathaoCityId}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
+                            >
+                              <option value="">{pathaoCityId ? 'Select Zone' : 'Select City first'}</option>
+                              {pathaoZones.map((z) => (
+                                <option key={z.zone_id} value={String(z.zone_id)}>
+                                  {z.zone_name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Area (Pathao)*</label>
+                            <select
+                              value={pathaoAreaId}
+                              onChange={(e) => setPathaoAreaId(e.target.value)}
+                              disabled={!pathaoZoneId}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
+                            >
+                              <option value="">{pathaoZoneId ? 'Select Area' : 'Select Zone first'}</option>
+                              {pathaoAreas.map((a) => (
+                                <option key={a.area_id} value={String(a.area_id)}>
+                                  {a.area_name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
+                            <input
+                              type="text"
+                              value={scPostalCode}
+                              onChange={(e) => setScPostalCode(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              placeholder="e.g., 1212"
+                            />
+                          </div>
+
+                          <div className="col-span-2">
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
+                            <textarea
+                              rows={2}
+                              value={scStreetAddress}
+                              onChange={(e) => setScStreetAddress(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              placeholder="House 12, Road 5, etc."
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : normalize(editableOrder.orderType) === 'ecommerce' ? (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Address Line 1*</label>
+                        <input
+                          type="text"
+                          value={ecAddress1}
+                          onChange={(e) => setEcAddress1(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Address Line 2</label>
+                        <input
+                          type="text"
+                          value={ecAddress2}
+                          onChange={(e) => setEcAddress2(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City*</label>
+                        <input
+                          type="text"
+                          value={ecCity}
+                          onChange={(e) => setEcCity(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">State*</label>
+                        <input
+                          type="text"
+                          value={ecState}
+                          onChange={(e) => setEcState(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code*</label>
+                        <input
+                          type="text"
+                          value={ecPostalCode}
+                          onChange={(e) => setEcPostalCode(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Landmark</label>
+                        <input
+                          type="text"
+                          value={ecLandmark}
+                          onChange={(e) => setEcLandmark(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500 dark:text-gray-400">No delivery address editor for this order type.</p>
+                  )}
                 </div>
 
                 {/* Items */}
