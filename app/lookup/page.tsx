@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -10,6 +10,7 @@ import orderService from '@/services/orderService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
 import lookupService from '@/services/lookupService';
+import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 
 type LookupTab = 'customer' | 'order' | 'barcode' | 'batch';
@@ -90,6 +91,46 @@ export default function LookupPage() {
   // Shared UI
   const [error, setError] = useState('');
 
+  // Shared: store directory (for showing store names when APIs only return store_id)
+  const [stores, setStores] = useState<Store[]>([]);
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const res = await storeService.getStores({ per_page: 300, is_active: true });
+        const list: any[] = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : Array.isArray(res?.data?.data) ? res.data.data : [];
+        if (mounted) setStores(list as Store[]);
+      } catch (e) {
+        // silent: lookup should still work without store names
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const storeNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const s of stores || []) {
+      if (s && typeof (s as any).id === 'number') m.set((s as any).id, (s as any).name || '');
+    }
+    return m;
+  }, [stores]);
+
+  const getStoreNameFromAny = (x: any): string => {
+    const direct = x?.store?.name || x?.store_name || x?.storeName || '';
+    if (direct) return direct;
+
+    const idRaw = x?.store?.id ?? x?.store_id ?? x?.storeId ?? x?.current_store_id ?? x?.assigned_store_id ?? x?.source_store_id ?? x?.from_store_id;
+    const id = typeof idRaw === 'number' ? idRaw : idRaw != null ? parseInt(String(idRaw), 10) : NaN;
+    if (Number.isFinite(id)) {
+      const name = storeNameById.get(id);
+      if (name) return name;
+      return `Store #${id}`;
+    }
+    return '—';
+  };
+
   // =========================
   // CUSTOMER LOOKUP
   // =========================
@@ -152,13 +193,23 @@ export default function LookupPage() {
   // -----------------------
   const formatPhoneNumber = (phone: string) => phone.replace(/\D/g, '');
 
+  // NOTE: backend may return numbers as strings with commas (e.g. "1,000"),
+  // or with currency text (e.g. "BDT 1,000"). parseFloat("1,000") => 1.
+  const toNumberString = (v: any) => {
+    if (v == null) return '';
+    const s = String(v).trim();
+    // Remove common thousand separators and any currency/non-numeric chars.
+    // Keep digits, dot, minus.
+    return s.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+  };
+
   const safeNum = (v: any) => {
-    const n = typeof v === 'number' ? v : v != null ? parseFloat(String(v)) : NaN;
+    const n = typeof v === 'number' ? v : v != null ? parseFloat(toNumberString(v)) : NaN;
     return Number.isFinite(n) ? n : 0;
   };
 
   const safeNumOrNull = (v: any): number | null => {
-    const n = typeof v === 'number' ? v : v != null ? parseFloat(String(v)) : NaN;
+    const n = typeof v === 'number' ? v : v != null ? parseFloat(toNumberString(v)) : NaN;
     return Number.isFinite(n) ? n : null;
   };
 
@@ -1249,6 +1300,25 @@ export default function LookupPage() {
     return { orderId, orderNo, soldVia };
   };
 
+  const prettySoldVia = (v?: string | null) => {
+    if (!v) return '';
+    const s = String(v).trim().toLowerCase();
+    const m: Record<string, string> = {
+      order: 'Order',
+      pos: 'POS',
+      counter: 'Counter',
+      ecommerce: 'E-commerce',
+      'e-commerce': 'E-commerce',
+      social_commerce: 'Social Commerce',
+      'social-commerce': 'Social Commerce',
+    };
+    if (m[s]) return m[s];
+    return s
+      .split('_')
+      .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+      .join(' ');
+  };
+
   const barcodeSaleInfo = getBarcodeSaleInfo(barcodeData);
 
   return (
@@ -1491,7 +1561,7 @@ export default function LookupPage() {
                                   <div className="grid grid-cols-2 gap-2">
                                     <div>
                                       <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Store</p>
-                                      <p className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">{order.store?.name || '—'}</p>
+                                      <p className="text-[10px] text-gray-600 dark:text-gray-400 font-medium">{getStoreNameFromAny(order)}</p>
                                     </div>
                                     <div>
                                       <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Payment</p>
@@ -1616,6 +1686,17 @@ export default function LookupPage() {
                           <div>
                             <p className="text-[9px] text-gray-500 uppercase font-medium">Payment</p>
                             {getStatusBadge(singleOrder.payment_status)}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Sold From</p>
+                            <p className="text-sm text-black dark:text-white">{getStoreNameFromAny(singleOrder)}</p>
+                          </div>
+                          <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Type</p>
+                            <p className="text-sm text-black dark:text-white">{formatOrderType(singleOrder)}</p>
                           </div>
                         </div>
 
@@ -1759,7 +1840,7 @@ export default function LookupPage() {
                             </div>
                             <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                               <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Current Store</p>
-                              <p className="text-xs text-black dark:text-white">{barcodeData.current_location.current_store?.name || '—'}</p>
+                              <p className="text-xs text-black dark:text-white">{getStoreNameFromAny(barcodeData.current_location)}</p>
                             </div>
                             <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                               <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Batch</p>
@@ -1798,10 +1879,10 @@ export default function LookupPage() {
                               <div>
                                 <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Sale / Order</p>
                                 <p className="text-xs font-semibold text-black dark:text-white">
-                                  Sold{barcodeSaleInfo.soldVia ? ` via ${barcodeSaleInfo.soldVia}` : ''}
+                                  Sold{barcodeSaleInfo.soldVia ? ` via ${prettySoldVia(barcodeSaleInfo.soldVia)}` : ''}
                                 </p>
                                 <p className="text-[10px] text-gray-600 dark:text-gray-400">
-                                  Order:{' '}
+                                  Order #:{' '}
                                   <span className="font-semibold text-black dark:text-white">
                                     {barcodeSaleInfo.orderNo || (barcodeSaleInfo.orderId ? `#${barcodeSaleInfo.orderId}` : '—')}
                                   </span>
