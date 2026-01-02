@@ -77,7 +77,7 @@ export function createBatchTransaction(batchData: any) {
       amount: totalCost,
       category: 'Inventory Purchase',
       date: batchData.createdAt || new Date().toISOString(),
-      comment: `Expected Revenue: ৳${batchData.sellingPrice * batchData.quantity}, Expected Profit: ৳${(batchData.sellingPrice - batchData.costPrice) * batchData.quantity}`,
+      comment: `Expected Revenue: ৳${batchData.sellingPrice * batchData.quantity}, Expected Profit: ৳${(batchData.sellingPrice * (1 - 0.075) - batchData.costPrice) * batchData.quantity}`,
       createdAt: new Date().toISOString(),
       source: 'batch',
       referenceId: String(batchData.id)
