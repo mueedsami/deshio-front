@@ -4,10 +4,11 @@ import { useState, useEffect } from 'react';
 import { Search, Package, ChevronDown, ChevronUp } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import inventoryService, { GlobalInventoryItem, StoreBreakdown } from '@/services/inventoryService';
+import inventoryService, { GlobalInventoryItem, Store as StoreBreakdown } from '@/services/inventoryService';
 import productService from '@/services/productService';
 import categoryService from '@/services/groupInventory';
 import productImageService from '@/services/productImageService';
+import defectiveProductService, { type DefectiveProduct } from '@/services/defectiveProductService';
 
 interface Category {
   id: number;
@@ -32,6 +33,12 @@ interface GroupedProduct {
   totalStock: number;
   variations: ProductVariation[];
   expanded: boolean;
+
+  // Extra panel counts (defective/used) merged client-side
+  extraTotal: number;
+  extraDefective: number;
+  extraUsed: number;
+  productIds: number[];
 }
 
 export default function ViewInventoryPage() {
@@ -122,11 +129,66 @@ export default function ViewInventoryPage() {
     return new Map<number, string>(pairs);
   };
 
+  type ExtraCounts = { total: number; used: number; defective: number };
+
+  const ACTIVE_EXTRA_STATUSES: Array<DefectiveProduct['status']> = [
+    'identified',
+    'inspected',
+    'available_for_sale',
+  ];
+
+  const isUsedItem = (desc?: string) => (desc || '').includes('USED_ITEM');
+
+  const fetchAllActiveExtraItems = async (): Promise<DefectiveProduct[]> => {
+    const per_page = 200;
+    const all: DefectiveProduct[] = [];
+
+    for (const status of ACTIVE_EXTRA_STATUSES) {
+      let page = 1;
+      while (true) {
+        const res = await defectiveProductService.getAll({ status, per_page, page });
+
+        // Expected response: { success: true, data: paginator }
+        const paginator = (res as any)?.data;
+        const rows: DefectiveProduct[] = paginator?.data || [];
+
+        all.push(...rows);
+
+        const current = paginator?.current_page ?? page;
+        const last = paginator?.last_page ?? page;
+        if (current >= last || rows.length === 0) break;
+        page += 1;
+      }
+    }
+
+    return all;
+  };
+
+  const buildExtraMapByProduct = (items: DefectiveProduct[]) => {
+    const map = new Map<number, ExtraCounts>();
+
+    for (const d of items) {
+      const pid = d.product_id;
+      if (!pid) continue;
+
+      const entry = map.get(pid) || { total: 0, used: 0, defective: 0 };
+      entry.total += 1;
+
+      if (isUsedItem(d.defect_description)) entry.used += 1;
+      else entry.defective += 1;
+
+      map.set(pid, entry);
+    }
+
+    return map;
+  };
+
   const groupInventoryBySKU = (
     inventoryItems: GlobalInventoryItem[],
     products: any[],
     cats: Category[],
-    primaryImageMap: Map<number, string>
+    primaryImageMap: Map<number, string>,
+    extraMap: Map<number, ExtraCounts>
   ): GroupedProduct[] => {
     const skuGroups: { [sku: string]: GroupedProduct } = {};
 
@@ -171,8 +233,16 @@ export default function ViewInventoryPage() {
           category: categoryName,
           totalStock: 0,
           variations: [],
-          expanded: false
+          expanded: false,
+          extraTotal: 0,
+          extraDefective: 0,
+          extraUsed: 0,
+          productIds: []
         };
+      }
+
+      if (!skuGroups[sku].productIds.includes(item.product_id)) {
+        skuGroups[sku].productIds.push(item.product_id);
       }
 
       // group by color (your original behavior)
@@ -211,6 +281,84 @@ export default function ViewInventoryPage() {
       skuGroups[sku].totalStock += item.total_quantity;
     });
 
+    // Merge extra (defective/used) counts into SKU groups
+    Object.values(skuGroups).forEach((g) => {
+      let total = 0;
+      let used = 0;
+      let defective = 0;
+
+      for (const pid of g.productIds) {
+        const ex = extraMap.get(pid);
+        if (!ex) continue;
+        total += ex.total;
+        used += ex.used;
+        defective += ex.defective;
+      }
+
+      g.extraTotal = total;
+      g.extraUsed = used;
+      g.extraDefective = defective;
+    });
+
+    // Include products that have NO normal stock but exist in Extra panel
+    for (const [pid, ex] of extraMap.entries()) {
+      const alreadyIncluded = Object.values(skuGroups).some((g) => g.productIds.includes(pid));
+      if (alreadyIncluded) continue;
+
+      const product = products.find((p) => p.id === pid);
+      if (!product) continue;
+
+      const sku = product.sku || 'NO-SKU';
+      const categoryName = getCategoryName(product.category_id, cats);
+
+      const colorField = product.custom_fields?.find((f: any) =>
+        f.field_title?.toLowerCase() === 'color' || f.field_title?.toLowerCase() === 'colour'
+      );
+      const sizeField = product.custom_fields?.find((f: any) => f.field_title?.toLowerCase() === 'size');
+      const imageField = product.custom_fields?.find((f: any) => f.field_title?.toLowerCase() === 'image');
+
+      const color = colorField?.value || 'Default';
+      const size = sizeField?.value || 'One Size';
+
+      const cfImage = imageField?.value ? normalizeImageUrl(imageField.value) : '';
+      const apiPrimary = primaryImageMap.get(pid) || '';
+      const productImagesFallback = product.images?.[0]?.image_path
+        ? normalizeImageUrl(product.images?.[0]?.image_path)
+        : '';
+      const image = cfImage || apiPrimary || productImagesFallback || '/placeholder-image.jpg';
+
+      if (!skuGroups[sku]) {
+        skuGroups[sku] = {
+          sku,
+          productName: product.name,
+          category: categoryName,
+          totalStock: 0,
+          variations: [],
+          expanded: false,
+          extraTotal: 0,
+          extraDefective: 0,
+          extraUsed: 0,
+          productIds: [],
+        };
+      }
+
+      if (!skuGroups[sku].productIds.includes(pid)) {
+        skuGroups[sku].productIds.push(pid);
+      }
+
+      skuGroups[sku].extraTotal += ex.total;
+      skuGroups[sku].extraUsed += ex.used;
+      skuGroups[sku].extraDefective += ex.defective;
+
+      skuGroups[sku].variations.push({
+        color,
+        size,
+        image,
+        quantity: 0,
+        stores: [],
+      });
+    }
+
     return Object.values(skuGroups);
   };
 
@@ -228,11 +376,17 @@ export default function ViewInventoryPage() {
       const productsResponse = await productService.getAll({ per_page: 1000 });
       const productsData = productsResponse.data || [];
 
+      // Fetch active Extra-panel items (defective/used) and build counts map
+      const extraItems = await fetchAllActiveExtraItems();
+      const extraMap = buildExtraMapByProduct(extraItems);
+
       // Build images map from productImageService (like GalleryPage)
-      const productIds = inventoryData.map((x: any) => x.product_id).filter(Boolean);
+      const invProductIds = inventoryData.map((x: any) => x.product_id).filter(Boolean);
+      const extraProductIds = Array.from(extraMap.keys());
+      const productIds = [...invProductIds, ...extraProductIds];
       const primaryImageMap = await fetchPrimaryImagesMap(productIds);
 
-      const grouped = groupInventoryBySKU(inventoryData, productsData, categoriesData, primaryImageMap);
+      const grouped = groupInventoryBySKU(inventoryData, productsData, categoriesData, primaryImageMap, extraMap);
       setGroupedProducts(grouped);
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -369,6 +523,26 @@ export default function ViewInventoryPage() {
                             <p className="text-2xl font-semibold text-gray-900 dark:text-white">
                               {item.totalStock}
                             </p>
+
+                            {item.extraTotal > 0 && (
+                              <div className="mt-2 space-y-1">
+                                <div className="inline-flex items-center px-2 py-1 text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 rounded">
+                                  Extra: {item.extraTotal}
+                                </div>
+                                <div className="flex items-center justify-end gap-2">
+                                  {item.extraDefective > 0 && (
+                                    <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
+                                      Def: {item.extraDefective}
+                                    </span>
+                                  )}
+                                  {item.extraUsed > 0 && (
+                                    <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
+                                      Used: {item.extraUsed}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
 
                           <button
