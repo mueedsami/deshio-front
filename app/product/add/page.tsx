@@ -140,7 +140,7 @@ export default function AddEditProductPage({
         setSelectedVendorId(String(storedVendorId));
       }
       setHasVariations(true);
-      setActiveTab('variations');
+      setActiveTab('general');
     }
   }, [isEditMode, productId, availableFields, addVariationMode, storedBaseName, storedBaseSku, storedCategoryId, storedVendorId]);
 
@@ -339,6 +339,13 @@ export default function AddEditProductPage({
   };
 
   const openEditProduct = (id: number) => {
+    // IMPORTANT: We are already on /product/add. Navigating to the same route is a no-op
+    // in Next.js, so we switch modes via state instead of router.push.
+    setActiveTab('general');
+    setMode('edit');
+    setProductId(String(id));
+
+    // keep sessionStorage for compatibility (e.g., if user refreshes)
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('editProductId');
       sessionStorage.removeItem('productMode');
@@ -350,7 +357,6 @@ export default function AddEditProductPage({
       sessionStorage.setItem('editProductId', String(id));
       sessionStorage.setItem('productMode', 'edit');
     }
-    router.push('/product/add');
   };
 
   const openAddVariation = () => {
@@ -364,6 +370,33 @@ export default function AddEditProductPage({
     const catId = categorySelection.level0 ? String(categorySelection.level0) : '';
     const vid = selectedVendorId ? String(selectedVendorId) : '';
 
+    // IMPORTANT: We are already on /product/add. Navigating to the same route is a no-op
+    // in Next.js, so we switch modes via state instead of router.push.
+    setMode('addVariation');
+    setProductId(undefined);
+    setStoredBaseSku(sku);
+    setStoredBaseName(baseName);
+    setStoredCategoryId(catId);
+    setStoredVendorId(vid);
+
+    // Reset edit-specific state so the form becomes a clean "new variation" form.
+    setSelectedFields([]);
+    setProductImages([]);
+    setVariations([]);
+
+    // Pre-fill the new variation basics
+    setFormData({
+      name: baseName,
+      sku: sku,
+      description: '',
+    });
+    setCategorySelection(catId ? { level0: catId } : {});
+    if (vid) setSelectedVendorId(vid);
+
+    setHasVariations(true);
+    setActiveTab('general');
+
+    // keep sessionStorage for compatibility (e.g., if user refreshes)
     if (typeof window !== 'undefined') {
       sessionStorage.removeItem('editProductId');
       sessionStorage.removeItem('productMode');
@@ -378,8 +411,6 @@ export default function AddEditProductPage({
       if (catId) sessionStorage.setItem('categoryId', catId);
       if (vid) sessionStorage.setItem('vendorId', vid);
     }
-
-    router.push('/product/add');
   };
 
   const getCategoryPathArray = (): string[] => {
