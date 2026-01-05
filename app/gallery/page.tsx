@@ -1,10 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import Lightbox from '@/components/Lightbox';
-import { Copy, Check, Image as ImageIcon } from 'lucide-react';
+import { Copy, Check, Image as ImageIcon, Eye } from 'lucide-react';
 import inventoryService, { GlobalInventoryItem } from '@/services/inventoryService';
 import productImageService from '@/services/productImageService';
 import storeService from '@/services/storeService';
@@ -426,7 +427,7 @@ const fetchInventoryData = async () => {
             <div className="text-center py-12 text-red-600 dark:text-red-400">{error}</div>
           ) : filteredProducts.length === 0 ? (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-              <Image className="w-16 h-16 mx-auto mb-3 text-gray-400" />
+              <ImageIcon className="w-16 h-16 mx-auto mb-3 text-gray-400" />
               No products found
             </div>
           ) : (
@@ -485,9 +486,21 @@ const fetchInventoryData = async () => {
                       <h3 className="text-gray-900 dark:text-white font-semibold text-sm mb-2 line-clamp-2">
                         {product.product_name}
                       </h3>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                        SKU: {product.sku}
-                      </p>
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          SKU: {product.sku}
+                        </p>
+
+                        {/* Product details shortcut (same destination as Product List -> View Details) */}
+                        <Link
+                          href={`/product/${product.product_id}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-gray-900 text-white hover:bg-gray-700 transition-colors dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100"
+                          title="View product details"
+                        >
+                          <Eye className="w-3 h-3" />
+                          Details
+                        </Link>
+                      </div>
                       
                       <div className="space-y-1.5 text-xs">
                         <div className="flex items-center justify-between pb-1.5 border-b border-gray-100 dark:border-gray-700">
