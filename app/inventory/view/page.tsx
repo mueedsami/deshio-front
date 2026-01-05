@@ -137,7 +137,8 @@ export default function ViewInventoryPage() {
     'available_for_sale',
   ];
 
-  const isUsedItem = (desc?: string) => (desc || '').includes('USED_ITEM');
+  // Make USED_ITEM detection resilient to casing/extra text
+  const isUsedItem = (desc?: string) => (desc || '').toUpperCase().includes('USED_ITEM');
 
   const fetchAllActiveExtraItems = async (): Promise<DefectiveProduct[]> => {
     const per_page = 200;
@@ -149,7 +150,8 @@ export default function ViewInventoryPage() {
         const res = await defectiveProductService.getAll({ status, per_page, page });
 
         // Expected response: { success: true, data: paginator }
-        const paginator = (res as any)?.data;
+        // Axios response shape => res.data = { success, data: paginator }
+        const paginator = (res as any)?.data?.data;
         const rows: DefectiveProduct[] = paginator?.data || [];
 
         all.push(...rows);
@@ -524,23 +526,18 @@ export default function ViewInventoryPage() {
                               {item.totalStock}
                             </p>
 
-                            {item.extraTotal > 0 && (
-                              <div className="mt-2 space-y-1">
-                                <div className="inline-flex items-center px-2 py-1 text-xs font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 rounded">
-                                  Extra: {item.extraTotal}
-                                </div>
-                                <div className="flex items-center justify-end gap-2">
-                                  {item.extraDefective > 0 && (
-                                    <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
-                                      Def: {item.extraDefective}
-                                    </span>
-                                  )}
-                                  {item.extraUsed > 0 && (
-                                    <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
-                                      Used: {item.extraUsed}
-                                    </span>
-                                  )}
-                                </div>
+                            {(item.extraDefective > 0 || item.extraUsed > 0) && (
+                              <div className="mt-2 flex flex-col items-end gap-1">
+                                {item.extraDefective > 0 && (
+                                  <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
+                                    Def: {item.extraDefective}
+                                  </span>
+                                )}
+                                {item.extraUsed > 0 && (
+                                  <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
+                                    Used: {item.extraUsed}
+                                  </span>
+                                )}
                               </div>
                             )}
                           </div>
