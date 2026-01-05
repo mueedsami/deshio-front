@@ -147,14 +147,20 @@ export default function ViewInventoryPage() {
     for (const status of ACTIVE_EXTRA_STATUSES) {
       let page = 1;
       while (true) {
-        const res = await defectiveProductService.getAll({ status, per_page, page });
+        // defectiveProductService.getAll() returns **response.data** (already unwrapped)
+        // Expected shape: { success: true, data: paginator }
+        const res: any = await defectiveProductService.getAll({ status, per_page, page });
 
-        // Expected response: { success: true, data: paginator }
-        // Axios response shape => res.data = { success, data: paginator }
-        const paginator = (res as any)?.data?.data;
-        const rows: DefectiveProduct[] = paginator?.data || [];
+        // Support both paginated and non-paginated responses
+        const paginator = res?.data;
+        const rows: DefectiveProduct[] = Array.isArray(paginator)
+          ? paginator
+          : (paginator?.data || []);
 
         all.push(...rows);
+
+        // If it's not a paginator, we're done
+        if (Array.isArray(paginator)) break;
 
         const current = paginator?.current_page ?? page;
         const last = paginator?.last_page ?? page;

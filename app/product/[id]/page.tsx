@@ -43,6 +43,24 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     }
   };
 
+  const handleEdit = () => {
+    // Use the same sessionStorage mechanism as Product List page
+    // (product/add reads editProductId + productMode from sessionStorage)
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('editProductId');
+      sessionStorage.removeItem('productMode');
+      sessionStorage.removeItem('baseSku');
+      sessionStorage.removeItem('baseName');
+      sessionStorage.removeItem('categoryId');
+      sessionStorage.removeItem('vendorId');
+
+      sessionStorage.setItem('editProductId', String(productId));
+      sessionStorage.setItem('productMode', 'edit');
+    }
+
+    router.push('/product/add');
+  };
+
   const handleDelete = async () => {
     if (!confirm(`Delete "${product?.name}"? This action cannot be undone.`)) return;
 
@@ -155,7 +173,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
               </div>
               <div className="flex gap-3">
                 <button
-                  onClick={() => router.push(`/product/add?id=${productId}`)}
+                  onClick={handleEdit}
                   className="flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
                 >
                   <Edit className="w-4 h-4" />
