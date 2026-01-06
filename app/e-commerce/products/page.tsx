@@ -8,6 +8,7 @@ import Navigation from '@/components/ecommerce/Navigation';
 import Footer from '@/components/ecommerce/Footer';
 import catalogService from '@/services/catalogService';
 import cartService from '@/services/cartService';
+import { getBaseProductName } from '@/lib/productNameUtils';
 
 function ProductCard({ product }: { product: any }) {
   const primary = product.images?.find((i: any) => i.is_primary) || product.images?.[0];
@@ -30,7 +31,7 @@ function ProductCard({ product }: { product: any }) {
         <div className="aspect-square bg-gray-100">
           {imageUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={imageUrl} alt={product.name} className="w-full h-full object-cover" />
+            <img src={imageUrl} alt={getBaseProductName(product.name)} className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full flex items-center justify-center text-gray-400">
               <ShoppingBag />
@@ -38,7 +39,7 @@ function ProductCard({ product }: { product: any }) {
           )}
         </div>
         <div className="p-4">
-          <p className="font-semibold text-gray-900 line-clamp-2">{product.name}</p>
+          <p className="font-semibold text-gray-900 line-clamp-2">{getBaseProductName(product.name)}</p>
           <p className="text-red-700 font-bold mt-2">৳{Number(product.selling_price ?? product.price ?? 0).toFixed(0)}</p>
         </div>
       </Link>

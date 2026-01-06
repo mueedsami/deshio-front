@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useCart } from '@/app/e-commerce/CartContext';
 import CartSidebar from './cart/CartSidebar';
 import { wishlistUtils } from '@/lib/wishlistUtils';
+import { getBaseProductName } from '@/lib/productNameUtils';
 
 interface Product {
   id: string | number;
@@ -227,7 +228,7 @@ export default function BestSellerProducts() {
                   >
                     <img
                       src={product.image}
-                      alt={product.name}
+                      alt={getBaseProductName(product.name)}
                       className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                       onError={(e) => {
                         e.currentTarget.src =
@@ -297,7 +298,7 @@ export default function BestSellerProducts() {
                       onClick={() => navigateToProduct(product.variations[0].id)}
                       className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 group-hover:text-red-600 transition-colors cursor-pointer"
                     >
-                      {product.name}
+                      {getBaseProductName(product.name)}
                     </h3>
                     <span className="text-lg font-bold text-red-700">
                       {product.priceRange?.includes('-')

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import catalogService, { SimpleProduct } from '@/services/catalogService';
 import { useRouter } from 'next/navigation';
 import { ShoppingCart, Heart, Eye, Star } from 'lucide-react';
+import { getBaseProductName } from '@/lib/productNameUtils';
 
 export default function FeaturedProducts() {
   const router = useRouter();
@@ -100,7 +101,7 @@ export default function FeaturedProducts() {
                 <div className="relative aspect-square overflow-hidden bg-gray-100">
                   <img
                     src={imageUrl}
-                    alt={product.name}
+                    alt={getBaseProductName(product.name)}
                     className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                     onError={(e) => {
                       const target = e.target as HTMLImageElement;
@@ -140,7 +141,7 @@ export default function FeaturedProducts() {
                 {/* Product Info */}
                 <div className="p-4">
                   <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                    {product.name}
+                    {getBaseProductName(product.name)}
                   </h3>
 
                   {/* Category */}

@@ -6,6 +6,7 @@ import catalogService, { Product, PaginationMeta, CatalogCategory } from '@/serv
 import { ShoppingCart, Heart, Eye, ArrowLeft } from 'lucide-react';
 import CategorySidebar from '@/components/ecommerce/category/CategorySidebar';
 import Navigation from '@/components/ecommerce/Navigation';
+import { getBaseProductName, getColorLabel } from '@/lib/productNameUtils';
 
 // Types for product grouping
 interface ProductVariant {
@@ -101,36 +102,14 @@ export default function CategoryProductsPage() {
   };
 
   // Helper functions
-  const getBaseName = (product: Product): string => {
-    // Extract base name by removing color/size suffix
-    // Pattern: "Product Name - Color" or "Product Name - Color - Size"
-    let name = product.name || '';
-    
-    // Try to remove common color/size patterns from the end of the name
-    const match = name.match(/^(.+?)\s*-\s*([A-Za-z\s]+)$/);
-    
-    if (match) {
-      // Return the base name without color/size suffix
-      return match[1].trim();
-    }
-    
-    return name.trim();
-  };
-
-  const extractColorFromName = (name: string): string | undefined => {
-    // Extract color from pattern "Name - Color"
-    const match = name.match(/\s*-\s*([A-Za-z\s]+)$/);
-    return match ? match[1].trim() : undefined;
-  };
-
-  // Group products with variation logic
+      // Group products with variation logic
   const productGroups = useMemo((): ProductGroup[] => {
     const groups = new Map<string, ProductGroup>();
 
     products.forEach((product) => {
       const sku = product.sku || `product-${product.id}`;
-      const baseName = getBaseName(product);
-      const extractedColor = extractColorFromName(product.name);
+      const baseName = getBaseProductName(product.name || '');
+      const extractedColor = getColorLabel(product.name || '');
       
       // Find primary image or use first image
       const images = product.images || [];
