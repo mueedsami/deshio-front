@@ -138,7 +138,7 @@ export default function CartItem({ item, onQuantityChange, onRemove, isUpdating:
         onClick={handleNavigateToProduct}
       >
         <img
-          src={item.image || '/placeholder-product.jpg'}
+          src={item.image || '/placeholder-product.png'}
           alt={item.name}
           className="w-full h-full object-cover rounded hover:opacity-80 transition-opacity"
         />

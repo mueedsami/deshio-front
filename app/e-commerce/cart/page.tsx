@@ -359,7 +359,7 @@ export default function CartPage() {
                   ? parseFloat(item.total_price) 
                   : item.total_price;
                 const isItemUpdating = isUpdating.has(item.id);
-                const productImage = item.product.images?.[0]?.image_url || '/placeholder-product.jpg';
+                const productImage = item.product.images?.[0]?.image_url || '/placeholder-product.png';
 
                 return (
                   <div 
@@ -387,7 +387,7 @@ export default function CartPage() {
                           alt={item.product.name}
                           className="w-24 h-24 object-cover rounded"
                           onError={(e) => {
-                            e.currentTarget.src = '/placeholder-product.jpg';
+                            e.currentTarget.src = '/placeholder-product.png';
                           }}
                         />
                         <button

@@ -84,7 +84,7 @@ export default function FeaturedProducts() {
             // Better image handling
             const imagesArray = Array.isArray(product.images) ? product.images : [];
             const primaryImage = imagesArray.find(img => img.is_primary) || imagesArray[0];
-            const imageUrl = primaryImage?.url || '/placeholder-product.jpg';
+            const imageUrl = primaryImage?.url || '/placeholder-product.png';
             
             const categoryName = typeof product.category === 'string' 
               ? product.category 
@@ -104,7 +104,7 @@ export default function FeaturedProducts() {
                     className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                     onError={(e) => {
                       const target = e.target as HTMLImageElement;
-                      target.src = '/placeholder-product.jpg';
+                      target.src = '/placeholder-product.png';
                     }}
                   />
 

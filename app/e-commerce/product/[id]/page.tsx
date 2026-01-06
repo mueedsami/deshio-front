@@ -332,7 +332,7 @@ export default function ProductDetailPage() {
       wishlistUtils.add({
         id: item.id,
         name: item.name,
-        image: item.images?.[0]?.url || '/placeholder-product.jpg',
+        image: item.images?.[0]?.url || '/placeholder-product.png',
         price: Number((item as any).selling_price ?? 0),
         sku: item.sku,
       });
@@ -432,7 +432,7 @@ export default function ProductDetailPage() {
   const safeImages =
     Array.isArray(selectedVariant.images) && selectedVariant.images.length > 0
       ? selectedVariant.images
-      : [{ id: 0, url: '/placeholder-product.jpg', is_primary: true, alt_text: 'Product' } as any];
+      : [{ id: 0, url: '/placeholder-product.png', is_primary: true, alt_text: 'Product' } as any];
 
   const primaryImage =
     safeImages[selectedImageIndex]?.url || safeImages[0]?.url;
@@ -832,7 +832,7 @@ export default function ProductDetailPage() {
             {!loadingSuggestions && suggestedProducts.length > 0 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 {suggestedProducts.map((item) => {
-                  const itemImage = item.images?.[0]?.url || '/placeholder-product.jpg';
+                  const itemImage = item.images?.[0]?.url || '/placeholder-product.png';
                   const isItemInWishlist = wishlistUtils.isInWishlist(item.id);
                   const sp = Number((item as any).selling_price ?? 0);
 

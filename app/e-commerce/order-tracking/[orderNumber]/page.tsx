@@ -343,7 +343,7 @@ export default function OrderTrackingPage() {
                     alt={item.product_name}
                     className="w-20 h-20 object-cover rounded"
                     onError={(e) => {
-                      e.currentTarget.src = '/placeholder-product.jpg';
+                      e.currentTarget.src = '/placeholder-product.png';
                     }}
                   />
                 )}

@@ -18,6 +18,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import orderService from '@/services/orderService';
 import barcodeService from '@/services/barcodeService';
+import productService from '@/services/productService';
 import Toast from '@/components/Toast';
 
 interface ScannedItemTracking {
@@ -46,6 +47,21 @@ const parsePrice = (value: any): number => {
 
   const n = parseFloat(String(value));
   return Number.isFinite(n) ? n : 0;
+};
+
+const getApiBaseUrl = () => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || '';
+  return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
+};
+
+const toPublicImageUrl = (imagePath?: string | null) => {
+  if (!imagePath) return null;
+  const p = String(imagePath);
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  if (p.startsWith('/storage/')) return `${getApiBaseUrl()}${p}`;
+  if (p.startsWith('storage/')) return `${getApiBaseUrl()}/${p}`;
+  return `${getApiBaseUrl()}/storage/${p.replace(/^\//, '')}`;
 };
 
 const formatBDT = (value: any, decimals: 0 | 2 = 0) => {
@@ -78,6 +94,9 @@ export default function WarehouseFulfillmentPage() {
   const [orderDetails, setOrderDetails] = useState<any>(null);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+
+  // 🖼️ Product thumbnails (shown in packing UI)
+  const [productThumbsById, setProductThumbsById] = useState<Record<number, string>>({});
 
   const [scannedItems, setScannedItems] = useState<Record<number, ScannedItemTracking>>({});
   const [currentBarcode, setCurrentBarcode] = useState('');
@@ -114,6 +133,45 @@ export default function WarehouseFulfillmentPage() {
       barcodeInputRef.current.focus();
     }
   }, [isScanning]);
+
+  const ensureProductThumbs = async (productIds: Array<number | null | undefined>) => {
+    const ids = Array.from(new Set(productIds.filter((x): x is number => typeof x === 'number' && x > 0)));
+    if (ids.length === 0) return;
+    const missing = ids.filter((id) => !productThumbsById[id]);
+    if (missing.length === 0) return;
+
+    const fetched: Record<number, string> = {};
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const prod: any = await productService.getById(id);
+          const imgs: any[] = prod?.images || [];
+          const primary =
+            imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
+          const path = primary?.image_url || primary?.image_path || primary?.url;
+          const url = toPublicImageUrl(path);
+          if (url) fetched[id] = url;
+        } catch {
+          // ignore
+        }
+      })
+    );
+
+    if (Object.keys(fetched).length > 0) {
+      setProductThumbsById((prev) => ({ ...prev, ...fetched }));
+    }
+  };
+
+  const getItemThumbSrc = (productId?: number) => {
+    if (!productId) return '/placeholder-product.png';
+    return productThumbsById[productId] || '/placeholder-product.png';
+  };
+
+  useEffect(() => {
+    if (!orderDetails?.items) return;
+    ensureProductThumbs(orderDetails.items.map((it: any) => it.product_id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderDetails?.id]);
 
   const fetchPendingOrders = async () => {
     setIsLoadingOrders(true);
@@ -691,8 +749,17 @@ if (!matchingItem) {
                             }`}
                           >
                             <div className="flex items-start justify-between">
-                              <div className="flex-1">
-                                <h3 className="font-medium text-gray-900 dark:text-white">{item.product_name}</h3>
+                              <div className="flex items-start gap-3 flex-1">
+                                <img
+                                  src={getItemThumbSrc(item.product_id)}
+                                  alt={item.product_name}
+                                  className="w-12 h-12 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                                  onError={(e) => {
+                                    e.currentTarget.src = '/placeholder-product.png';
+                                  }}
+                                />
+                                <div className="flex-1">
+                                  <h3 className="font-medium text-gray-900 dark:text-white">{item.product_name}</h3>
                                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">SKU: {item.product_sku}</p>
                                 {item.batch_number && <p className="text-xs text-gray-500 dark:text-gray-500">Batch: {item.batch_number}</p>}
 
@@ -740,7 +807,8 @@ if (!matchingItem) {
                                   )}
                                 </div>
                               </div>
-                              <div className="ml-4">
+                            </div>
+                            <div className="ml-4">
                                 {isComplete ? (
                                   <CheckCircle className="h-8 w-8 text-green-600" />
                                 ) : scannedCount > 0 ? (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import {
@@ -25,6 +25,7 @@ import {
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
+import productService from '@/services/productService';
 
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
@@ -49,6 +50,8 @@ interface Order {
   };
   items: Array<{
     id: number;
+    productId?: number;
+    imageUrl?: string | null;
     name: string;
     sku: string;
     quantity: number;
@@ -198,6 +201,46 @@ const titleCase = (s: string) =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
+const getApiBaseUrl = () => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || '';
+  return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
+};
+
+const toPublicImageUrl = (imagePath?: string | null) => {
+  if (!imagePath) return null;
+  const p = String(imagePath);
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  if (p.startsWith('/storage/')) return `${getApiBaseUrl()}${p}`;
+  if (p.startsWith('storage/')) return `${getApiBaseUrl()}/${p}`;
+  // default: assume it's a storage relative path
+  return `${getApiBaseUrl()}/storage/${p.replace(/^\//, '')}`;
+};
+
+const pickOrderItemImage = (item: any): string | null => {
+  // Try common fields that backend might return
+  const direct =
+    item?.product_image ||
+    item?.image_url ||
+    item?.image ||
+    item?.thumbnail ||
+    item?.product?.image_url ||
+    item?.product?.image ||
+    item?.product?.thumbnail;
+
+  if (direct) return toPublicImageUrl(direct);
+
+  const imgs: any[] =
+    item?.product?.images || item?.images || item?.product_images || item?.product?.product_images || [];
+  if (Array.isArray(imgs) && imgs.length > 0) {
+    const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
+    const path = primary?.image_url || primary?.image_path || primary?.url;
+    return toPublicImageUrl(path);
+  }
+
+  return null;
+};
+
 // Pathao lookup types (used for Social Commerce address editing)
 type PathaoCity = { city_id: number; city_name: string };
 type PathaoZone = { zone_id: number; zone_name: string };
@@ -246,6 +289,49 @@ export default function OrdersDashboard() {
   const [isProductLoading, setIsProductLoading] = useState(false);
   const [pickerBatches, setPickerBatches] = useState<any[]>([]);
   const [pickerStoreId, setPickerStoreId] = useState<number | null>(null);
+
+  // 🖼️ Product thumbnails (used in View Details / Edit Order / Packing-like tables)
+  const [productThumbsById, setProductThumbsById] = useState<Record<number, string>>({});
+
+  const ensureProductThumbs = useCallback(async (productIds: Array<number | null | undefined>) => {
+    const ids = Array.from(new Set(productIds.filter((x): x is number => typeof x === 'number' && x > 0)));
+    if (ids.length === 0) return;
+
+    const missing = ids.filter((id) => !productThumbsById[id]);
+    if (missing.length === 0) return;
+
+    const fetched: Record<number, string> = {};
+    await Promise.all(
+      missing.map(async (id) => {
+        try {
+          const prod: any = await productService.getById(id);
+          const imgs: any[] = prod?.images || [];
+          const primary =
+            imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
+          const path = primary?.image_url || primary?.image_path || primary?.url;
+          const url = toPublicImageUrl(path);
+          if (url) fetched[id] = url;
+        } catch (e) {
+          // ignore (fallback to placeholder)
+        }
+      })
+    );
+
+    if (Object.keys(fetched).length > 0) {
+      setProductThumbsById((prev) => ({ ...prev, ...fetched }));
+    }
+  }, [productThumbsById]);
+
+  const getItemThumbSrc = useCallback(
+    (item: { productId?: number; imageUrl?: string | null }) => {
+      return (
+        item.imageUrl ||
+        (item.productId ? productThumbsById[item.productId] : null) ||
+        '/placeholder-product.png'
+      );
+    },
+    [productThumbsById]
+  );
 
 
   // 📦 Address editing (Social Commerce: Pathao / International, E-commerce checkout)
@@ -571,6 +657,8 @@ const derivePaymentStatus = (order: any) => {
           const discountAmount = parseMoney(item.discount_amount);
           return {
             id: item.id,
+            productId: item.product_id,
+            imageUrl: pickOrderItemImage(item),
             name: item.product_name,
             sku: item.product_sku,
             quantity: item.quantity,
@@ -764,6 +852,7 @@ const derivePaymentStatus = (order: any) => {
       const fullOrder = await orderService.getById(order.id);
       const transformedOrder = transformOrder(fullOrder);
       setSelectedOrder(transformedOrder);
+      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
     } catch (error: any) {
       console.error('Failed to load order details:', error);
       alert('Failed to load order details: ' + error.message);
@@ -784,6 +873,7 @@ const derivePaymentStatus = (order: any) => {
 
       setSelectedOrder(transformedOrder);
       setEditableOrder(transformedOrder);
+      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
       if (fullOrder.store?.id) {
         setPickerStoreId(fullOrder.store.id);
       }
@@ -803,6 +893,7 @@ const derivePaymentStatus = (order: any) => {
       const transformed = transformOrder(fullOrder);
       setSelectedOrder(transformed);
       setEditableOrder(transformed);
+      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
       await loadOrders();
     } catch (e: any) {
       console.error('Failed to reload order after item change:', e);
@@ -1508,6 +1599,14 @@ const derivePaymentStatus = (order: any) => {
         const products = response.data.data?.items || response.data.data?.data?.items || response.data.data || [];
 
         for (const prod of products) {
+          const imgPath =
+            prod?.images?.[0]?.image_url ||
+            prod?.images?.[0]?.image_path ||
+            prod?.image_url ||
+            prod?.image_path ||
+            prod?.thumbnail;
+          const imageUrl = toPublicImageUrl(imgPath);
+
           const productBatches = pickerBatches.filter((batch: any) => {
             const batchProductId = batch.product?.id || batch.product_id;
             return batchProductId === prod.id && batch.quantity > 0;
@@ -1519,6 +1618,7 @@ const derivePaymentStatus = (order: any) => {
                 id: prod.id,
                 name: prod.name,
                 sku: prod.sku,
+                imageUrl,
                 batchId: batch.id,
                 batchNumber: batch.batch_number,
                 price: parseMoney(batch.sell_price),
@@ -2429,8 +2529,20 @@ const derivePaymentStatus = (order: any) => {
                           {selectedOrder.items.map((item) => (
                             <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                               <td className="px-4 py-3">
-                                <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
-                                <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
+                                <div className="flex items-center gap-3">
+                                  <img
+                                    src={getItemThumbSrc(item)}
+                                    alt={item.name}
+                                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                                    onError={(e) => {
+                                      e.currentTarget.src = '/placeholder-product.png';
+                                    }}
+                                  />
+                                  <div>
+                                    <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
+                                    <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
+                                  </div>
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-center">
                                 <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 text-sm font-medium text-black dark:text-white">
@@ -2858,6 +2970,14 @@ const derivePaymentStatus = (order: any) => {
                           key={item.id}
                           className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700"
                         >
+                          <img
+                            src={getItemThumbSrc(item)}
+                            alt={item.name}
+                            className="w-12 h-12 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                            onError={(e) => {
+                              e.currentTarget.src = '/placeholder-product.png';
+                            }}
+                          />
                           <div className="flex-1">
                             <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
                             <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
@@ -3059,14 +3179,26 @@ const derivePaymentStatus = (order: any) => {
                         onClick={() => handleSelectProductForOrder(product)}
                         className="border border-gray-200 dark:border-gray-600 rounded p-2 text-left hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                       >
-                        <p className="text-xs font-medium text-black dark:text-white truncate">{product.name}</p>
-                        {product.batchNumber && (
-                          <p className="text-[11px] text-blue-600 dark:text-blue-400 truncate">
-                            Batch: {product.batchNumber}
-                          </p>
-                        )}
-                        <p className="text-[11px] text-gray-600 dark:text-gray-400">Price: {product.price} Tk</p>
-                        <p className="text-[11px] text-green-600 dark:text-green-400">Available: {product.available}</p>
+                        <div className="flex items-center gap-2">
+                          <img
+                            src={product.imageUrl || '/placeholder-product.png'}
+                            alt={product.name}
+                            className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
+                            onError={(e) => {
+                              e.currentTarget.src = '/placeholder-product.png';
+                            }}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-black dark:text-white truncate">{product.name}</p>
+                            {product.batchNumber && (
+                              <p className="text-[11px] text-blue-600 dark:text-blue-400 truncate">
+                                Batch: {product.batchNumber}
+                              </p>
+                            )}
+                            <p className="text-[11px] text-gray-600 dark:text-gray-400">Price: {product.price} Tk</p>
+                            <p className="text-[11px] text-green-600 dark:text-green-400">Available: {product.available}</p>
+                          </div>
+                        </div>
                       </button>
                     ))}
                   </div>

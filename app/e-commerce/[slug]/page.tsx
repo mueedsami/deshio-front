@@ -351,7 +351,7 @@ export default function CategoryProductsPage() {
                         {/* Product Image */}
                         <div className="relative aspect-square overflow-hidden bg-gray-100">
                           <img
-                            src={group.primaryImage || '/placeholder-product.jpg'}
+                            src={group.primaryImage || '/placeholder-product.png'}
                             alt={group.baseName}
                             className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
                           />

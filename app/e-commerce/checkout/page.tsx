@@ -278,7 +278,7 @@ export default function CheckoutPage() {
       quantity: item.quantity,
       price: unitPrice,
       total: totalPrice,
-      product_image: item.images?.[0]?.image_url || '/placeholder-product.jpg',
+      product_image: item.images?.[0]?.image_url || '/placeholder-product.png',
       sku: item.sku || '',
     };
   });
@@ -798,7 +798,7 @@ export default function CheckoutPage() {
                       <div className="w-12 h-12 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={item.images?.[0]?.image_url || '/placeholder-product.jpg'}
+                          src={item.images?.[0]?.image_url || '/placeholder-product.png'}
                           alt={item.name}
                           className="w-full h-full object-cover"
                         />
@@ -1445,11 +1445,11 @@ export default function CheckoutPage() {
                   return (
                     <div key={item.id} className="flex gap-3">
                       <img
-                        src={item.images?.[0]?.image_url || '/placeholder-product.jpg'}
+                        src={item.images?.[0]?.image_url || '/placeholder-product.png'}
                         alt={item.name}
                         className="w-16 h-16 object-cover rounded"
                         onError={(e) => {
-                          e.currentTarget.src = '/placeholder-product.jpg';
+                          e.currentTarget.src = '/placeholder-product.png';
                         }}
                       />
                       <div className="flex-1">
