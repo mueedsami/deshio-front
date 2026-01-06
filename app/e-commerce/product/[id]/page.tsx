@@ -143,6 +143,26 @@ export default function ProductDetailPage() {
         setProduct(mainProduct);
         setRelatedProducts(response.related_products || []);
 
+        // ✅ If SKU is missing, treat this product as standalone (no variations)
+        if (!mainProduct.sku) {
+          const selfVariant: ProductVariant = {
+            id: mainProduct.id,
+            name: mainProduct.name,
+            sku: `product-${mainProduct.id}`,
+            color: extractColorFromName(mainProduct.name),
+            size: extractSizeFromName(mainProduct.name),
+            selling_price: (mainProduct as any).selling_price ?? null,
+            in_stock: !!(mainProduct as any).in_stock,
+            stock_quantity: (mainProduct as any).stock_quantity ?? 0,
+            images: (mainProduct as any).images ?? [],
+          };
+
+          setAllProducts([]);
+          setProductVariants([selfVariant]);
+          setSelectedVariant(selfVariant);
+          return;
+        }
+
         const allProductsResponse = await catalogService.getProducts({
           per_page: 100,
         });
@@ -170,6 +190,25 @@ export default function ProductDetailPage() {
             if (aColor !== bColor) return aColor.localeCompare(bColor);
             return aSize.localeCompare(bSize);
           });
+
+        // ✅ If no variations were found for this SKU, still show the product itself
+        if (variations.length === 0) {
+          const selfVariant: ProductVariant = {
+            id: mainProduct.id,
+            name: mainProduct.name,
+            sku: mainProduct.sku || `product-${mainProduct.id}`,
+            color: extractColorFromName(mainProduct.name),
+            size: extractSizeFromName(mainProduct.name),
+            selling_price: (mainProduct as any).selling_price ?? null,
+            in_stock: !!(mainProduct as any).in_stock,
+            stock_quantity: (mainProduct as any).stock_quantity ?? 0,
+            images: (mainProduct as any).images ?? [],
+          };
+
+          setProductVariants([selfVariant]);
+          setSelectedVariant(selfVariant);
+          return;
+        }
 
         setProductVariants(variations);
 
