@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 import {
   LayoutDashboard,
   Store,
-  BarChart3,
   FolderTree,
   Package,
   ClipboardList,
@@ -51,17 +50,24 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   };
 
   const menuItems: MenuItem[] = [
-    { icon: LayoutDashboard, label: 'Dashboard', href: '/dashboard' },
-    { icon: BarChart3, label: 'Stores Summary', href: '/dashboard/stores-summary' },
-    { icon: Store, label: 'Store', href: '/store' },
-    { icon: FolderTree, label: 'Category', href: '/category' },
-    { icon: Truck,
-       label: 'Vendor Management',
-       subMenu:[
+    {
+      icon: LayoutDashboard,
+      label: 'Dashboard',
+      subMenu: [
+        { label: 'Overview', href: '/dashboard' },
+        { label: 'Stores Summary', href: '/dashboard/stores-summary' },
+      ],
+    },
+    {
+      icon: Truck,
+      label: 'Vendor Management',
+      subMenu: [
         { label: 'Vendor Payment', href: '/vendor' },
         { label: 'Purchase Order', href: '/purchase-order' },
-       ]
+      ],
     },
+    { icon: Store, label: 'Store', href: '/store' },
+    { icon: FolderTree, label: 'Category', href: '/category' },
     { icon: Image, label: 'Gallery', href: '/gallery' },
     {
       icon: Package,
@@ -84,25 +90,17 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'Reports', href: '/inventory/reports' },
       ],
     },
-    { icon: ShoppingCart, label: 'Store Assingment', href: '/store-assingment' },
-    { icon: ShoppingCart, label: 'Packing', href: '/store-fulfillment' },
     { icon: ShoppingCart, label: 'POS', href: '/pos' },
-    { icon: ShoppingCart,
-       label: 'Social Commerce',
-       subMenu:[
-        { label: 'Take Orders', href: '/social-commerce' },
-        { label: 'Pack Orders', href: '/social-commerce/package' },
-       ]
-    },
-    {icon: Package, label: 'Preorders', href: '/preorders' },
-    {icon: Package, label: 'Orders', href: '/orders' },
-    {icon: History, label: 'Activity Logs', href: '/activity-logs' },
     { icon: ClipboardList, label: 'Purchase History', href: '/purchase-history' },
-    { icon: Search, label: 'Lookup', href: '/lookup' },
+    { icon: ShoppingCart, label: 'Social Commerce', href: '/social-commerce' },
+    { icon: Package, label: 'Orders', href: '/orders' },
+    { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
+    { icon: Package, label: 'PreOrders', href: '/preorders' },
     { icon: AlertTriangle, label: 'Extra Panel', href: '/extra' },
+    { icon: Search, label: 'Lookup', href: '/lookup' },
+    { icon: History, label: 'Activity Log', href: '/activity-logs' },
     { icon: CreditCard, label: 'Transaction', href: '/transaction' },
     { icon: CreditCard, label: 'Accounting', href: '/accounting' },
-    
     { icon: CreditCard, label: 'Employee Management', href: '/employees' },
   ];
 
