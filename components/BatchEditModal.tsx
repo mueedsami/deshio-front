@@ -97,7 +97,7 @@ export default function BatchEditModal({ batch, isOpen, onClose, onSave }: Batch
     const selling = parseFloat(formData.sellingPrice) || 0;
     if (cost > 0 && selling > 0) {
       const profit = selling * (1 - 0.075) - cost;
-      const margin = ((profit / selling) * 100).toFixed(2);
+      const margin = ((profit / cost) * 100).toFixed(2);
       return { profit, margin };
     }
     return null;
