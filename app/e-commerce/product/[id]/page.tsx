@@ -80,23 +80,65 @@ export default function ProductDetailPage() {
   };
 
   // Helper functions
-  const getBaseName = (name: string): string => {
-    const match = name.match(/^(.+?)\s*-\s*([A-Za-z\s]+)$/);
-    if (match) return match[1].trim();
-    return name.trim();
+  /**
+   * Split a variant suffix from a product name.
+   * Examples:
+   *  - "Cotton Jamdani - 9" => base="Cotton Jamdani", suffix="9"
+   *  - "Polo T-Shirt - XL" => base="Polo T-Shirt", suffix="XL"
+   */
+  const splitVariantSuffix = (name: string): { base: string; suffix?: string } => {
+    const idx = name.lastIndexOf(' - ');
+    if (idx === -1) return { base: name.trim() };
+    const base = name.slice(0, idx).trim();
+    const suffix = name.slice(idx + 3).trim();
+    return { base: base || name.trim(), suffix: suffix || undefined };
   };
 
-  const extractColorFromName = (name: string): string | undefined => {
-    const match = name.match(/\s*-\s*([A-Za-z\s]+)$/);
-    return match ? match[1].trim() : undefined;
+  const isSizeToken = (token?: string): boolean => {
+    if (!token) return false;
+    const t = token.trim().toUpperCase();
+    const sizeWords = new Set([
+      'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL',
+      'FREE', 'FREE SIZE', 'FREESIZE', 'ONE SIZE', 'ONESIZE'
+    ]);
+    if (sizeWords.has(t)) return true;
+
+    // Common numeric sizes we use (avoid treating 1..10 as sizes)
+    if (/^(36|38|40|42|44|46|48|50)$/.test(t)) return true;
+    return false;
   };
 
-  const extractSizeFromName = (name: string): string | undefined => {
-  const match = name.match(
-    /\b(36|38|40|42|44|46|\d+)\b/i
-  );
-  return match ? match[0] : undefined;
-};
+  // Variant label: takes suffix after " - ". If it's not a known size, treat as color/design label.
+  const extractColorLabel = (name: string): string | undefined => {
+    const { suffix } = splitVariantSuffix(name);
+    if (!suffix) return undefined;
+    return isSizeToken(suffix) ? undefined : suffix;
+  };
+
+  // Size label: only recognize explicit size patterns (avoid generic "\d+" which breaks color-coded variants like "- 9")
+  const extractSizeLabel = (name: string): string | undefined => {
+    const { suffix } = splitVariantSuffix(name);
+    if (suffix && isSizeToken(suffix)) return suffix;
+
+    // Fallback: look for explicit size tokens in the full name
+    const word = name.match(/\b(XXXL|XXL|XL|XS|S|M|L)\b/i)?.[0];
+    if (word) return word.toUpperCase();
+    const num = name.match(/\b(36|38|40|42|44|46|48|50)\b/)?.[0];
+    if (num) return num;
+    return undefined;
+  };
+
+  const compareVariantLabel = (a?: string, b?: string) => {
+    const aa = (a ?? '').trim();
+    const bb = (b ?? '').trim();
+    const an = Number(aa);
+    const bn = Number(bb);
+    const aIsNum = aa !== '' && Number.isFinite(an);
+    const bIsNum = bb !== '' && Number.isFinite(bn);
+
+    if (aIsNum && bIsNum) return an - bn;
+    return aa.localeCompare(bb, undefined, { numeric: true, sensitivity: 'base' });
+  };
 
 
   // Fetch suggested products
@@ -149,8 +191,8 @@ export default function ProductDetailPage() {
             id: mainProduct.id,
             name: mainProduct.name,
             sku: `product-${mainProduct.id}`,
-            color: extractColorFromName(mainProduct.name),
-            size: extractSizeFromName(mainProduct.name),
+            color: (mainProduct as any).color ?? extractColorLabel(mainProduct.name),
+            size: (mainProduct as any).size ?? extractSizeLabel(mainProduct.name),
             selling_price: (mainProduct as any).selling_price ?? null,
             in_stock: !!(mainProduct as any).in_stock,
             stock_quantity: (mainProduct as any).stock_quantity ?? 0,
@@ -164,7 +206,8 @@ export default function ProductDetailPage() {
         }
 
         const allProductsResponse = await catalogService.getProducts({
-          per_page: 100,
+          // Increase page size so variants don't disappear just because they're not in the first 100
+          per_page: 500,
         });
 
         setAllProducts(allProductsResponse.products);
@@ -175,20 +218,18 @@ export default function ProductDetailPage() {
             id: p.id,
             name: p.name,
             sku: p.sku,
-            color: extractColorFromName(p.name),
-            size: extractSizeFromName(p.name),
+            color: (p as any).color ?? extractColorLabel(p.name),
+            size: (p as any).size ?? extractSizeLabel(p.name),
             selling_price: (p as any).selling_price ?? null,
             in_stock: !!p.in_stock,
             stock_quantity: (p as any).stock_quantity ?? 0,
             images: (p as any).images ?? [],
           }))
           .sort((a, b) => {
-            const aColor = a.color || '';
-            const bColor = b.color || '';
-            const aSize = a.size || '';
-            const bSize = b.size || '';
-            if (aColor !== bColor) return aColor.localeCompare(bColor);
-            return aSize.localeCompare(bSize);
+            // Prefer sorting by color/design label, then by size
+            const byColor = compareVariantLabel(a.color, b.color);
+            if (byColor !== 0) return byColor;
+            return compareVariantLabel(a.size, b.size);
           });
 
         // ✅ If no variations were found for this SKU, still show the product itself
@@ -197,8 +238,8 @@ export default function ProductDetailPage() {
             id: mainProduct.id,
             name: mainProduct.name,
             sku: mainProduct.sku || `product-${mainProduct.id}`,
-            color: extractColorFromName(mainProduct.name),
-            size: extractSizeFromName(mainProduct.name),
+            color: (mainProduct as any).color ?? extractColorLabel(mainProduct.name),
+            size: (mainProduct as any).size ?? extractSizeLabel(mainProduct.name),
             selling_price: (mainProduct as any).selling_price ?? null,
             in_stock: !!(mainProduct as any).in_stock,
             stock_quantity: (mainProduct as any).stock_quantity ?? 0,
@@ -336,8 +377,8 @@ export default function ProductDetailPage() {
     if (!item.in_stock) return;
 
     try {
-      const color = extractColorFromName(item.name);
-      const size = extractSizeFromName(item.name);
+      const color = (item as any).color ?? extractColorLabel(item.name);
+      const size = (item as any).size ?? extractSizeLabel(item.name);
 
       await cartService.addToCart({
         product_id: item.id,
@@ -462,7 +503,7 @@ export default function ProductDetailPage() {
   // ---------------------------
   // Derived safe values
   // ---------------------------
-  const baseName = getBaseName(product.name);
+  const displayName = splitVariantSuffix(selectedVariant.name || product.name).base;
 
   const sellingPrice = Number(selectedVariant.selling_price ?? 0);
   const costPrice = Number((product as any).cost_price ?? 0);
@@ -511,7 +552,7 @@ export default function ProductDetailPage() {
               {product.category?.name || 'Products'}
             </button>
             <span className="text-gray-300">/</span>
-            <span className="text-gray-900 font-medium">{baseName}</span>
+            <span className="text-gray-900 font-medium">{displayName}</span>
           </div>
         </div>
       </div>
@@ -601,7 +642,7 @@ export default function ProductDetailPage() {
                     Errum Collection
                   </p>
                   <h1 className="mt-2 text-2xl sm:text-3xl font-bold text-gray-900">
-                    {baseName}
+                    {displayName}
                   </h1>
                 </div>
 
