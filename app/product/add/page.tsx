@@ -451,7 +451,7 @@ export default function AddEditProductPage({
     }
   };
 
-  const openAddVariation = (prefillColor?: string) => {
+  const openAddVariation = () => {
     const sku = String(formData.sku || '').trim();
     if (!sku) {
       setToast({ message: 'SKU is required to add variations', type: 'error' });
@@ -486,20 +486,7 @@ export default function AddEditProductPage({
     if (vid) setSelectedVendorId(vid);
 
     setHasVariations(true);
-
-    if (prefillColor) {
-      const newVariation: VariationData = {
-        id: `var-${Date.now()}-${Math.random()}`,
-        color: String(prefillColor),
-        sizes: [''],
-        images: [],
-        imagePreviews: [],
-      };
-      setVariations([newVariation]);
-      setActiveTab('variations');
-    } else {
-      setActiveTab('general');
-    }
+    setActiveTab('general');
 
     // keep sessionStorage for compatibility (e.g., if user refreshes)
     if (typeof window !== 'undefined') {
@@ -1325,14 +1312,6 @@ export default function AddEditProductPage({
                                       </button>
                                       <button
                                         type="button"
-                                        onClick={() => openAddVariation(v.color ? String(v.color) : undefined)}
-                                        className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
-                                        title="Create new size variants for this color"
-                                      >
-                                        Add Sizes
-                                      </button>
-                                      <button
-                                        type="button"
                                         onClick={() => router.push(`/product/${p.id}`)}
                                         className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
                                       >
@@ -1403,6 +1382,7 @@ export default function AddEditProductPage({
                           variation={variation}
                           index={varIdx}
                           onUpdate={(color) => updateVariationColor(variation.id, color)}
+                          onUpdateColor={(color) => updateVariationColor(variation.id, color)}
                           onRemove={() => removeVariation(variation.id)}
                           onImageUpload={(e) => handleVariationImageChange(variation.id, e)}
                           onImageRemove={(imgIdx) => removeVariationImage(variation.id, imgIdx)}
