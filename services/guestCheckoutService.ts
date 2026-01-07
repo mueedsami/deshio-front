@@ -102,7 +102,8 @@ class GuestCheckoutService {
     return response.data as any;
   }
 
-  async ordersByPhone(phone: string): Promise<GuestOrdersByPhoneResponse> {
+  async ordersByPhone(payload: string | { phone: string }): Promise<GuestOrdersByPhoneResponse> {
+    const phone = typeof payload === 'string' ? payload : payload?.phone;
     const response = await axiosInstance.post<ApiResponse<any>>('/guest-orders/by-phone', { phone });
     return response.data as any;
   }

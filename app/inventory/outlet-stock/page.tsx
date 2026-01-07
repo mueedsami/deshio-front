@@ -23,6 +23,7 @@ export default function DispatchManagementPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [store, setStore] = useState<Store | null>(null);
   const [stores, setStores] = useState<Store[]>([]);
+  const [currentStoreId, setCurrentStoreId] = useState<number | null>(null);
   const [dispatches, setDispatches] = useState<ProductDispatch[]>([]);
   const [statistics, setStatistics] = useState<DispatchStatistics | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -55,6 +56,14 @@ export default function DispatchManagementPage() {
     fetchStores();
     fetchDispatches();
     fetchStatistics();
+  }, []);
+
+  // Current store context (needed for dispatch barcode scanning buttons)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = localStorage.getItem('storeId');
+    const parsed = stored ? parseInt(stored, 10) : NaN;
+    setCurrentStoreId(Number.isFinite(parsed) ? parsed : null);
   }, []);
 
   useEffect(() => {
@@ -355,7 +364,7 @@ export default function DispatchManagementPage() {
               onMarkDelivered={handleMarkDelivered}
               onCancel={handleCancel}
               onScanBarcodes={handleScanBarcodes}
-              currentStoreId={store?.id}
+              currentStoreId={currentStoreId ?? undefined}
             />
           </main>
         </div>

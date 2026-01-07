@@ -34,7 +34,7 @@ export default function OrderTrackingByPhonePage() {
 
     setLoading(true);
     try {
-      const res: any = await guestCheckoutService.ordersByPhone({ phone: cleanPhone(phone) });
+      const res: any = await guestCheckoutService.ordersByPhone(cleanPhone(phone));
       setCustomer(res?.data?.customer || null);
       setOrders(res?.data?.orders || []);
     } catch (err: any) {
