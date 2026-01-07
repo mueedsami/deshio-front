@@ -58,6 +58,26 @@ export interface SplitPaymentRequest {
   splits: PaymentSplit[];
 }
 
+// Installment plan setup request
+export interface InstallmentPlanRequest {
+  total_installments: number;
+  installment_amount: number;
+  start_date?: string | null;
+  notes?: string;
+}
+
+// Installment payment request (pay one installment)
+export interface InstallmentPaymentRequest {
+  payment_method_id: number;
+  amount: number;
+  transaction_reference?: string;
+  external_reference?: string;
+  auto_complete?: boolean;
+  notes?: string;
+  payment_data?: PaymentData;
+}
+
+
 export interface Payment {
   id: number;
   order_id: number;
@@ -273,6 +293,48 @@ class PaymentService {
     }
   }
 
+
+
+  /**
+   * ✅ Setup Installment Plan (EMI)
+   *
+   * Endpoint: POST /api/orders/{order}/payments/installment/setup
+   */
+  async setupInstallmentPlan(orderId: number, payload: SetupInstallmentPlanRequest): Promise<any> {
+    try {
+      const response = await axiosInstance.post(`/orders/${orderId}/payments/installment/setup`, payload);
+      if (!response.data?.success) {
+        throw new Error(response.data?.message || 'Failed to setup installment plan');
+      }
+      return response.data.data;
+    } catch (error: any) {
+      const msg = error.response?.data?.message || error.message || 'Failed to setup installment plan';
+      throw new Error(msg);
+    }
+  }
+
+  /**
+   * ✅ Add Installment Payment (EMI)
+   *
+   * Endpoint: POST /api/orders/{order}/payments/installment
+   */
+  async addInstallmentPayment(orderId: number, payload: InstallmentPaymentRequest): Promise<Payment> {
+    try {
+      const response = await axiosInstance.post<PaymentResponse>(
+        `/orders/${orderId}/payments/installment`,
+        payload
+      );
+
+      if (!response.data?.success) {
+        throw new Error(response.data?.message || 'Failed to add installment payment');
+      }
+
+      return response.data.data;
+    } catch (error: any) {
+      const msg = error.response?.data?.message || error.message || 'Failed to add installment payment';
+      throw new Error(msg);
+    }
+  }
   /**
    * Legacy method - redirects to processSimple for backward compatibility
    * @deprecated Use processSimple instead
