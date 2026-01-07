@@ -158,14 +158,33 @@ export default function AddEditProductPage({
     fetchSkuGroupProducts(sku);
   }, [isEditMode, formData.sku]);
 
+  /**
+   * Normalize category tree so sub-categories always render.
+   *
+   * Some API responses return nested nodes in `all_children` (and may omit `children`).
+   * Our UI (CategoryTreeSelector) prefers `children`, so we unify both into `children`.
+   */
   const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
-    return cats
-      .filter(cat => cat.is_active)
-      .map(cat => ({
-        ...cat,
-        children: cat.children ? filterActiveCategories(cat.children) : [],
-        all_children: cat.all_children ? filterActiveCategories(cat.all_children) : []
-      }));
+    const getChildren = (cat: CategoryTree): CategoryTree[] => {
+      const rawChildren = (cat as any)?.children;
+      const rawAllChildren = (cat as any)?.all_children;
+
+      if (Array.isArray(rawChildren) && rawChildren.length > 0) return rawChildren;
+      if (Array.isArray(rawAllChildren) && rawAllChildren.length > 0) return rawAllChildren;
+      return [];
+    };
+
+    return (Array.isArray(cats) ? cats : [])
+      .filter((cat) => Boolean(cat) && Boolean((cat as any).is_active))
+      .map((cat) => {
+        const nested = filterActiveCategories(getChildren(cat));
+        return {
+          ...cat,
+          children: nested,
+          // keep for backward-compatibility, but ensure it doesn't shadow children
+          all_children: nested,
+        } as CategoryTree;
+      });
   };
 
   const fetchInitialData = async () => {
