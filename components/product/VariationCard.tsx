@@ -18,7 +18,7 @@ const SIZE_OPTIONS = [
   'EU 40 (US 7.5)',
   'EU 41 (US 8.5)',
   'EU 42 (US 9)',
-  'EU 43 (US 10)',
+  '43',
 ];
 
 
