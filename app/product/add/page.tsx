@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; 
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import Toast from '@/components/Toast';
@@ -105,6 +105,13 @@ export default function AddEditProductPage({
   // SKU group (all products that share the same SKU)
   const [skuGroupProducts, setSkuGroupProducts] = useState<Product[]>([]);
   const [skuGroupLoading, setSkuGroupLoading] = useState<boolean>(false);
+
+  // Bulk update helpers for SKU group (frontend-only: loops update requests)
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<number[]>([]);
+  const [bulkApplyDescription, setBulkApplyDescription] = useState<boolean>(true);
+  const [bulkApplyCategory, setBulkApplyCategory] = useState<boolean>(true);
+  const [bulkApplyVendor, setBulkApplyVendor] = useState<boolean>(true);
+  const [bulkUpdating, setBulkUpdating] = useState<boolean>(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -349,11 +356,77 @@ export default function AddEditProductPage({
       });
 
       setSkuGroupProducts(exact);
+      setBulkSelectedIds(exact.map(p => p.id));
     } catch (error) {
       console.error('Failed to fetch SKU group products:', error);
       setSkuGroupProducts([]);
     } finally {
       setSkuGroupLoading(false);
+    }
+  };
+
+
+  const toggleBulkSelect = (id: number) => {
+    setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const bulkSelectAll = () => setBulkSelectedIds(skuGroupProducts.map((p) => p.id));
+  const bulkSelectNone = () => setBulkSelectedIds([]);
+
+  const bulkUpdateSelected = async () => {
+    const ids = Array.from(new Set(bulkSelectedIds));
+    if (ids.length === 0) {
+      setToast({ message: 'Select at least one variation to update.', type: 'warning' });
+      return;
+    }
+
+    if (!bulkApplyDescription && !bulkApplyCategory && !bulkApplyVendor) {
+      setToast({ message: 'Choose at least one field to apply (description/category/vendor).', type: 'warning' });
+      return;
+    }
+
+    const overrideDescription = String(formData.description || '');
+    const overrideCategoryId = categorySelection.level0 ? Number(categorySelection.level0) : null;
+    const overrideVendorId = selectedVendorId ? Number(selectedVendorId) : null;
+
+    if (bulkApplyCategory && !overrideCategoryId) {
+      setToast({ message: 'Select a category first (General Information tab).', type: 'warning' });
+      return;
+    }
+    if (bulkApplyVendor && !overrideVendorId) {
+      setToast({ message: 'Select a vendor first (General Information tab).', type: 'warning' });
+      return;
+    }
+
+    try {
+      setBulkUpdating(true);
+
+      for (const id of ids) {
+        const p = skuGroupProducts.find((x) => x.id === id);
+        if (!p) continue;
+
+        const payload: any = {
+          name: p.name,
+          sku: p.sku,
+          description: bulkApplyDescription ? overrideDescription : (p.description ?? ''),
+          category_id: bulkApplyCategory ? overrideCategoryId : (p.category_id ?? overrideCategoryId),
+          vendor_id: bulkApplyVendor ? overrideVendorId : (p.vendor_id ?? overrideVendorId),
+        };
+
+        await productService.update(id, payload);
+      }
+
+      setToast({ message: `Updated ${ids.length} variation(s) successfully.`, type: 'success' });
+
+      const sku = String(formData.sku || '').trim();
+      if (sku) {
+        await fetchSkuGroupProducts(sku);
+      }
+    } catch (error: any) {
+      console.error('Bulk update failed:', error);
+      setToast({ message: error?.message || 'Bulk update failed', type: 'error' });
+    } finally {
+      setBulkUpdating(false);
     }
   };
 
@@ -1096,10 +1169,87 @@ export default function AddEditProductPage({
                         </p>
                       </div>
                     ) : (
+                      <div className="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <div className="font-semibold text-gray-900 dark:text-white">Bulk update selected variations</div>
+                            <div className="text-xs text-gray-600 dark:text-gray-400">
+                              Frontend-only: updates each selected variation one-by-one (no backend change needed).
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={bulkSelectAll}
+                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={bulkSelectNone}
+                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                            >
+                              Select none
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={bulkUpdateSelected}
+                              disabled={bulkUpdating || bulkSelectedIds.length === 0}
+                              className="px-3 py-1.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                            >
+                              {bulkUpdating ? (
+                                <span className="inline-flex items-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  Updating...
+                                </span>
+                              ) : (
+                                `Apply to ${bulkSelectedIds.length} selected`
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-gray-800 dark:text-gray-200">
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={bulkApplyDescription}
+                              onChange={(e) => setBulkApplyDescription(e.target.checked)}
+                              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                            />
+                            Description
+                          </label>
+
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={bulkApplyCategory}
+                              onChange={(e) => setBulkApplyCategory(e.target.checked)}
+                              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                            />
+                            Category
+                          </label>
+
+                          <label className="inline-flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={bulkApplyVendor}
+                              onChange={(e) => setBulkApplyVendor(e.target.checked)}
+                              className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                            />
+                            Vendor
+                          </label>
+                        </div>
+                      </div>
+
                       <div className="overflow-x-auto">
                         <table className="min-w-full text-sm">
                           <thead>
                             <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                              <th className="py-3 pr-4">Select</th>
                               <th className="py-3 pr-4">Image</th>
                               <th className="py-3 pr-4">Product</th>
                               <th className="py-3 pr-4">Color</th>
@@ -1117,6 +1267,14 @@ export default function AddEditProductPage({
 
                               return (
                                 <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
+                                  <td className="py-3 pr-4">
+                                    <input
+                                      type="checkbox"
+                                      checked={bulkSelectedIds.includes(p.id)}
+                                      onChange={() => toggleBulkSelect(p.id)}
+                                      className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                    />
+                                  </td>
                                   <td className="py-3 pr-4">
                                     <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
                                       <img

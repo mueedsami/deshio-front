@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import {
   ChevronDown,
   CheckCircle2,
@@ -168,22 +168,6 @@ export default function POSPage() {
   const [cardPaid, setCardPaid] = useState(0);
   const [bkashPaid, setBkashPaid] = useState(0);
   const [nagadPaid, setNagadPaid] = useState(0);
-
-  // Installment / EMI (POS + Social Commerce only)
-  const [isInstallment, setIsInstallment] = useState(false);
-  const [installmentCount, setInstallmentCount] = useState(3);
-  const [installmentPaymentMode, setInstallmentPaymentMode] = useState<'cash' | 'card' | 'bkash' | 'nagad'>('cash');
-  const [installmentTransactionReference, setInstallmentTransactionReference] = useState('');
-
-  useEffect(() => {
-    // When switching to installment, ignore the regular split inputs
-    if (isInstallment) {
-      setCashPaid(0);
-      setCardPaid(0);
-      setBkashPaid(0);
-      setNagadPaid(0);
-    }
-  }, [isInstallment]);
 
   const [paymentMethods, setPaymentMethods] = useState<{
     cash?: number;
@@ -470,27 +454,11 @@ export default function POSPage() {
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
   const total = subtotal + transportCost;
-
-  // Installment amount (ceil to 2 decimals so collected amount is not less than required per installment)
-  const installmentAmount = useMemo(() => {
-    if (!isInstallment) return 0;
-    const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-    if (total <= 0) return 0;
-    return Math.ceil((total / n) * 100) / 100;
-  }, [isInstallment, installmentCount, total]);
-
-  const installmentPaymentMethodId = useMemo(() => {
-    if (!isInstallment) return null;
-    if (installmentPaymentMode === 'card') return paymentMethods.card || 2;
-    if (installmentPaymentMode === 'bkash' || installmentPaymentMode === 'nagad') return paymentMethods.mobileWallet || 6;
-    return paymentMethods.cash || 1;
-  }, [isInstallment, installmentPaymentMode, paymentMethods]);
-
-  const totalPaid = isInstallment ? installmentAmount : cashPaid + cardPaid + bkashPaid + nagadPaid;
+  const totalPaid = cashPaid + cardPaid + bkashPaid + nagadPaid;
 
   // ✅ FIXED: Calculate due and change correctly
   const due = total - totalPaid;
-  const change = !isInstallment && totalPaid > total ? totalPaid - total : 0;
+  const change = totalPaid > total ? totalPaid - total : 0;
 
   // ============ ORDER SUBMISSION ============
 
@@ -509,16 +477,9 @@ export default function POSPage() {
       return;
     }
 
-    // ✅ Confirmation
-    if (isInstallment) {
-      const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-      const msg = `Installment/EMI: ${n} × ৳${installmentAmount.toFixed(2)}. First installment will be collected now. Continue?`;
-      if (!confirm(msg)) return;
-    } else {
-      // ✅ FIXED: Only warn if there's actual unpaid balance (not overpayment)
-      if (due > 0 && !confirm(`Outstanding amount: ৳${due.toFixed(2)}. Continue?`)) {
-        return;
-      }
+    // ✅ FIXED: Only warn if there's actual unpaid balance (not overpayment)
+    if (due > 0 && !confirm(`Outstanding amount: ৳${due.toFixed(2)}. Continue?`)) {
+      return;
     }
 
     setIsProcessing(true);
@@ -618,16 +579,6 @@ export default function POSPage() {
         discount_amount: totalDiscount,
         shipping_amount: transportCost,
 
-        ...(isInstallment
-          ? {
-              installment_plan: {
-                total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: installmentAmount,
-                start_date: null,
-              },
-            }
-          : {}),
-
         // ✅ Add notes if any
         ...(address || change > 0
           ? {
@@ -677,107 +628,84 @@ export default function POSPage() {
         }
       }
 
-      // ✅ Payments
-      if (isInstallment) {
-        // Create installment plan during order creation, then collect 1st installment now
-        if (!installmentPaymentMethodId) {
-          throw new Error('Installment payment method is missing');
-        }
+      // ✅ FIXED: Process payments - only charge the order total, not overpayment
+      const amountToCharge = Math.min(totalPaid, total); // Don't charge more than order total
 
-        if (installmentAmount > 0) {
-          console.log('💳 Processing installment/EMI first payment...');
-          await paymentService.addInstallmentPayment(order.id, {
-            payment_method_id: installmentPaymentMethodId,
-            amount: installmentAmount,
-            payment_type: 'installment',
-            auto_complete: true,
-            notes: `POS installment/EMI - 1st installment of ${Math.max(2, Math.min(24, Number(installmentCount) || 2))}`,
-            payment_data: installmentTransactionReference
-              ? { transaction_reference: installmentTransactionReference }
-              : {},
-          });
-          console.log('✅ Installment payment processed');
-        }
-      } else {
-        // ✅ FIXED: Process payments - only charge the order total, not overpayment
-        const amountToCharge = Math.min(totalPaid, total); // Don't charge more than order total
+      if (amountToCharge > 0) {
+        console.log('💰 Processing payments...');
+        console.log(
+          `Amount to charge: ৳${amountToCharge.toFixed(
+            2
+          )} (Total paid: ৳${totalPaid.toFixed(2)}, Order total: ৳${total.toFixed(2)})`
+        );
 
-        if (amountToCharge > 0) {
-          console.log('💰 Processing payments...');
+        const paymentSplits: any[] = [];
+
+        // ✅ FIXED: If there's overpayment, reduce it from cash first
+        let adjustedCashPaid = cashPaid;
+        let adjustedCardPaid = cardPaid;
+        let adjustedBkashPaid = bkashPaid;
+        let adjustedNagadPaid = nagadPaid;
+
+        if (change > 0) {
+          // Customer overpaid - reduce cash payment by the change amount
+          adjustedCashPaid = Math.max(0, cashPaid - change);
           console.log(
-            `Amount to charge: ৳${amountToCharge.toFixed(
-              2
-            )} (Total paid: ৳${totalPaid.toFixed(2)}, Order total: ৳${total.toFixed(2)})`
+            `⚠️ Overpayment detected. Reducing cash from ৳${cashPaid} to ৳${adjustedCashPaid}`
           );
-
-          const paymentSplits: any[] = [];
-
-          // ✅ FIXED: If there's overpayment, reduce it from cash first
-          let adjustedCashPaid = cashPaid;
-          let adjustedCardPaid = cardPaid;
-          let adjustedBkashPaid = bkashPaid;
-          let adjustedNagadPaid = nagadPaid;
-
-          if (change > 0) {
-            // Customer overpaid - reduce cash payment by the change amount
-            adjustedCashPaid = Math.max(0, cashPaid - change);
-            console.log(
-              `⚠️ Overpayment detected. Reducing cash from ৳${cashPaid} to ৳${adjustedCashPaid}`
-            );
-          }
-
-          if (adjustedCashPaid > 0) {
-            paymentSplits.push({
-              payment_method_id: paymentMethods.cash || 1,
-              amount: adjustedCashPaid,
-            });
-          }
-
-          if (adjustedCardPaid > 0) {
-            paymentSplits.push({
-              payment_method_id: paymentMethods.card || 2,
-              amount: adjustedCardPaid,
-            });
-          }
-
-          if (adjustedBkashPaid > 0) {
-            paymentSplits.push({
-              payment_method_id: paymentMethods.mobileWallet || 6,
-              amount: adjustedBkashPaid,
-            });
-          }
-
-          if (adjustedNagadPaid > 0) {
-            paymentSplits.push({
-              payment_method_id: paymentMethods.mobileWallet || 6,
-              amount: adjustedNagadPaid,
-            });
-          }
-
-          // Calculate actual total from splits
-          const splitsTotal = paymentSplits.reduce((sum, split) => sum + split.amount, 0);
-
-          console.log('💳 Payment splits:', paymentSplits);
-          console.log('💰 Splits total:', splitsTotal.toFixed(2));
-
-          if (paymentSplits.length === 1) {
-            await paymentService.process(order.id, {
-              payment_method_id: paymentSplits[0].payment_method_id,
-              amount: paymentSplits[0].amount,
-              payment_type: (due <= 0 ? 'full' : 'partial') as 'full' | 'partial',
-              auto_complete: true,
-            });
-          } else if (paymentSplits.length > 1) {
-            await paymentService.processSplit(order.id, {
-              total_amount: splitsTotal, // ✅ FIXED: Use actual splits total
-              payment_type: due <= 0 ? 'full' : 'partial',
-              auto_complete: true,
-              splits: paymentSplits,
-            });
-          }
-
-          console.log('✅ Payments processed');
         }
+
+        if (adjustedCashPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.cash || 1,
+            amount: adjustedCashPaid,
+          });
+        }
+
+        if (adjustedCardPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.card || 2,
+            amount: adjustedCardPaid,
+          });
+        }
+
+        if (adjustedBkashPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.mobileWallet || 6,
+            amount: adjustedBkashPaid,
+          });
+        }
+
+        if (adjustedNagadPaid > 0) {
+          paymentSplits.push({
+            payment_method_id: paymentMethods.mobileWallet || 6,
+            amount: adjustedNagadPaid,
+          });
+        }
+
+        // Calculate actual total from splits
+        const splitsTotal = paymentSplits.reduce((sum, split) => sum + split.amount, 0);
+
+        console.log('💳 Payment splits:', paymentSplits);
+        console.log('💰 Splits total:', splitsTotal.toFixed(2));
+
+        if (paymentSplits.length === 1) {
+          await paymentService.process(order.id, {
+            payment_method_id: paymentSplits[0].payment_method_id,
+            amount: paymentSplits[0].amount,
+            payment_type: (due <= 0 ? 'full' : 'partial') as 'full' | 'partial',
+            auto_complete: true,
+          });
+        } else if (paymentSplits.length > 1) {
+          await paymentService.processSplit(order.id, {
+            total_amount: splitsTotal, // ✅ FIXED: Use actual splits total
+            payment_type: due <= 0 ? 'full' : 'partial',
+            auto_complete: true,
+            splits: paymentSplits,
+          });
+        }
+
+        console.log('✅ Payments processed');
       }
 
       // Complete order
@@ -1521,71 +1449,6 @@ export default function POSPage() {
                     </div>
 
                     <div className="space-y-2 pt-2 border-t border-gray-200 dark:border-gray-700">
-                      <div className="flex items-center justify-between">
-                        <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
-                          <input
-                            type="checkbox"
-                            checked={isInstallment}
-                            onChange={(e) => setIsInstallment(e.target.checked)}
-                            className="h-4 w-4"
-                          />
-                          Installment / EMI
-                        </label>
-                      </div>
-
-                      {isInstallment && (
-                        <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3 space-y-2">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Total installments</label>
-                              <input
-                                type="number"
-                                min={2}
-                                max={24}
-                                value={installmentCount}
-                                onChange={(e) => setInstallmentCount(Number(e.target.value))}
-                                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Paying now</label>
-                              <div className="w-full px-2 py-1.5 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-semibold text-gray-900 dark:text-white">
-                                ৳{installmentAmount.toFixed(2)}
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Payment method</label>
-                              <select
-                                value={installmentPaymentMode}
-                                onChange={(e) => setInstallmentPaymentMode(e.target.value as any)}
-                                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                              >
-                                <option value="cash">Cash</option>
-                                <option value="card">Card</option>
-                                <option value="bkash">bKash</option>
-                                <option value="nagad">Nagad</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Txn ref (optional)</label>
-                              <input
-                                value={installmentTransactionReference}
-                                onChange={(e) => setInstallmentTransactionReference(e.target.value)}
-                                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                                placeholder="e.g. Txn ID"
-                              />
-                            </div>
-                          </div>
-
-                          <p className="text-[11px] text-gray-600 dark:text-gray-300">
-                            Remaining after today: <span className="font-semibold">৳{Math.max(0, total - installmentAmount).toFixed(2)}</span>
-                          </p>
-                        </div>
-                      )}
-
                       <div className="grid grid-cols-2 gap-2">
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
@@ -1595,7 +1458,6 @@ export default function POSPage() {
                             type="number"
                             value={cashPaid}
                             onChange={(e) => setCashPaid(Number(e.target.value))}
-                            disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
                         </div>
@@ -1607,7 +1469,6 @@ export default function POSPage() {
                             type="number"
                             value={cardPaid}
                             onChange={(e) => setCardPaid(Number(e.target.value))}
-                            disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
                         </div>
@@ -1619,7 +1480,6 @@ export default function POSPage() {
                             type="number"
                             value={bkashPaid}
                             onChange={(e) => setBkashPaid(Number(e.target.value))}
-                            disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
                         </div>
@@ -1631,7 +1491,6 @@ export default function POSPage() {
                             type="number"
                             value={nagadPaid}
                             onChange={(e) => setNagadPaid(Number(e.target.value))}
-                            disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
                         </div>
@@ -1703,7 +1562,7 @@ export default function POSPage() {
                       disabled={isProcessing || cart.length === 0}
                       className="w-full py-2.5 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 rounded-md text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isProcessing ? 'Processing...' : isInstallment ? 'Complete Sale (Installment)' : 'Complete Sale'}
+                      {isProcessing ? 'Processing...' : 'Complete Sale'}
                     </button>
                   </div>
                 </div>

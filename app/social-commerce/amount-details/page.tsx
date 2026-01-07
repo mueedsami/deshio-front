@@ -19,7 +19,7 @@ interface PaymentMethod {
   percentage_fee?: number;
 }
 
-type PaymentOption = 'full' | 'partial' | 'none' | 'installment';
+type PaymentOption = 'full' | 'partial' | 'none';
 
 const parseNumber = (v: any): number => {
   if (v === null || v === undefined) return 0;
@@ -49,9 +49,6 @@ export default function AmountDetailsPage() {
   // Advanced payment options
   const [paymentOption, setPaymentOption] = useState<PaymentOption>('full');
   const [advanceAmount, setAdvanceAmount] = useState('');
-
-  // Installment / EMI
-  const [installmentCount, setInstallmentCount] = useState(3);
 
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
@@ -136,24 +133,15 @@ export default function AmountDetailsPage() {
     [paymentMethods, codPaymentMethod]
   );
 
-  const installmentAmount = useMemo(() => {
-    if (paymentOption !== 'installment') return 0;
-    const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-    if (total <= 0) return 0;
-    return Math.ceil((total / n) * 100) / 100;
-  }, [paymentOption, installmentCount, total]);
-
   const advance = useMemo(() => {
     if (paymentOption === 'none') return 0;
     if (paymentOption === 'full') return total;
-    if (paymentOption === 'installment') return installmentAmount;
     return parseNumber(advanceAmount);
-  }, [paymentOption, total, advanceAmount, installmentAmount]);
+  }, [paymentOption, total, advanceAmount]);
 
   const codAmount = useMemo(() => {
     if (paymentOption === 'full') return 0;
     if (paymentOption === 'none') return total;
-    if (paymentOption === 'installment') return 0;
     return Math.max(0, total - advance);
   }, [paymentOption, total, advance]);
 
@@ -190,26 +178,13 @@ export default function AmountDetailsPage() {
     }
 
     // Validation: payment methods
-    if (paymentOption === 'full' || paymentOption === 'partial' || paymentOption === 'installment') {
+    if (paymentOption === 'full' || paymentOption === 'partial') {
       if (!selectedPaymentMethod) {
         displayToast('Please select a payment method', 'error');
         return;
       }
       if (selectedMethod?.requires_reference && !transactionReference.trim()) {
         displayToast(`Please enter transaction reference for ${selectedMethod.name}`, 'error');
-        return;
-      }
-    }
-
-    // Installment validation
-    if (paymentOption === 'installment') {
-      const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-      if (n < 2) {
-        displayToast('Total installments must be at least 2', 'error');
-        return;
-      }
-      if (installmentAmount <= 0) {
-        displayToast('Installment amount is invalid', 'error');
         return;
       }
     }
@@ -255,18 +230,9 @@ export default function AmountDetailsPage() {
           discount_amount: item.discount_amount || 0,
         })),
         shipping_amount: transport,
-        ...(paymentOption === 'installment'
-          ? {
-              installment_plan: {
-                total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: installmentAmount,
-                start_date: null,
-              },
-            }
-          : {}),
         notes:
           (orderData.notes || 'Social Commerce order.') +
-          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid now)` : `Full COD ৳${codAmount.toFixed(2)}`}.`,
+          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : `Full COD ৳${codAmount.toFixed(2)}`}.`,
       };
 
       console.log('📦 Creating order:', orderPayload);
@@ -388,53 +354,6 @@ export default function AmountDetailsPage() {
         }
       }
 
-
-      if (paymentOption === 'installment') {
-        const firstPayment: any = {
-          payment_method_id: parseInt(selectedPaymentMethod, 10),
-          amount: installmentAmount,
-          auto_complete: true,
-          notes: paymentNotes || `Installment/EMI - 1st installment of ${installmentCount} via ${selectedMethod?.name}`,
-          payment_data: {},
-        };
-
-        if (selectedMethod?.requires_reference && transactionReference) {
-          firstPayment.transaction_reference = transactionReference;
-          firstPayment.external_reference = transactionReference;
-        }
-
-        if (selectedMethod?.type === 'mobile_banking' && transactionReference) {
-          firstPayment.payment_data = {
-            mobile_number: orderData.customer?.phone,
-            provider: selectedMethod.name,
-            transaction_id: transactionReference,
-            payment_stage: 'installment_1',
-          };
-        } else if (selectedMethod?.type === 'card' && transactionReference) {
-          firstPayment.payment_data = {
-            card_reference: transactionReference,
-            payment_method: selectedMethod.name,
-            payment_stage: 'installment_1',
-          };
-        } else if (selectedMethod?.type === 'bank_transfer' && transactionReference) {
-          firstPayment.payment_data = {
-            transfer_reference: transactionReference,
-            bank_name: selectedMethod.name,
-            payment_stage: 'installment_1',
-          };
-        } else {
-          firstPayment.payment_data = {
-            notes: paymentNotes || `Installment payment via ${selectedMethod?.name}`,
-            payment_stage: 'installment_1',
-          };
-        }
-
-        const instResponse = await axios.post(`/orders/${createdOrder.id}/payments/installment`, firstPayment);
-        if (!instResponse.data?.success) {
-          throw new Error(instResponse.data?.message || 'Failed to process installment payment');
-        }
-      }
-
       // paymentOption === 'none' => no payment now
 
       const msg =
@@ -442,9 +361,7 @@ export default function AmountDetailsPage() {
           ? `Order ${createdOrder.order_number} placed with full payment.`
           : paymentOption === 'partial'
             ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
-            : paymentOption === 'installment'
-              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid).`
-              : `Order ${createdOrder.order_number} placed. Full COD ৳${codAmount.toFixed(2)}.`;
+            : `Order ${createdOrder.order_number} placed. Full COD ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -637,22 +554,6 @@ export default function AmountDetailsPage() {
                         </div>
                       </label>
 
-
-
-                      <label className="flex items-center gap-2 text-sm text-gray-800 dark:text-gray-200">
-                        <input
-                          type="radio"
-                          className="h-4 w-4"
-                          checked={paymentOption === 'installment'}
-                          onChange={() => setPaymentOption('installment')}
-                          disabled={isProcessing}
-                        />
-                        <div className="flex items-center gap-2">
-                          <CreditCard className="w-4 h-4" />
-                          <span>Installment / EMI (Pay 1st now)</span>
-                        </div>
-                      </label>
-
                       <label className="flex items-center gap-2 text-sm text-gray-800 dark:text-gray-200">
                         <input
                           type="radio"
@@ -671,7 +572,7 @@ export default function AmountDetailsPage() {
 
                   {/* Payment Details */}
                   <div className="space-y-3">
-                    {(paymentOption === 'full' || paymentOption === 'partial' || paymentOption === 'installment') && (
+                    {(paymentOption === 'full' || paymentOption === 'partial') && (
                       <>
                         <div>
                           <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Payment Method</label>
@@ -689,24 +590,6 @@ export default function AmountDetailsPage() {
                             ))}
                           </select>
                         </div>
-
-                        {paymentOption === 'installment' && (
-                          <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Total Installments</label>
-                            <input
-                              type="number"
-                              min={2}
-                              max={24}
-                              value={installmentCount}
-                              onChange={(e) => setInstallmentCount(parseInt(e.target.value || '2', 10))}
-                              disabled={isProcessing}
-                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            />
-                            <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400">
-                              Per installment: <span className="font-semibold">৳{installmentAmount.toFixed(2)}</span> (1st paid now)
-                            </p>
-                          </div>
-                        )}
 
                         {paymentOption === 'partial' && (
                           <div>
@@ -778,33 +661,14 @@ export default function AmountDetailsPage() {
                           <span>Total</span>
                           <span className="font-medium">৳{total.toFixed(2)}</span>
                         </div>
-                        {paymentOption === 'installment' ? (
-                          <>
-                            <div className="flex justify-between">
-                              <span>Installments</span>
-                              <span className="font-medium">{installmentCount}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>1st Installment (Now)</span>
-                              <span className="font-medium">৳{installmentAmount.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>Remaining (Later)</span>
-                              <span className="font-medium">৳{Math.max(0, total - installmentAmount).toFixed(2)}</span>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="flex justify-between">
-                              <span>Advance</span>
-                              <span className="font-medium">৳{advance.toFixed(2)}</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>COD</span>
-                              <span className="font-medium">৳{codAmount.toFixed(2)}</span>
-                            </div>
-                          </>
-                        )}
+                        <div className="flex justify-between">
+                          <span>Advance</span>
+                          <span className="font-medium">৳{advance.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>COD</span>
+                          <span className="font-medium">৳{codAmount.toFixed(2)}</span>
+                        </div>
                         {totalFees > 0 && (
                           <div className="flex justify-between">
                             <span>Estimated Fees</span>

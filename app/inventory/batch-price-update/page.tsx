@@ -34,6 +34,10 @@ export default function BatchPriceUpdatePage() {
   const [products, setProducts] = useState<ProductPick[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<ProductPick | null>(null);
 
+  // Variations with same SKU (so you can apply price to multiple variations without backend changes)
+  const [skuGroupProducts, setSkuGroupProducts] = useState<ProductPick[]>([]);
+  const [selectedVariationIds, setSelectedVariationIds] = useState<number[]>([]);
+
   // Batches
   const [batches, setBatches] = useState<Batch[]>([]);
 
@@ -133,6 +137,36 @@ export default function BatchPriceUpdatePage() {
     load();
   }, [selectedProduct?.id]);
 
+
+  // Load SKU-group variations when product selected (for bulk price update across variations)
+  useEffect(() => {
+    const loadSkuGroup = async () => {
+      const sku = String(selectedProduct?.sku || '').trim();
+      if (!sku) {
+        setSkuGroupProducts([]);
+        setSelectedVariationIds([]);
+        return;
+      }
+
+      try {
+        const res = await productService.getAll({ search: sku, per_page: 200 });
+        const list = (res?.data || []) as FullProduct[];
+        const exact = list
+          .filter((p) => String(p.sku || '').trim() === sku)
+          .map((p) => ({ id: p.id, name: p.name, sku: p.sku } as ProductPick));
+
+        setSkuGroupProducts(exact);
+        setSelectedVariationIds(exact.map((p) => p.id)); // default: select all, user can uncheck
+      } catch (e) {
+        console.error('Failed to load SKU group products', e);
+        setSkuGroupProducts([]);
+        setSelectedVariationIds([]);
+      }
+    };
+
+    loadSkuGroup();
+  }, [selectedProduct?.id, selectedProduct?.sku]);
+
   const startCostEdit = (batch: Batch) => {
     setError(null);
     setSuccessMsg(null);
@@ -189,6 +223,14 @@ export default function BatchPriceUpdatePage() {
     };
   }, [batches]);
 
+
+  const toggleVariationSelect = (id: number) => {
+    setSelectedVariationIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const selectAllVariations = () => setSelectedVariationIds(skuGroupProducts.map((p) => p.id));
+  const selectNoVariations = () => setSelectedVariationIds([]);
+
   const onSelectProduct = (p: ProductPick) => {
     setSelectedProduct(p);
     setProducts([]);
@@ -214,23 +256,34 @@ export default function BatchPriceUpdatePage() {
     try {
       setIsSaving(true);
 
-      // ✅ This method must exist in your batchService.ts
-      const res = await batchService.updateAllBatchPrices(selectedProduct.id, priceNum);
+      const targetIdsRaw = selectedVariationIds.length ? selectedVariationIds : [selectedProduct.id];
+      const targetIds = Array.from(new Set(targetIdsRaw));
 
-      if (!res?.success) {
-        setError(res?.message || 'Failed to update batch prices.');
-        return;
+      let firstSuccess: any = null;
+
+      for (const pid of targetIds) {
+        const res = await batchService.updateAllBatchPrices(pid, priceNum);
+        if (!res?.success) {
+          throw new Error(res?.message || `Failed to update batch prices for product ${pid}.`);
+        }
+        if (!firstSuccess) firstSuccess = res;
       }
 
-      setSuccessMsg(res?.message || 'Updated selling price for all batches.');
-      setUpdates((res.data?.updates || []) as UpdateRow[]);
+      setSuccessMsg(
+        targetIds.length > 1
+          ? `Updated selling price for all batches of ${targetIds.length} variations (same SKU).`
+          : (firstSuccess?.message || 'Updated selling price for all batches.')
+      );
 
-      // Reload batches
+      // Show update rows from the first response (usually enough for verification)
+      setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
+
+      // Reload batches for the currently selected product (so table reflects new price)
       const list = await batchService.getBatchesArray({
         product_id: selectedProduct.id,
         per_page: 200,
       });
-      setBatches(list.batches || []);
+      setBatches(list);
     } catch (e: any) {
       setError(e?.response?.data?.message || e?.message || 'Failed to update batch prices.');
     } finally {
@@ -357,6 +410,66 @@ export default function BatchPriceUpdatePage() {
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
                   Applies to all batches of the selected product.
                 </p>
+
+
+                {selectedProduct?.sku && skuGroupProducts.length > 1 && (
+                  <div className="mt-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                          Apply price to multiple variations (same SKU)
+                        </div>
+                        <div className="text-xs text-gray-600 dark:text-gray-400">
+                          SKU: <span className="font-medium">{selectedProduct.sku}</span> • Select which variations to update
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={selectAllVariations}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                        >
+                          Select all
+                        </button>
+                        <button
+                          type="button"
+                          onClick={selectNoVariations}
+                          className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                        >
+                          Select none
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto pr-1">
+                      {skuGroupProducts.map((vp) => (
+                        <label
+                          key={vp.id}
+                          className="flex items-start gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/40 px-3 py-2"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedVariationIds.includes(vp.id)}
+                            onChange={() => toggleVariationSelect(vp.id)}
+                            className="mt-1 h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                              {vp.name}
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">ID: {vp.id}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
+                      Selected: <span className="font-semibold">{selectedVariationIds.length}</span> variation(s).
+                      If you select none, the price update applies only to the currently selected product.
+                    </div>
+                  </div>
+                )}
 
                 <div className="mt-4 flex flex-wrap items-end gap-3">
                   <div className="flex-1 min-w-[220px]">
