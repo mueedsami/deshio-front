@@ -193,7 +193,7 @@ export default function BatchPriceUpdatePage() {
 
     try {
       await batchService.updateBatch(batch.id, { cost_price: costNum });
-      setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, cost_price: costNum } : b)));
+      setBatches((prev) => prev.map((b) => (b.id === batch.id ? { ...b, cost_price: String(costNum) } : b)));
       setSuccessMsg(`Cost price updated for batch ${batch.batch_number}.`);
       cancelCostEdit();
     } catch (err: any) {
