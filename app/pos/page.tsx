@@ -29,6 +29,7 @@ import paymentMethodService from '@/services/paymentMethodService';
 import BarcodeScanner, { ScannedProduct } from '@/components/pos/BarcodeScanner';
 import CartTable, { CartItem } from '@/components/pos/CartTable';
 import InputModeSelector from '@/components/pos/InputModeSelector';
+import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
@@ -63,10 +64,13 @@ interface Toast {
   type: 'success' | 'error';
 }
 
-// ✅ Extended CartItem interface to support defective items
+// ✅ Extended CartItem interface to support defective items and services
 export interface ExtendedCartItem extends CartItem {
   isDefective?: boolean;
   defectId?: string;
+  isService?: boolean; // NEW: Flag to identify service items
+  serviceId?: number; // NEW: Service ID if it's a service
+  serviceCategory?: string; // NEW: Service category
 }
 
 export default function POSPage() {
@@ -446,6 +450,30 @@ export default function POSPage() {
     );
   };
 
+  /**
+   * ✅ NEW: Add service to cart
+   */
+  const addServiceToCart = (service: ServiceItem) => {
+    const newItem: ExtendedCartItem = {
+      id: service.id,
+      productId: 0, // Services don't have product ID
+      productName: service.serviceName,
+      batchId: 0, // Services don't have batch ID
+      batchNumber: 'SERVICE',
+      qty: service.quantity,
+      price: service.price,
+      discount: 0,
+      amount: service.amount,
+      availableQty: 999, // Services have unlimited availability
+      isService: true,
+      serviceId: service.serviceId,
+      serviceCategory: service.category,
+    };
+
+    setCart((prev) => [...prev, newItem]);
+    showToast(`Service "${service.serviceName}" added to cart`, 'success');
+  };
+
   // ============ PRODUCT SELECTION (Manual Mode) ============
 
   // ✅ FIXED: Fetch batches on-demand when product is selected (not upfront)
@@ -572,6 +600,9 @@ export default function POSPage() {
 
       // ✅ Validate all cart items have required fields
       for (const item of cart) {
+        // ✅ Skip validation for service items
+        if (item.isService) continue;
+        
         if (!item.productId) {
           throw new Error(`Missing product_id for ${item.productName}`);
         }
@@ -607,7 +638,9 @@ export default function POSPage() {
           : {}),
 
         // ✅ Map cart items (VAT inclusive — send tax_amount = 0)
-        items: itemsWithTax.map(({ item, taxAmount }) => {
+        items: itemsWithTax
+          .filter(({ item }) => !item.isService) // ✅ Filter out service items
+          .map(({ item, taxAmount }) => {
           const productId = parseInt(String(item.productId));
           const batchId = parseInt(String(item.batchId));
           const quantity = parseInt(String(item.qty));
@@ -650,6 +683,19 @@ export default function POSPage() {
 
           return itemPayload;
         }),
+
+        // ✅ NEW: Add services as separate array
+        services: itemsWithTax
+          .filter(({ item }) => item.isService) // ✅ Filter only service items
+          .map(({ item }) => ({
+            service_id: item.serviceId,
+            service_name: item.productName,
+            quantity: item.qty,
+            unit_price: item.price,
+            discount_amount: item.discount || 0,
+            total_amount: item.amount,
+            category: item.serviceCategory,
+          })),
 
         // ✅ FIXED: Add totals correctly
         discount_amount: totalDiscount,
@@ -1497,6 +1543,13 @@ export default function POSPage() {
                       </div>
                     )}
                   </div>
+
+                  {/* ✅ NEW: Service Selector */}
+                  <ServiceSelector 
+                    onAddService={addServiceToCart}
+                    darkMode={darkMode}
+                    allowManualPrice={true}
+                  />
 
                   {/* Cart Table */}
                   <CartTable
