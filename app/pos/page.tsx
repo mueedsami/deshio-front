@@ -11,6 +11,7 @@ import {
   Users,
   Download,
   X,
+  Loader2,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -1102,6 +1103,21 @@ export default function POSPage() {
     if (!selectedOutlet) return;
 
     try {
+      // ✅ FIXED: First, get all batches available in the selected store
+      const batchResponse = await batchService.getBatches({
+        store_id: parseInt(selectedOutlet),
+        status: 'available',
+        per_page: 1000,
+      });
+
+      const availableBatches = batchResponse.success && batchResponse.data?.data
+        ? batchResponse.data.data.filter((batch: Batch) => batch.quantity > 0)
+        : [];
+
+      // Get unique product IDs that have stock in this store
+      const productIdsWithStock = [...new Set(availableBatches.map((batch: Batch) => batch.product_id))];
+
+      // Now fetch all products
       const result = await productService.getAll({
         is_archived: false,
         per_page: 1000,
@@ -1115,8 +1131,12 @@ export default function POSPage() {
         productsList = Array.isArray(result.data) ? result.data : result.data.data || [];
       }
 
-      // ✅ Don't fetch batches for all products - only fetch when product is selected
-      setProducts(productsList);
+      // ✅ Filter to only products that have stock in selected store
+      const productsWithStock = productsList.filter(product => 
+        productIdsWithStock.includes(product.id)
+      );
+
+      setProducts(productsWithStock);
     } catch (error) {
       console.error('Error fetching products:', error);
       showToast('Failed to load products', 'error');
