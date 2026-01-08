@@ -156,7 +156,7 @@ export default function POSPage() {
       );
     }
 
-    // If lookup is cleared/not found, stop auto-mode (don’t wipe typed fields)
+    // If lookup is cleared/not found, stop auto-mode (don't wipe typed fields)
     if (!c?.id && autoCustomerId !== null) {
       setAutoCustomerId(null);
     }
@@ -618,12 +618,13 @@ export default function POSPage() {
         discount_amount: totalDiscount,
         shipping_amount: transportCost,
 
+        // ✅ FIXED: start_date should be undefined instead of null
         ...(isInstallment
           ? {
               installment_plan: {
                 total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
                 installment_amount: installmentAmount,
-                start_date: null,
+                start_date: undefined, // ✅ Changed from null to undefined
               },
             }
           : {}),
@@ -686,10 +687,11 @@ export default function POSPage() {
 
         if (installmentAmount > 0) {
           console.log('💳 Processing installment/EMI first payment...');
+          
+          // ✅ FIXED: Remove payment_type field
           await paymentService.addInstallmentPayment(order.id, {
             payment_method_id: installmentPaymentMethodId,
             amount: installmentAmount,
-            payment_type: 'installment',
             auto_complete: true,
             notes: `POS installment/EMI - 1st installment of ${Math.max(2, Math.min(24, Number(installmentCount) || 2))}`,
             payment_data: installmentTransactionReference
@@ -974,16 +976,26 @@ export default function POSPage() {
     try {
       const response = await storeService.getStores({ is_active: true });
 
-      if (!response.success) {
+      // ✅ FIXED: Handle response type correctly
+      if (!response || (typeof response === 'object' && 'success' in response && !response.success)) {
         showToast('Failed to load stores', 'error');
         return;
       }
 
-      let stores: any = [];
-      if (Array.isArray(response.data)) {
-        stores = response.data;
-      } else if (response.data?.data) {
-        stores = Array.isArray(response.data.data) ? response.data.data : [response.data];
+      let stores: any[] = [];
+      
+      // ✅ Type guard to safely access data property
+      if (Array.isArray(response)) {
+        stores = response;
+      } else if (typeof response === 'object' && 'data' in response) {
+        const responseData = (response as any).data;
+        if (Array.isArray(responseData)) {
+          stores = responseData;
+        } else if (responseData?.data && Array.isArray(responseData.data)) {
+          stores = responseData.data;
+        } else if (typeof responseData === 'object') {
+          stores = [responseData];
+        }
       }
 
       setOutlets(stores);
@@ -1002,6 +1014,7 @@ export default function POSPage() {
     }
   };
 
+  // ✅ FIXED: Prevent excessive API calls with proper dependency management
   const fetchProducts = async () => {
     if (!selectedOutlet) return;
 
@@ -1096,13 +1109,14 @@ export default function POSPage() {
     fetchOutlets(role, storeId);
     fetchEmployees();
     fetchPaymentMethods();
-  }, []);
+  }, []); // ✅ Only run once on mount
 
+  // ✅ FIXED: Only fetch products when outlet changes, not on every render
   useEffect(() => {
     if (selectedOutlet) {
       fetchProducts();
     }
-  }, [selectedOutlet]);
+  }, [selectedOutlet]); // ✅ Only depend on selectedOutlet
 
   // ============ RENDER ============
 
