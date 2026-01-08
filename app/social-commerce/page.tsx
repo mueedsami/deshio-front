@@ -5,6 +5,7 @@ import { Search, X, Globe, AlertCircle } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
+import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 import axios from '@/lib/axios';
 import storeService from '@/services/storeService';
 import productImageService from '@/services/productImageService';
@@ -32,6 +33,9 @@ interface CartProduct {
   amount: number;
   isDefective?: boolean;
   defectId?: string;
+  isService?: boolean; // NEW: Flag for service items
+  serviceId?: number; // NEW: Service ID
+  serviceCategory?: string; // NEW: Service category
 }
 
 // Pathao types
@@ -138,25 +142,39 @@ export default function SocialCommercePage() {
     return `${baseUrl}/storage/product-images/${imagePath}`;
   };
 
+  // ✅ Image cache to prevent duplicate API calls
+  const imageCache = new Map<number, string>();
+
   const fetchPrimaryImage = async (productId: number): Promise<string> => {
+    // ✅ Check cache first
+    if (imageCache.has(productId)) {
+      return imageCache.get(productId)!;
+    }
+
     try {
       const images = await productImageService.getProductImages(productId);
 
       const primaryImage = images.find((img: any) => img.is_primary && img.is_active);
 
+      let imageUrl = '/placeholder-image.jpg';
+
       if (primaryImage) {
-        return getImageUrl(primaryImage.image_url || primaryImage.image_path);
+        imageUrl = getImageUrl(primaryImage.image_url || primaryImage.image_path);
+      } else {
+        const firstActiveImage = images.find((img: any) => img.is_active);
+        if (firstActiveImage) {
+          imageUrl = getImageUrl(firstActiveImage.image_url || firstActiveImage.image_path);
+        }
       }
 
-      const firstActiveImage = images.find((img: any) => img.is_active);
-      if (firstActiveImage) {
-        return getImageUrl(firstActiveImage.image_url || firstActiveImage.image_path);
-      }
-
-      return '/placeholder-image.jpg';
+      // ✅ Cache the result
+      imageCache.set(productId, imageUrl);
+      return imageUrl;
     } catch (error) {
       console.error('Error fetching product images:', error);
-      return '/placeholder-image.jpg';
+      const fallback = '/placeholder-image.jpg';
+      imageCache.set(productId, fallback);
+      return fallback;
     }
   };
 
@@ -309,6 +327,9 @@ export default function SocialCommercePage() {
 
     console.log('🔍 Local search for:', queryLower);
 
+    // ✅ First pass: collect matching products
+    const matchingProducts: Array<{ prod: any; relevanceScore: number }> = [];
+
     for (const prod of allProducts) {
       const productName = (prod.name || '').toLowerCase();
       const productSku = (prod.sku || '').toLowerCase();
@@ -334,27 +355,47 @@ export default function SocialCommercePage() {
         });
 
         if (productBatches.length > 0) {
-          const imageUrl = await fetchPrimaryImage(prod.id);
-
-          for (const batch of productBatches) {
-            results.push({
-              id: prod.id,
-              name: prod.name,
-              sku: prod.sku,
-              batchId: batch.id,
-              batchNumber: batch.batch_number,
-              attributes: {
-                Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
-                mainImage: imageUrl,
-              },
-              available: batch.quantity,
-              expiryDate: batch.expiry_date,
-              daysUntilExpiry: batch.days_until_expiry,
-              relevance_score: relevanceScore,
-              search_stage: 'local',
-            });
-          }
+          matchingProducts.push({ prod, relevanceScore });
         }
+      }
+    }
+
+    // ✅ OPTIMIZED: Fetch images for all matching products in parallel
+    const uniqueProductIds = [...new Set(matchingProducts.map(m => m.prod.id))];
+    const imagePromises = uniqueProductIds.map(async (productId) => {
+      const imageUrl = await fetchPrimaryImage(productId);
+      return { productId, imageUrl };
+    });
+    
+    const imageResults = await Promise.all(imagePromises);
+    const imageMap = new Map(imageResults.map(r => [r.productId, r.imageUrl]));
+
+    // ✅ Second pass: build results with cached images
+    for (const { prod, relevanceScore } of matchingProducts) {
+      const productBatches = batches.filter((batch: any) => {
+        const batchProductId = batch.product?.id || batch.product_id;
+        return batchProductId === prod.id && batch.quantity > 0;
+      });
+
+      const imageUrl = imageMap.get(prod.id) || '/placeholder-image.jpg';
+
+      for (const batch of productBatches) {
+        results.push({
+          id: prod.id,
+          name: prod.name,
+          sku: prod.sku,
+          batchId: batch.id,
+          batchNumber: batch.batch_number,
+          attributes: {
+            Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
+            mainImage: imageUrl,
+          },
+          available: batch.quantity,
+          expiryDate: batch.expiry_date,
+          daysUntilExpiry: batch.days_until_expiry,
+          relevance_score: relevanceScore,
+          search_stage: 'local',
+        });
       }
     }
 
@@ -591,6 +632,18 @@ export default function SocialCommercePage() {
 
           const results: any[] = [];
 
+          // ✅ OPTIMIZED: Get unique product IDs first to avoid duplicate image fetches
+          const uniqueProductIds = [...new Set(products.map((p: any) => p.id))];
+          
+          // ✅ Pre-fetch images for all unique products in parallel
+          const imagePromises = uniqueProductIds.map(async (productId) => {
+            const imageUrl = await fetchPrimaryImage(productId);
+            return { productId, imageUrl };
+          });
+          
+          const imageResults = await Promise.all(imagePromises);
+          const imageMap = new Map(imageResults.map(r => [r.productId, r.imageUrl]));
+
           for (const prod of products) {
             const productBatches = batches.filter((batch: any) => {
               const batchProductId = batch.product?.id || batch.product_id;
@@ -598,7 +651,7 @@ export default function SocialCommercePage() {
             });
 
             if (productBatches.length > 0) {
-              const imageUrl = await fetchPrimaryImage(prod.id);
+              const imageUrl = imageMap.get(prod.id) || '/placeholder-image.jpg';
 
               for (const batch of productBatches) {
                 results.push({
@@ -718,6 +771,27 @@ export default function SocialCommercePage() {
     setCart(cart.filter((item) => item.id !== id));
   };
 
+  /**
+   * ✅ NEW: Add service to cart
+   */
+  const addServiceToCart = (service: ServiceItem) => {
+    const newItem: CartProduct = {
+      id: `service-${Date.now()}`,
+      product_id: 0, // Services don't have product ID
+      batch_id: 0, // Services don't have batch ID
+      productName: service.serviceName,
+      quantity: service.quantity,
+      unit_price: service.price,
+      discount_amount: 0,
+      amount: service.amount,
+      isService: true,
+      serviceId: service.serviceId,
+      serviceCategory: service.category,
+    };
+
+    setCart([...cart, newItem]);
+  };
+
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
 
   const handleConfirmOrder = async () => {
@@ -824,13 +898,28 @@ export default function SocialCommercePage() {
           address: formattedCustomerAddress,
         },
         shipping_address,
-        items: cart.map((item) => ({
-          product_id: item.product_id,
-          batch_id: item.batch_id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount_amount: item.discount_amount,
-        })),
+        // ✅ Separate products and services
+        items: cart
+          .filter((item) => !item.isService)
+          .map((item) => ({
+            product_id: item.product_id,
+            batch_id: item.batch_id,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            discount_amount: item.discount_amount,
+          })),
+        // ✅ NEW: Add services array
+        services: cart
+          .filter((item) => item.isService)
+          .map((item) => ({
+            service_id: item.serviceId,
+            service_name: item.productName,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            discount_amount: item.discount_amount,
+            total_amount: item.amount,
+            category: item.serviceCategory,
+          })),
         shipping_amount: 0,
         notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`,
       };
@@ -1036,6 +1125,15 @@ export default function SocialCommercePage() {
                         />
                       </div>
                     </div>
+                  </div>
+
+                  {/* ✅ NEW: Service Selector */}
+                  <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <ServiceSelector 
+                      onAddService={addServiceToCart}
+                      darkMode={darkMode}
+                      allowManualPrice={true}
+                    />
                   </div>
 
                   {/* Delivery Address */}
