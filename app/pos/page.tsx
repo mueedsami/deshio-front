@@ -477,57 +477,21 @@ export default function POSPage() {
 
   // ============ PRODUCT SELECTION (Manual Mode) ============
 
-  // ✅ FIXED: Fetch batches on-demand when product is selected (not upfront)
-  const handleProductSelect = async (productName: string) => {
+  const handleProductSelect = (productName: string) => {
     setProduct(productName);
     const selectedProd = products.find((p) => p.name === productName);
 
-    if (!selectedProd) {
+    if (selectedProd && selectedProd.batches && selectedProd.batches.length > 0) {
+      const firstBatch = selectedProd.batches[0];
+      setSelectedBatch(firstBatch);
+
+      const priceString = String(firstBatch.sell_price).replace(/,/g, '');
+      const price = parseFloat(priceString) || 0;
+      setSellingPrice(price);
+    } else {
       setSelectedBatch(null);
       setSellingPrice(0);
-      return;
-    }
-
-    try {
-      setIsFetchingBatches(true);
-      
-      // Fetch batches for this specific product only
-      const batchResponse = await batchService.getBatches({
-        product_id: selectedProd.id,
-        store_id: parseInt(selectedOutlet),
-        status: 'available',
-        per_page: 100,
-      });
-
-      const batches =
-        batchResponse.success && batchResponse.data?.data
-          ? batchResponse.data.data.filter((batch: Batch) => batch.quantity > 0)
-          : [];
-
-      if (batches.length > 0) {
-        const firstBatch = batches[0];
-        setSelectedBatch(firstBatch);
-
-        const priceString = String(firstBatch.sell_price).replace(/,/g, '');
-        const price = parseFloat(priceString) || 0;
-        setSellingPrice(price);
-
-        // Update the product with batches in state
-        setProducts(prev =>
-          prev.map(p => p.id === selectedProd.id ? { ...p, batches } : p)
-        );
-      } else {
-        setSelectedBatch(null);
-        setSellingPrice(0);
-        showToast('No available batches for this product', 'error');
-      }
-    } catch (error) {
-      console.error('Error fetching batches:', error);
-      setSelectedBatch(null);
-      setSellingPrice(0);
-      showToast('Failed to load batches for this product', 'error');
-    } finally {
-      setIsFetchingBatches(false);
+      showToast('No available batches for this product', 'error');
     }
   };
 
@@ -1103,21 +1067,6 @@ export default function POSPage() {
     if (!selectedOutlet) return;
 
     try {
-      // ✅ FIXED: First, get all batches available in the selected store
-      const batchResponse = await batchService.getBatches({
-        store_id: parseInt(selectedOutlet),
-        status: 'available',
-        per_page: 1000,
-      });
-
-      const availableBatches = batchResponse.success && batchResponse.data?.data
-        ? batchResponse.data.data.filter((batch: Batch) => batch.quantity > 0)
-        : [];
-
-      // Get unique product IDs that have stock in this store
-      const productIdsWithStock = [...new Set(availableBatches.map((batch: Batch) => batch.product_id))];
-
-      // Now fetch all products
       const result = await productService.getAll({
         is_archived: false,
         per_page: 1000,
@@ -1131,9 +1080,32 @@ export default function POSPage() {
         productsList = Array.isArray(result.data) ? result.data : result.data.data || [];
       }
 
-      // ✅ Filter to only products that have stock in selected store
-      const productsWithStock = productsList.filter(product => 
-        productIdsWithStock.includes(product.id)
+      // ✅ Fetch batches for each product in the selected store
+      const productsWithBatches = await Promise.all(
+        productsList.map(async (product: Product) => {
+          try {
+            const batchResponse = await batchService.getBatches({
+              product_id: product.id,
+              store_id: parseInt(selectedOutlet),
+              status: 'available',
+              per_page: 100,
+            });
+
+            const batches =
+              batchResponse.success && batchResponse.data?.data
+                ? batchResponse.data.data.filter((batch: Batch) => batch.quantity > 0)
+                : [];
+
+            return { ...product, batches };
+          } catch (error) {
+            return { ...product, batches: [] };
+          }
+        })
+      );
+
+      // ✅ Only set products that have batches available in this store
+      const productsWithStock = productsWithBatches.filter(
+        (product) => product.batches && product.batches.length > 0
       );
 
       setProducts(productsWithStock);
@@ -1375,24 +1347,18 @@ export default function POSPage() {
                           <select
                             value={product}
                             onChange={(e) => handleProductSelect(e.target.value)}
-                            disabled={!selectedOutlet || isFetchingBatches}
+                            disabled={!selectedOutlet}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
                           >
-                            <option value="">
-                              {isFetchingBatches ? 'Loading batches...' : 'Select Product'}
-                            </option>
-                            {products.map((prod) => (
-                              <option key={prod.id} value={prod.name}>
-                                {prod.name} {prod.sku ? `(${prod.sku})` : ''}
-                              </option>
-                            ))}
+                            <option value="">Select Product</option>
+                            {products
+                              .filter((p) => p.batches && p.batches.length > 0)
+                              .map((prod) => (
+                                <option key={prod.id} value={prod.name}>
+                                  {prod.name} ({prod.batches?.length || 0} batches)
+                                </option>
+                              ))}
                           </select>
-                          {isFetchingBatches && (
-                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 flex items-center gap-1">
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                              Loading available batches...
-                            </p>
-                          )}
                         </div>
 
                         <div>
