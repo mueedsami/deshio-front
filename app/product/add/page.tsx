@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; 
-import { ArrowLeft, Plus } from 'lucide-react';
+import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import Toast from '@/components/Toast';
@@ -105,6 +105,13 @@ export default function AddEditProductPage({
   // SKU group (all products that share the same SKU)
   const [skuGroupProducts, setSkuGroupProducts] = useState<Product[]>([]);
   const [skuGroupLoading, setSkuGroupLoading] = useState<boolean>(false);
+
+  // Bulk update helpers for SKU group (frontend-only: loops update requests)
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<number[]>([]);
+  const [bulkApplyDescription, setBulkApplyDescription] = useState<boolean>(true);
+  const [bulkApplyCategory, setBulkApplyCategory] = useState<boolean>(true);
+  const [bulkApplyVendor, setBulkApplyVendor] = useState<boolean>(true);
+  const [bulkUpdating, setBulkUpdating] = useState<boolean>(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -349,11 +356,77 @@ export default function AddEditProductPage({
       });
 
       setSkuGroupProducts(exact);
+      setBulkSelectedIds(exact.map(p => p.id));
     } catch (error) {
       console.error('Failed to fetch SKU group products:', error);
       setSkuGroupProducts([]);
     } finally {
       setSkuGroupLoading(false);
+    }
+  };
+
+
+  const toggleBulkSelect = (id: number) => {
+    setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const bulkSelectAll = () => setBulkSelectedIds(skuGroupProducts.map((p) => p.id));
+  const bulkSelectNone = () => setBulkSelectedIds([]);
+
+  const bulkUpdateSelected = async () => {
+    const ids = Array.from(new Set(bulkSelectedIds));
+    if (ids.length === 0) {
+      setToast({ message: 'Select at least one variation to update.', type: 'warning' });
+      return;
+    }
+
+    if (!bulkApplyDescription && !bulkApplyCategory && !bulkApplyVendor) {
+      setToast({ message: 'Choose at least one field to apply (description/category/vendor).', type: 'warning' });
+      return;
+    }
+
+    const overrideDescription = String(formData.description || '');
+    const overrideCategoryId = categorySelection.level0 ? Number(categorySelection.level0) : null;
+    const overrideVendorId = selectedVendorId ? Number(selectedVendorId) : null;
+
+    if (bulkApplyCategory && !overrideCategoryId) {
+      setToast({ message: 'Select a category first (General Information tab).', type: 'warning' });
+      return;
+    }
+    if (bulkApplyVendor && !overrideVendorId) {
+      setToast({ message: 'Select a vendor first (General Information tab).', type: 'warning' });
+      return;
+    }
+
+    try {
+      setBulkUpdating(true);
+
+      for (const id of ids) {
+        const p = skuGroupProducts.find((x) => x.id === id);
+        if (!p) continue;
+
+        const payload: any = {
+          name: p.name,
+          sku: p.sku,
+          description: bulkApplyDescription ? overrideDescription : (p.description ?? ''),
+          category_id: bulkApplyCategory ? overrideCategoryId : (p.category_id ?? overrideCategoryId),
+          vendor_id: bulkApplyVendor ? overrideVendorId : (p.vendor_id ?? overrideVendorId),
+        };
+
+        await productService.update(id, payload);
+      }
+
+      setToast({ message: `Updated ${ids.length} variation(s) successfully.`, type: 'success' });
+
+      const sku = String(formData.sku || '').trim();
+      if (sku) {
+        await fetchSkuGroupProducts(sku);
+      }
+    } catch (error: any) {
+      console.error('Bulk update failed:', error);
+      setToast({ message: error?.message || 'Bulk update failed', type: 'error' });
+    } finally {
+      setBulkUpdating(false);
     }
   };
 
@@ -378,7 +451,7 @@ export default function AddEditProductPage({
     }
   };
 
-  const openAddVariation = () => {
+  const openAddVariation = (prefillColor?: string) => {
     const sku = String(formData.sku || '').trim();
     if (!sku) {
       setToast({ message: 'SKU is required to add variations', type: 'error' });
@@ -413,7 +486,20 @@ export default function AddEditProductPage({
     if (vid) setSelectedVendorId(vid);
 
     setHasVariations(true);
-    setActiveTab('general');
+
+    if (prefillColor) {
+      const newVariation: VariationData = {
+        id: `var-${Date.now()}-${Math.random()}`,
+        color: String(prefillColor),
+        sizes: [''],
+        images: [],
+        imagePreviews: [],
+      };
+      setVariations([newVariation]);
+      setActiveTab('variations');
+    } else {
+      setActiveTab('general');
+    }
 
     // keep sessionStorage for compatibility (e.g., if user refreshes)
     if (typeof window !== 'undefined') {
@@ -1061,191 +1147,287 @@ export default function AddEditProductPage({
             )}
 
             {activeTab === 'variations' && showVariationsTab && (
-              isEditMode ? (
-                <div className="space-y-6">
-                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                          Variations (SKU: <span className="font-mono">{formData.sku}</span>)
-                        </h2>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                          These are all products that share the same SKU. You can edit any variant, or add new ones.
-                        </p>
+              <>
+                {isEditMode ? (
+                  <div className="space-y-6">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                            Variations (SKU: <span className="font-mono">{formData.sku}</span>)
+                          </h2>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                            These are all products that share the same SKU. You can edit any variant, or add new ones.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openAddVariation()}
+                          className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
+                        >
+                          <Plus className="w-4 h-4" />
+                          Add Variation
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={openAddVariation}
-                        className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Add Variation
-                      </button>
+                    </div>
+
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
+                      {skuGroupLoading ? (
+                        <div className="flex items-center justify-center py-10">
+                          <div className="w-10 h-10 border-4 border-gray-200 dark:border-gray-700 border-t-gray-900 dark:border-t-white rounded-full animate-spin"></div>
+                        </div>
+                      ) : skuGroupProducts.length === 0 ? (
+                        <div className="text-center py-10">
+                          <p className="text-gray-600 dark:text-gray-400">
+                            No other products found for this SKU.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <div className="font-semibold text-gray-900 dark:text-white">Bulk update selected variations</div>
+                                <div className="text-xs text-gray-600 dark:text-gray-400">
+                                  Frontend-only: updates each selected variation one-by-one (no backend change needed).
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={bulkSelectAll}
+                                  className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                                >
+                                  Select all
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={bulkSelectNone}
+                                  className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
+                                >
+                                  Select none
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={bulkUpdateSelected}
+                                  disabled={bulkUpdating || bulkSelectedIds.length === 0}
+                                  className="px-3 py-1.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                >
+                                  {bulkUpdating ? (
+                                    <span className="inline-flex items-center gap-2">
+                                      <Loader2 className="w-4 h-4 animate-spin" />
+                                      Updating...
+                                    </span>
+                                  ) : (
+                                    `Apply to ${bulkSelectedIds.length} selected`
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-gray-800 dark:text-gray-200">
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={bulkApplyDescription}
+                                  onChange={(e) => setBulkApplyDescription(e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                />
+                                Description
+                              </label>
+
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={bulkApplyCategory}
+                                  onChange={(e) => setBulkApplyCategory(e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                />
+                                Category
+                              </label>
+
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={bulkApplyVendor}
+                                  onChange={(e) => setBulkApplyVendor(e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                />
+                                Vendor
+                              </label>
+                            </div>
+                          </div>
+
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full text-sm">
+                              <thead>
+                                <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                  <th className="py-3 pr-4">Select</th>
+                                  <th className="py-3 pr-4">Image</th>
+                                  <th className="py-3 pr-4">Product</th>
+                                  <th className="py-3 pr-4">Color</th>
+                                  <th className="py-3 pr-4">Size</th>
+                                  <th className="py-3">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {skuGroupProducts.map((p) => {
+                                  const v = getVariantAttr(p);
+                                  const primary = p.images?.find(img => img.is_primary && img.is_active) ||
+                                    p.images?.find(img => img.is_active) ||
+                                    p.images?.[0];
+                                  const imgUrl = primary ? getImageUrl(primary.image_path) : null;
+
+                                  return (
+                                    <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
+                                      <td className="py-3 pr-4">
+                                        <input
+                                          type="checkbox"
+                                          checked={bulkSelectedIds.includes(p.id)}
+                                          onChange={() => toggleBulkSelect(p.id)}
+                                          className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                        />
+                                      </td>
+                                      <td className="py-3 pr-4">
+                                        <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
+                                          <img
+                                            src={imgUrl || FALLBACK_IMAGE_URL}
+                                            alt={p.name}
+                                            className="w-full h-full object-cover"
+                                            onError={(e) => {
+                                              e.currentTarget.src = FALLBACK_IMAGE_URL;
+                                            }}
+                                          />
+                                        </div>
+                                      </td>
+                                      <td className="py-3 pr-4">
+                                        <div className="font-medium text-gray-900 dark:text-white">
+                                          {p.name}
+                                        </div>
+                                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                          ID: {p.id}
+                                        </div>
+                                      </td>
+                                      <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
+                                        {v.color ? String(v.color) : '-'}
+                                      </td>
+                                      <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
+                                        {v.size ? String(v.size) : 'One Size'}
+                                      </td>
+                                      <td className="py-3">
+                                        <div className="flex gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => openEditProduct(p.id)}
+                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
+                                          >
+                                            Edit
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => openAddVariation(v.color ? String(v.color) : undefined)}
+                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                            title="Create new size variants for this color"
+                                          >
+                                            Add Sizes
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => router.push(`/product/${p.id}`)}
+                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                          >
+                                            View
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+
+                      {skuGroupProducts.length === 1 && !skuGroupLoading && (
+                        <div className="mt-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                          <p className="text-sm text-blue-800 dark:text-blue-400">
+                            Only one product exists for this SKU right now. Use <strong>"Add Variation"</strong> to create more variants.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
+                        Product Variations
+                      </h2>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                        Create variations with different colors and sizes. Color is required, sizes are optional.
+                      </p>
 
-                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                    {skuGroupLoading ? (
-                      <div className="flex items-center justify-center py-10">
-                        <div className="w-10 h-10 border-4 border-gray-200 dark:border-gray-700 border-t-gray-900 dark:border-t-white rounded-full animate-spin"></div>
+                      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                        <h4 className="font-medium text-blue-900 dark:text-blue-300 mb-2 text-sm">
+                          How Variations Work:
+                        </h4>
+                        <ul className="text-sm text-blue-800 dark:text-blue-400 space-y-1">
+                          <li>• All variations use the same SKU: "<strong>{formData.sku || 'Enter SKU in General tab'}</strong>"</li>
+                          <li>• Each <strong>color is required</strong> for a variation</li>
+                          <li>• Sizes are optional - leave empty for "One Size" products</li>
+                          <li>• Each color gets one set of images (shared across all sizes)</li>
+                          <li>• Products named: "<strong>{formData.name || 'Product'} - Blue - M</strong>"</li>
+                        </ul>
                       </div>
-                    ) : skuGroupProducts.length === 0 ? (
-                      <div className="text-center py-10">
-                        <p className="text-gray-600 dark:text-gray-400">
-                          No other products found for this SKU.
-                        </p>
+                    </div>
+
+                    {variations.length === 0 ? (
+                      <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600">
+                        <div className="flex flex-col items-center">
+                          <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
+                            <Plus className="w-8 h-8 text-gray-400" />
+                          </div>
+                          <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                            No Variations Yet
+                          </h3>
+                          <p className="text-gray-500 dark:text-gray-400 mb-6">
+                            Click "Add Variation" to create your first product variation
+                          </p>
+                        </div>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="min-w-full text-sm">
-                          <thead>
-                            <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                              <th className="py-3 pr-4">Image</th>
-                              <th className="py-3 pr-4">Product</th>
-                              <th className="py-3 pr-4">Color</th>
-                              <th className="py-3 pr-4">Size</th>
-                              <th className="py-3">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {skuGroupProducts.map((p) => {
-                              const v = getVariantAttr(p);
-                              const primary = p.images?.find(img => img.is_primary && img.is_active) ||
-                                p.images?.find(img => img.is_active) ||
-                                p.images?.[0];
-                              const imgUrl = primary ? getImageUrl(primary.image_path) : null;
-
-                              return (
-                                <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
-                                  <td className="py-3 pr-4">
-                                    <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
-                                      <img
-                                        src={imgUrl || FALLBACK_IMAGE_URL}
-                                        alt={p.name}
-                                        className="w-full h-full object-cover"
-                                        onError={(e) => {
-                                          e.currentTarget.src = FALLBACK_IMAGE_URL;
-                                        }}
-                                      />
-                                    </div>
-                                  </td>
-                                  <td className="py-3 pr-4">
-                                    <div className="font-medium text-gray-900 dark:text-white">
-                                      {p.name}
-                                    </div>
-                                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                      ID: {p.id}
-                                    </div>
-                                  </td>
-                                  <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
-                                    {v.color ? String(v.color) : '-'}
-                                  </td>
-                                  <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
-                                    {v.size ? String(v.size) : 'One Size'}
-                                  </td>
-                                  <td className="py-3">
-                                    <div className="flex gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditProduct(p.id)}
-                                        className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
-                                      >
-                                        Edit
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => router.push(`/product/${p.id}`)}
-                                        className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
-                                      >
-                                        View
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
+                      <div className="space-y-4">
+                        {variations.map((variation, varIdx) => (
+                          <VariationCard
+                            key={variation.id}
+                            variation={variation}
+                            index={varIdx}
+                            onUpdate={(color) => updateVariationColor(variation.id, color)}
+                            onRemove={() => removeVariation(variation.id)}
+                            onImageUpload={(e) => handleVariationImageChange(variation.id, e)}
+                            onImageRemove={(imgIdx) => removeVariationImage(variation.id, imgIdx)}
+                            onSizeAdd={() => addSize(variation.id)}
+                            onSizeUpdate={(sizeIdx, value) => updateSizeValue(variation.id, sizeIdx, value)}
+                            onSizeRemove={(sizeIdx) => removeSize(variation.id, sizeIdx)}
+                          />
+                        ))}
                       </div>
                     )}
 
-                    {skuGroupProducts.length === 1 && !skuGroupLoading && (
-                      <div className="mt-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-                        <p className="text-sm text-blue-800 dark:text-blue-400">
-                          Only one product exists for this SKU right now. Use <strong>"Add Variation"</strong> to create more variants.
-                        </p>
-                      </div>
-                    )}
+                    <button
+                      type="button"
+                      onClick={addVariation}
+                      className="w-full py-3.5 bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-100 text-white dark:text-gray-900 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    >
+                      <Plus className="w-5 h-5" />
+                      Add Variation
+                    </button>
                   </div>
-                </div>
-              ) : (
-                <div className="space-y-6">
-                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                      Product Variations
-                    </h2>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                      Create variations with different colors and sizes. Color is required, sizes are optional.
-                    </p>
-
-                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-                      <h4 className="font-medium text-blue-900 dark:text-blue-300 mb-2 text-sm">
-                        How Variations Work:
-                      </h4>
-                      <ul className="text-sm text-blue-800 dark:text-blue-400 space-y-1">
-                        <li>• All variations use the same SKU: "<strong>{formData.sku || 'Enter SKU in General tab'}</strong>"</li>
-                        <li>• Each <strong>color is required</strong> for a variation</li>
-                        <li>• Sizes are optional - leave empty for "One Size" products</li>
-                        <li>• Each color gets one set of images (shared across all sizes)</li>
-                        <li>• Products named: "<strong>{formData.name || 'Product'} - Blue - M</strong>"</li>
-                      </ul>
-                    </div>
-                  </div>
-
-                  {variations.length === 0 ? (
-                    <div className="text-center py-16 bg-white dark:bg-gray-800 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600">
-                      <div className="flex flex-col items-center">
-                        <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mb-4">
-                          <Plus className="w-8 h-8 text-gray-400" />
-                        </div>
-                        <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
-                          No Variations Yet
-                        </h3>
-                        <p className="text-gray-500 dark:text-gray-400 mb-6">
-                          Click "Add Variation" to create your first product variation
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {variations.map((variation, varIdx) => (
-                        <VariationCard
-                          key={variation.id}
-                          variation={variation}
-                          index={varIdx}
-                          onUpdate={(color) => updateVariationColor(variation.id, color)}
-                          onUpdateColor={(color) => updateVariationColor(variation.id, color)}
-                          onRemove={() => removeVariation(variation.id)}
-                          onImageUpload={(e) => handleVariationImageChange(variation.id, e)}
-                          onImageRemove={(imgIdx) => removeVariationImage(variation.id, imgIdx)}
-                          onSizeAdd={() => addSize(variation.id)}
-                          onSizeUpdate={(sizeIdx, value) => updateSizeValue(variation.id, sizeIdx, value)}
-                          onSizeRemove={(sizeIdx) => removeSize(variation.id, sizeIdx)}
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={addVariation}
-                    className="w-full py-3.5 bg-gray-900 dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-100 text-white dark:text-gray-900 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 shadow-sm"
-                  >
-                    <Plus className="w-5 h-5" />
-                    Add Variation
-                  </button>
-                </div>
-              )
+                )}
+              </>
             )}
 
             <div className="flex gap-3 mt-8 sticky bottom-0 bg-gray-50 dark:bg-gray-900 py-4 border-t border-gray-200 dark:border-gray-700">
