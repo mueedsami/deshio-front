@@ -48,13 +48,17 @@ const resolveTransactionAccount = (txn: any): Account => {
 // NORMALIZERS (Make frontend resilient to backend shape/type variations)
 // ============================================
 
+// Parse numbers that might contain commas, currency symbols (৳, BDT), or be '-' / ''
 const toNumber = (value: any, fallback: number = 0): number => {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'number') return value;
   if (typeof value === 'string') {
     const trimmed = value.trim();
     if (trimmed === '' || trimmed === '-') return fallback;
-    const parsed = Number(trimmed.replace(/,/g, ''));
+    // Remove commas and any non-numeric characters (keeps digits, dot, minus)
+    const cleaned = trimmed.replace(/,/g, '').replace(/[^0-9.\-]/g, '');
+    if (cleaned === '' || cleaned === '-' || cleaned === '.' || cleaned === '-.') return fallback;
+    const parsed = Number(cleaned);
     return Number.isFinite(parsed) ? parsed : fallback;
   }
   const parsed = Number(value);
@@ -134,24 +138,58 @@ const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end
   // Shape A (transactions/trial-balance): { success, data: { summary, accounts, date_range } }
   // Shape B (accounting/trial-balance): { success, data: { accounts: [...], totals: {...}, as_of_date } }
   const data = payload?.data ?? payload;
+  const buildSummaryFromAccounts = (rows: any[], fallbackSummary?: any) => {
+    const totalDebits = rows.reduce((s, r) => s + toNumber(r.debit, 0), 0);
+    const totalCredits = rows.reduce((s, r) => s + toNumber(r.credit, 0), 0);
+    // Keep 2dp precision for display/compare
+    const diff = Math.round((totalDebits - totalCredits) * 100) / 100;
+    const balanced = Math.abs(diff) < 0.01;
+
+    // If backend provided totals that *look* sane AND close to computed, keep them.
+    const backendDebits = toNumber(fallbackSummary?.total_debits ?? fallbackSummary?.totalDebits, NaN as any);
+    const backendCredits = toNumber(fallbackSummary?.total_credits ?? fallbackSummary?.totalCredits, NaN as any);
+    const useBackendTotals = Number.isFinite(backendDebits) && Number.isFinite(backendCredits)
+      && Math.abs(backendDebits - totalDebits) < 0.01
+      && Math.abs(backendCredits - totalCredits) < 0.01;
+
+    const finalDebits = useBackendTotals ? backendDebits : totalDebits;
+    const finalCredits = useBackendTotals ? backendCredits : totalCredits;
+    const finalDiff = Math.round((finalDebits - finalCredits) * 100) / 100;
+    const finalBalanced = Math.abs(finalDiff) < 0.01;
+
+    return {
+      total_debits: finalDebits,
+      total_credits: finalCredits,
+      difference: finalDiff,
+      balanced: finalBalanced,
+    };
+  };
+
   if (data?.summary && Array.isArray(data?.accounts)) {
+    const rows = data.accounts.map((a: any) => {
+      const debit = toNumber(a.debit ?? a.debit_balance ?? a.debitAmount, 0);
+      const credit = toNumber(a.credit ?? a.credit_balance ?? a.creditAmount, 0);
+      const id = Number(a?.id) || 0;
+      const type = normalizeAccountType(a.type ?? a.account_type ?? a.accountType ?? a.accountTypeName);
+      const code = a.account_code ?? a.code ?? a.accountCode ?? '';
+      const name = a.name ?? a.account_name ?? a.accountName ?? a.account ?? '';
+      return {
+        ...a,
+        id,
+        account_code: code,
+        account_name: name,
+        name,
+        type,
+        debit,
+        credit,
+        balance: a.balance ?? a.raw_balance ?? a.rawBalance ?? undefined,
+      };
+    });
+
     return {
       ...data,
-      summary: {
-        total_debits: toNumber(data.summary.total_debits, 0),
-        total_credits: toNumber(data.summary.total_credits, 0),
-        difference: toNumber(data.summary.difference, 0),
-        balanced: !!(data.summary.balanced ?? data.summary.is_balanced),
-      },
-      accounts: data.accounts.map((a: any) => ({
-        ...a,
-        debit: toNumber(a.debit ?? a.debit_balance, 0),
-        credit: toNumber(a.credit ?? a.credit_balance, 0),
-        type: a.type ?? a.account_type ?? a.accountType ?? '',
-        account_code: a.account_code ?? a.code ?? '',
-        account_name: a.account_name ?? a.name ?? a.account ?? '',
-        balance: a.balance ?? a.raw_balance ?? undefined,
-      })),
+      accounts: rows,
+      summary: buildSummaryFromAccounts(rows, data.summary),
       date_range: data.date_range ?? {
         start_date: params?.start_date || '',
         end_date: params?.end_date || params?.start_date || '',
@@ -163,21 +201,30 @@ const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end
   const accounts = Array.isArray(data?.accounts) ? data.accounts : [];
   const totals = data?.totals ?? {};
   const end = params?.end_date || data?.as_of_date || params?.start_date || '';
+
+  const rows = accounts.map((a: any) => {
+    const debit = toNumber(a.debit ?? a.debit_balance ?? a.debitAmount, 0);
+    const credit = toNumber(a.credit ?? a.credit_balance ?? a.creditAmount, 0);
+    const id = Number(a?.id) || 0;
+    const type = normalizeAccountType(a.type ?? a.account_type ?? a.accountType);
+    const code = a.account_code ?? a.code ?? a.accountCode ?? '';
+    const name = a.name ?? a.account_name ?? a.accountName ?? '';
+    return {
+      ...a,
+      id,
+      account_code: code,
+      account_name: name,
+      name,
+      type,
+      debit,
+      credit,
+      balance: a.balance ?? a.raw_balance ?? a.rawBalance ?? undefined,
+    };
+  });
+
   return {
-    summary: {
-      total_debits: toNumber(totals.total_debits, 0),
-      total_credits: toNumber(totals.total_credits, 0),
-      difference: toNumber(totals.difference, 0),
-      balanced: !!(totals.is_balanced ?? totals.balanced),
-    },
-    accounts: accounts.map((a: any) => ({
-      account_code: a.account_code ?? a.code ?? '',
-      account_name: a.account_name ?? a.name ?? '',
-      type: a.type ?? a.account_type ?? '',
-      debit: toNumber(a.debit ?? a.debit_balance, 0),
-      credit: toNumber(a.credit ?? a.credit_balance, 0),
-      balance: a.balance ?? a.raw_balance ?? undefined,
-    })),
+    summary: buildSummaryFromAccounts(rows, totals),
+    accounts: rows,
     date_range: {
       start_date: params?.start_date || end,
       end_date: end,
