@@ -84,6 +84,10 @@ class ServiceManagementService {
   }
 
   private normalize(api: ApiService): Service {
+    // Some backends may not include allow_manual_price but may include pricing_type.
+    // In that case we treat anything other than 'fixed' as allowing manual override.
+    const rawPricingType = String(api?.pricing_type ?? api?.pricingType ?? '').toLowerCase();
+    const inferredAllowManual = rawPricingType ? rawPricingType !== 'fixed' : undefined;
     return {
       id: Number(api?.id) || 0,
       name: api?.name || api?.service_name || '',
@@ -91,7 +95,10 @@ class ServiceManagementService {
       basePrice: this.toNumber(api?.base_price ?? api?.basePrice ?? api?.price ?? 0, 0),
       category: this.normalizeCategory(api?.category),
       isActive: this.toBoolean(api?.is_active ?? api?.isActive ?? true, true),
-      allowManualPrice: this.toBoolean(api?.allow_manual_price ?? api?.allowManualPrice ?? true, true),
+      allowManualPrice: this.toBoolean(
+        api?.allow_manual_price ?? api?.allowManualPrice ?? inferredAllowManual ?? true,
+        true
+      ),
       createdAt: api?.created_at || api?.createdAt || new Date().toISOString(),
       updatedAt: api?.updated_at || api?.updatedAt || new Date().toISOString(),
     };
@@ -105,8 +112,10 @@ class ServiceManagementService {
       category: serviceData.category,
       is_active: serviceData.isActive,
       allow_manual_price: serviceData.allowManualPrice,
-      // Some backends use pricing_type instead of allow_manual_price
-      pricing_type: serviceData.allowManualPrice ? 'manual' : 'fixed',
+      // NOTE:
+      // Do NOT send pricing_type by default.
+      // Your backend validates pricing_type with an enum, and 'manual' is not accepted.
+      // allow_manual_price is the supported field for manual overrides.
     };
   }
 
