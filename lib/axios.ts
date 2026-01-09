@@ -14,6 +14,8 @@ const PUBLIC_ROUTES = [
   '/login',
   '/forgot-password',
   '/reset-password',
+  // Public customer registration (no auth)
+  '/customer-registration',
   '/customer-auth/register',
   '/customer-auth/login',
   '/customer-auth/password/reset-request',

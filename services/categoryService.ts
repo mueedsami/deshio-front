@@ -179,6 +179,16 @@ private normalizeCategory<T extends Category | CategoryTree>(category: T): T {
     await axiosInstance.delete<ApiResponse<null>>(url);
   }
 
+  // HARD DELETE (Permanent delete)
+  async hardDelete(id: number): Promise<{ success: boolean; message?: string }> {
+    const url = this.baseUrl + '/' + id + '/hard-delete';
+    const response = await axiosInstance.delete<ApiResponse<null>>(url);
+    return {
+      success: !!response.data?.success,
+      message: response.data?.message,
+    };
+  }
+
   // ACTIVATE
   async activate(id: number): Promise<Category> {
     const url = this.baseUrl + '/' + id + '/activate';

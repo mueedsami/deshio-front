@@ -53,7 +53,8 @@ export default function ProductPage() {
     try {
       const [productsData, categoriesData] = await Promise.all([
         productService.getAll({ per_page: 1000 }),
-        categoryService.getTree(),
+        // Only count/show active categories in product list stats & filters
+        categoryService.getTree(true),
       ]);
 
       setProducts(Array.isArray(productsData.data) ? productsData.data : []);

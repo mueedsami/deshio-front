@@ -70,6 +70,29 @@ export default function CategoryPageWrapper() {
     }
   };
 
+  const handleHardDelete = async (id: number, title: string) => {
+    // Extra safety for permanent delete
+    const firstConfirm = confirm(
+      `Permanently delete "${title}"?\n\nThis cannot be undone.`
+    );
+    if (!firstConfirm) return;
+
+    const typed = prompt(`Type the category title to confirm: ${title}`);
+    if (typed !== title) {
+      showToast('Confirmation text did not match. Hard delete canceled.', 'warning');
+      return;
+    }
+
+    try {
+      const res = await categoryService.hardDelete(id);
+      showToast(res.message || 'Category permanently deleted', 'success');
+      loadCategories();
+    } catch (error: any) {
+      console.error('Failed to hard delete category:', error);
+      showToast(error.response?.data?.message || 'Failed to permanently delete category', 'error');
+    }
+  };
+
   const handleEdit = (category: Category) => {
     setEditCategory(category);
     setParentId(category.parent_id || null);
@@ -192,6 +215,7 @@ export default function CategoryPageWrapper() {
                     key={category.id}
                     category={category}
                     onDelete={handleDelete}
+                    onHardDelete={handleHardDelete}
                     onEdit={handleEdit}
                     onAddSubcategory={handleAddSubcategory}
                   />

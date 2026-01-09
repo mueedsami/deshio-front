@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { MoreVertical, Trash2, Edit, Plus, ChevronDown, ChevronRight } from 'lucide-react';
+import { MoreVertical, Trash2, Trash, Edit, Plus, ChevronDown, ChevronRight } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Category } from '@/services/categoryService';
 
 interface CategoryListItemProps {
   category: Category;
   onDelete: (id: number) => void;
+  onHardDelete?: (id: number, title: string) => void;
   onEdit: (category: Category) => void;
   onAddSubcategory: (parentId: number) => void;
   level?: number;
@@ -16,6 +17,7 @@ interface CategoryListItemProps {
 export default function CategoryListItem({
   category,
   onDelete,
+  onHardDelete,
   onEdit,
   onAddSubcategory,
   level = 0,
@@ -113,6 +115,26 @@ export default function CategoryListItem({
                 <Trash2 className="w-4 h-4" />
                 Delete
               </button>
+
+              {/* Hard delete (dangerous) */}
+              {onHardDelete && (
+                <button
+                  onClick={() => {
+                    onHardDelete(category.id, category.title);
+                    setShowDropdown(false);
+                  }}
+                  disabled={hasSubcategories}
+                  className={`w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors ${
+                    hasSubcategories
+                      ? 'text-red-300 dark:text-red-600/60 cursor-not-allowed'
+                      : 'text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
+                  }`}
+                  title={hasSubcategories ? 'Cannot delete forever while subcategories exist' : 'Permanently delete (cannot be undone)'}
+                >
+                  <Trash className="w-4 h-4" />
+                  Delete Forever
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -125,6 +147,7 @@ export default function CategoryListItem({
               key={sub.id}
               category={sub}
               onDelete={onDelete}
+              onHardDelete={onHardDelete}
               onEdit={onEdit}
               onAddSubcategory={onAddSubcategory}
               level={level + 1}
