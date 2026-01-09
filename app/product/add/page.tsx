@@ -754,6 +754,13 @@ export default function AddEditProductPage({
             cf => !VARIATION_FIELD_IDS.includes(cf.field_id)
           );
 
+          // ✅ OPTIMIZED: Prepare all variations first (no API calls)
+          const variationsToCreate: Array<{
+            name: string;
+            customFields: any[];
+            images: File[];
+          }> = [];
+
           for (const variation of variations) {
             const hasColor = variation.color.trim();
             const validSizes = variation.sizes.filter(s => s.trim());
@@ -777,43 +784,131 @@ export default function AddEditProductPage({
                 varCustomFields.push({ field_id: sizeField.id, value: size });
               }
 
-              const product = await productService.create({
+              variationsToCreate.push({
                 name: variationName,
-                sku: baseData.sku,
-                description: baseData.description,
-                category_id: baseData.category_id,
-                vendor_id: baseData.vendor_id,
-                custom_fields: varCustomFields,
+                customFields: varCustomFields,
+                images: variation.images || [],
               });
+            }
+          }
 
-              if (variation.images.length > 0 && product.id) {
-                for (let i = 0; i < variation.images.length; i++) {
+          console.log(`🔄 Creating ${variationsToCreate.length} variations in batches...`);
+
+          // ✅ OPTIMIZED: Process in batches of 5 with delays
+          const BATCH_SIZE = 5;
+          const DELAY_BETWEEN_BATCHES = 2000; // 2 seconds between batches
+          const DELAY_BETWEEN_ITEMS = 500; // 500ms between items in batch
+
+          for (let i = 0; i < variationsToCreate.length; i += BATCH_SIZE) {
+            const batch = variationsToCreate.slice(i, i + BATCH_SIZE);
+            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+            const totalBatches = Math.ceil(variationsToCreate.length / BATCH_SIZE);
+
+            console.log(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} variations)`);
+            
+            // Update UI to show progress
+            setToast({ 
+              message: `Creating variations: ${i + 1}-${Math.min(i + BATCH_SIZE, variationsToCreate.length)} of ${variationsToCreate.length}...`, 
+              type: 'success' 
+            });
+
+            // Process batch items with small delays between each
+            for (let j = 0; j < batch.length; j++) {
+              const varData = batch[j];
+              
+              try {
+                // Create product with retry logic
+                let product;
+                let retryCount = 0;
+                const MAX_RETRIES = 3;
+
+                while (retryCount < MAX_RETRIES) {
                   try {
-                    await productImageService.uploadImage(
-                      product.id,
-                      variation.images[i],
-                      {
-                        is_primary: i === 0,
-                        sort_order: i,
-                      }
-                    );
-                  } catch (error) {
-                    console.error('Failed to upload variation image:', error);
+                    product = await productService.create({
+                      name: varData.name,
+                      sku: baseData.sku,
+                      description: baseData.description,
+                      category_id: baseData.category_id,
+                      vendor_id: baseData.vendor_id,
+                      custom_fields: varData.customFields,
+                    });
+                    break; // Success!
+                  } catch (err: any) {
+                    retryCount++;
+                    if (err.response?.status === 429 && retryCount < MAX_RETRIES) {
+                      console.warn(`⚠️ Rate limited, retry ${retryCount}/${MAX_RETRIES} after delay...`);
+                      await new Promise(resolve => setTimeout(resolve, 3000 * retryCount)); // Exponential backoff
+                    } else {
+                      throw err; // Give up after max retries
+                    }
                   }
                 }
-              }
 
-              createdProducts.push(product);
+                if (!product) {
+                  throw new Error('Failed to create product after retries');
+                }
+
+                // Upload images sequentially with delays
+                if (varData.images.length > 0 && product.id) {
+                  for (let imgIdx = 0; imgIdx < varData.images.length; imgIdx++) {
+                    try {
+                      await productImageService.uploadImage(
+                        product.id,
+                        varData.images[imgIdx],
+                        {
+                          is_primary: imgIdx === 0,
+                          sort_order: imgIdx,
+                        }
+                      );
+                      
+                      // Small delay between image uploads
+                      if (imgIdx < varData.images.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 300));
+                      }
+                    } catch (error) {
+                      console.error(`Failed to upload image ${imgIdx + 1} for ${varData.name}:`, error);
+                    }
+                  }
+                }
+
+                createdProducts.push(product);
+                console.log(`✅ Created variation ${createdProducts.length}/${variationsToCreate.length}: ${varData.name}`);
+
+                // Delay between items in same batch
+                if (j < batch.length - 1) {
+                  await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_ITEMS));
+                }
+              } catch (error: any) {
+                console.error(`❌ Failed to create variation ${varData.name}:`, error);
+                // Continue with next variation instead of failing completely
+              }
+            }
+
+            // Longer delay between batches
+            if (i + BATCH_SIZE < variationsToCreate.length) {
+              console.log(`⏳ Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
+              await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
             }
           }
 
           if (createdProducts.length === 0) {
-            setToast({ message: 'No valid variations to create.', type: 'warning' });
+            setToast({ message: 'No valid variations were created.', type: 'error' });
             setLoading(false);
             return;
           }
 
-          setToast({ message: `Created ${createdProducts.length} product variation(s)!`, type: 'success' });
+          const failedCount = variationsToCreate.length - createdProducts.length;
+          if (failedCount > 0) {
+            setToast({ 
+              message: `Created ${createdProducts.length} variations. ${failedCount} failed - please check console for details.`, 
+              type: 'warning' 
+            });
+          } else {
+            setToast({ 
+              message: `Successfully created all ${createdProducts.length} product variations!`, 
+              type: 'success' 
+            });
+          }
         } else {
           console.log('Step 1: Creating product...');
           const createdProduct = await productService.create({
