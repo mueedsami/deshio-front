@@ -1,6 +1,50 @@
 import axiosInstance from '@/lib/axios';
 
 // ============================================
+// ACCOUNT CACHE (helps when backend doesn't eager-load account relation)
+// ============================================
+let accountCacheById: Record<number, Account> = {};
+
+const makeAccountPlaceholder = (idLike: any): Account => {
+  const id = Number(idLike) || 0;
+  return {
+    id,
+    account_code: id ? String(id) : '-',
+    name: id ? `Account #${id}` : 'Unknown Account',
+    description: '',
+    type: 'expense',
+    sub_type: 'unknown',
+    parent_id: undefined,
+    is_active: true,
+    level: 0,
+    path: id ? String(id) : '',
+    current_balance: undefined,
+    parent: undefined,
+    children: [],
+    created_at: '',
+    updated_at: '',
+  };
+};
+
+const upsertAccountCache = (acc: any) => {
+  const id = Number(acc?.id);
+  if (!Number.isFinite(id) || id <= 0) return;
+  // normalizeAccount is declared below; TS allows calling it here
+  accountCacheById[id] = normalizeAccount(acc);
+};
+
+const resolveTransactionAccount = (txn: any): Account => {
+  if (txn?.account) {
+    upsertAccountCache(txn.account);
+    return accountCacheById[Number(txn.account?.id)] || normalizeAccount(txn.account);
+  }
+  const id = Number(txn?.account_id);
+  if (Number.isFinite(id) && id > 0 && accountCacheById[id]) return accountCacheById[id];
+  return makeAccountPlaceholder(id);
+};
+
+
+// ============================================
 // NORMALIZERS (Make frontend resilient to backend shape/type variations)
 // ============================================
 
@@ -25,11 +69,20 @@ const toLower = (value: any): string => {
 const normalizeTransaction = (txn: any): Transaction => {
   // Backend examples vary: type can be "debit"/"credit" or "Debit"/"Credit".
   const type = (toLower(txn?.type) === 'debit' ? 'debit' : 'credit') as 'debit' | 'credit';
-  return {
+  const normalized: any = {
     ...txn,
+    transaction_date: txn?.transaction_date ?? txn?.date ?? txn?.created_at ?? '',
+    transaction_number: txn?.transaction_number ?? txn?.transaction_no ?? txn?.transactionNumber ?? txn?.reference ?? txn?.id ?? '',
     amount: toNumber(txn?.amount, 0),
     type,
+    status: (txn?.status ?? 'completed') as any,
+    account_id: toNumber(txn?.account_id, 0),
   };
+
+  // Ensure account object exists for UI (journal requires it)
+  normalized.account = resolveTransactionAccount(normalized);
+
+  return normalized as Transaction;
 };
 
 const normalizeAccountType = (type: any): Account['type'] => {
@@ -50,11 +103,31 @@ const normalizeAccountType = (type: any): Account['type'] => {
 };
 
 const normalizeAccount = (acc: any): Account => {
-  return {
+  const id = Number(acc?.id) || 0;
+  const account_code = acc?.account_code ?? acc?.code ?? acc?.accountCode ?? (id ? String(id) : '-');
+  const name = acc?.name ?? acc?.account_name ?? acc?.accountName ?? acc?.account ?? (id ? `Account #${id}` : 'Unknown Account');
+
+  const normalized: Account = {
     ...acc,
-    type: normalizeAccountType(acc?.type),
+    id,
+    account_code,
+    name,
+    type: normalizeAccountType(acc?.type ?? acc?.account_type),
+    sub_type: acc?.sub_type ?? acc?.subType ?? 'unknown',
+    is_active: acc?.is_active ?? acc?.active ?? true,
+    level: acc?.level ?? 0,
+    path: acc?.path ?? (id ? String(id) : ''),
+    created_at: acc?.created_at ?? '',
+    updated_at: acc?.updated_at ?? '',
     current_balance: acc?.current_balance !== undefined ? toNumber(acc.current_balance, 0) : acc?.current_balance,
-  } as Account;
+    parent: acc?.parent,
+    children: acc?.children,
+  };
+
+  // Keep cache fresh
+  if (normalized.id) accountCacheById[normalized.id] = normalized;
+
+  return normalized;
 };
 
 const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end_date?: string; store_id?: number }) => {
@@ -118,21 +191,37 @@ const normalizeLedger = (payload: any, accountId: number, params?: { date_from?:
   // Shape B (accounting/t-account/{id}): { success, data: { account, opening_balance, debit_side, credit_side, totals, period } }
   const data = payload?.data ?? payload;
   if (data?.account && Array.isArray(data?.transactions)) {
+    // Some implementations return debit/credit columns directly.
+    // Others return { type, amount } per row. Normalize to debit/credit always.
     return {
       ...data,
+      account: normalizeAccount(data.account),
       opening_balance: toNumber(data.opening_balance, 0),
-      closing_balance: toNumber(data.closing_balance, 0),
-      transactions: data.transactions.map((t: any) => ({
-        ...t,
-        debit: toNumber(t.debit, 0),
-        credit: toNumber(t.credit, 0),
-        balance: toNumber(t.balance, 0),
-      })),
+      closing_balance: toNumber(data.closing_balance ?? data?.totals?.closing_balance, 0),
+      date_range: data.date_range ?? data.period ?? {
+        date_from: params?.date_from ?? '',
+        date_to: params?.date_to ?? '',
+      },
+      transactions: data.transactions.map((t: any) => {
+        const tType = toLower(t?.type);
+        const amt = toNumber(t?.amount, 0);
+        const debit = t?.debit !== undefined ? toNumber(t.debit, 0) : (tType === 'debit' ? amt : 0);
+        const credit = t?.credit !== undefined ? toNumber(t.credit, 0) : (tType === 'credit' ? amt : 0);
+        return {
+          ...t,
+          transaction_date: t?.transaction_date ?? t?.date ?? '',
+          transaction_number: t?.transaction_number ?? t?.transaction_no ?? t?.reference ?? '',
+          debit,
+          credit,
+          balance: toNumber(t?.balance, 0),
+          status: t?.status ?? 'completed',
+        };
+      }),
     } as LedgerData;
   }
 
   // Convert T-Account format into ledger entries list
-  const account = data?.account || { id: accountId, name: `Account #${accountId}` };
+  const account = normalizeAccount(data?.account || makeAccountPlaceholder(accountId));
   const opening = toNumber(data?.opening_balance, 0);
   const debitSide = Array.isArray(data?.debit_side) ? data.debit_side : [];
   const creditSide = Array.isArray(data?.credit_side) ? data.credit_side : [];
@@ -719,66 +808,111 @@ class FinancialReportsService {
     per_page?: number;
     page?: number;
   }) {
-    // Fetch all transactions
-    const response = await axiosInstance.get('/transactions', { params });
-    
-    if (!response.data.success) {
+    // Journal needs *all* matching transactions, otherwise entries look "unbalanced" (one side is on another page).
+    // The standard /api/transactions endpoint is paginated; we fetch multiple pages for journal completeness.
+    const perPage = Math.max(100, Math.min(5000, Number(params?.per_page || 1000)));
+
+    const fetchPage = async (page: number) => {
+      const response = await axiosInstance.get('/transactions', {
+        params: { ...params, per_page: perPage, page },
+      });
       return response.data;
+    };
+
+    // Load first page
+    const first = await fetchPage(1);
+
+    if (!first?.success) {
+      return first;
     }
 
-    const rawTransactions = response.data.data.data || response.data.data;
-    const transactions = (Array.isArray(rawTransactions) ? rawTransactions : []).map((t: any) => normalizeTransaction(t));
-    
+    const firstData = first.data;
+    const firstPageRows =
+      Array.isArray(firstData?.data) ? firstData.data :
+      Array.isArray(firstData) ? firstData :
+      Array.isArray(firstData?.data?.data) ? firstData.data.data :
+      [];
+
+    const lastPage = Number(firstData?.last_page || firstData?.data?.last_page || 1) || 1;
+
+    let allRows: any[] = [...firstPageRows];
+
+    // Load remaining pages (cap to avoid runaway if backend misreports last_page)
+    const maxPages = Math.min(lastPage, 20);
+    for (let p = 2; p <= maxPages; p++) {
+      const next = await fetchPage(p);
+      if (!next?.success) break;
+
+      const nextData = next.data;
+      const rows =
+        Array.isArray(nextData?.data) ? nextData.data :
+        Array.isArray(nextData) ? nextData :
+        Array.isArray(nextData?.data?.data) ? nextData.data.data :
+        [];
+
+      allRows.push(...rows);
+
+      // If backend doesn't report last_page reliably, break on short page
+      if (rows.length < perPage) break;
+    }
+
+    const transactions = allRows.map((t: any) => normalizeTransaction(t));
+
     // Group transactions by reference (same reference = one journal entry)
     const entriesMap = new Map<string, JournalEntry>();
-    
+
     transactions.forEach((txn: Transaction) => {
-      const key = `${txn.reference_type || 'Manual'}-${txn.reference_id || txn.id}-${txn.transaction_date}`;
-      
+      const refType = txn.reference_type || 'Manual';
+      const refId = txn.reference_id || txn.id;
+      const date = txn.transaction_date;
+      const key = `${refType}-${refId}-${date}`;
+
       if (!entriesMap.has(key)) {
         entriesMap.set(key, {
           id: key,
-          date: txn.transaction_date,
-          reference_type: txn.reference_type || 'Manual',
+          date,
+          reference_type: refType,
           reference_id: txn.reference_id || 0,
           description: txn.description || '',
           lines: [],
           total_debit: 0,
           total_credit: 0,
           balanced: true,
-          created_at: txn.created_at
+          created_at: txn.created_at,
         });
       }
-      
+
       const entry = entriesMap.get(key)!;
-      
+
+      const debitAmt = txn.type === 'debit' ? toNumber(txn.amount, 0) : 0;
+      const creditAmt = txn.type === 'credit' ? toNumber(txn.amount, 0) : 0;
+
       entry.lines.push({
-        account: txn.account!,
-        debit: txn.type === 'debit' ? toNumber(txn.amount, 0) : 0,
-        credit: txn.type === 'credit' ? toNumber(txn.amount, 0) : 0,
-        transaction: txn
+        account: txn.account || makeAccountPlaceholder(txn.account_id),
+        debit: debitAmt,
+        credit: creditAmt,
+        transaction: txn,
       });
-      
-      if (txn.type === 'debit') {
-        entry.total_debit += toNumber(txn.amount, 0);
-      } else {
-        entry.total_credit += toNumber(txn.amount, 0);
-      }
+
+      entry.total_debit += debitAmt;
+      entry.total_credit += creditAmt;
     });
-    
+
     // Check if each entry is balanced
-    entriesMap.forEach(entry => {
+    entriesMap.forEach((entry) => {
       entry.balanced = Math.abs(entry.total_debit - entry.total_credit) < 0.01;
+      // Keep lines stable: debits first then credits
+      entry.lines = entry.lines.sort((a, b) => (b.debit - a.debit));
     });
-    
+
     // Convert to array and sort by date descending
-    const journalEntries = Array.from(entriesMap.values()).sort((a, b) => 
+    const journalEntries = Array.from(entriesMap.values()).sort((a, b) =>
       new Date(b.date).getTime() - new Date(a.date).getTime()
     );
-    
+
     return {
       success: true,
-      data: journalEntries
+      data: journalEntries,
     };
   }
 

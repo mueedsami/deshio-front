@@ -56,12 +56,13 @@ export default function AccountingSystem() {
     try {
       setLoading(true);
       
-      // Fetch accounts using service
-      const accountsRes = await accountingService.accounts.getAccounts();
-      if (accountsRes.success) {
-        const accountsData = Array.isArray(accountsRes.data) 
-          ? accountsRes.data 
-          : accountsRes.data?.data || [];
+      // Fetch accounts using service (support both {success,data} and direct arrays)
+      const accountsRes: any = await accountingService.accounts.getAccounts();
+      const accountsData = accountsRes?.success
+        ? (Array.isArray(accountsRes.data) ? accountsRes.data : accountsRes.data?.data || [])
+        : (Array.isArray(accountsRes) ? accountsRes : Array.isArray(accountsRes?.data) ? accountsRes.data : []);
+
+      if (accountsData && accountsData.length >= 0) {
         setAccounts(accountsData);
         console.log('✅ Loaded accounts:', accountsData.length);
       }
@@ -218,12 +219,12 @@ const fetchJournalEntries = async () => {
   };
 
   const formatDate = (date: string | Date): string => {
-    return new Date(date).toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
+    const d = new Date(date as any);
+    if (Number.isNaN(d.getTime())) return '-';
+    return d.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
     });
   };
 
