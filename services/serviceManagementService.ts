@@ -10,6 +10,7 @@ export interface Service {
   name: string;
   description: string;
   basePrice: number; // Default price
+  // UI categories (we map to backend categories in toApiPayload)
   category: 'wash' | 'repair' | 'alteration' | 'custom' | 'other';
   isActive: boolean;
   allowManualPrice: boolean;
@@ -52,11 +53,19 @@ class ServiceManagementService {
     if (Array.isArray(payload?.data)) return payload.data;
     if (Array.isArray(payload?.data?.data)) return payload.data.data;
     if (Array.isArray(payload?.data?.items)) return payload.data.items;
+    if (Array.isArray(payload?.data?.services)) return payload.data.services;
+    if (Array.isArray(payload?.services)) return payload.services;
+    if (Array.isArray(payload?.data?.items)) return payload.data.items;
     return [];
   }
 
   private pickObject(payload: any): any {
     if (!payload) return null;
+    // Common wrappers:
+    // { success: true, data: {...} }
+    // { success: true, data: { service: {...} } }
+    // { data: {...} }
+    if (payload?.data?.service && typeof payload.data.service === 'object') return payload.data.service;
     if (payload?.data && typeof payload.data === 'object') return payload.data;
     return payload;
   }
@@ -64,7 +73,28 @@ class ServiceManagementService {
   private normalizeCategory(input: any): Service['category'] {
     const v = String(input || '').toLowerCase();
     if (v === 'wash' || v === 'repair' || v === 'alteration' || v === 'custom' || v === 'other') return v;
+    // If backend returns categories like 'cleaning'/'tailoring', map them to the closest UI bucket
+    if (v === 'cleaning') return 'wash';
+    if (v === 'tailoring') return 'custom';
     return 'other';
+  }
+
+  /**
+   * Map UI categories to backend categories.
+   * Backend commonly uses: cleaning, repair, alteration, tailoring, other
+   */
+  private toBackendCategory(ui: Service['category']): string {
+    switch (ui) {
+      case 'wash':
+        return 'cleaning';
+      case 'custom':
+        return 'tailoring';
+      case 'repair':
+      case 'alteration':
+      case 'other':
+      default:
+        return ui;
+    }
   }
 
   private toBoolean(v: any, fallback = false): boolean {
@@ -105,18 +135,60 @@ class ServiceManagementService {
   }
 
   private toApiPayload(serviceData: Partial<Service>): any {
+    const basePrice = this.toNumber((serviceData as any)?.basePrice ?? (serviceData as any)?.base_price ?? 0, 0);
+    const allowManual = this.toBoolean((serviceData as any)?.allowManualPrice ?? (serviceData as any)?.allow_manual_price ?? true, true);
+    const isActive = this.toBoolean((serviceData as any)?.isActive ?? (serviceData as any)?.is_active ?? true, true);
+    const uiCategory = (serviceData.category || 'other') as Service['category'];
+
     return {
-      name: serviceData.name,
-      description: serviceData.description,
-      base_price: serviceData.basePrice,
-      category: serviceData.category,
-      is_active: serviceData.isActive,
-      allow_manual_price: serviceData.allowManualPrice,
-      // NOTE:
-      // Do NOT send pricing_type by default.
-      // Your backend validates pricing_type with an enum, and 'manual' is not accepted.
-      // allow_manual_price is the supported field for manual overrides.
+      name: (serviceData.name || '').trim(),
+      description: (serviceData.description || '').trim(),
+      base_price: basePrice,
+
+      // Category enum mismatch is the #1 cause of 422s.
+      // Map UI bucket -> backend category.
+      category: this.toBackendCategory(uiCategory),
+
+      // Laravel accepts booleans, but some setups validate strictly as 0/1.
+      is_active: isActive ? 1 : 0,
+
+      // Manual overrides are needed for POS/Social.
+      allow_manual_price: allowManual ? 1 : 0,
     };
+  }
+
+  /**
+   * Some backends have strict validation around pricing_type.
+   * We avoid sending it by default, but can retry with a safe value.
+   */
+  private withPricingType(payload: any, pricingType: 'fixed' = 'fixed') {
+    return { ...payload, pricing_type: pricingType };
+  }
+
+  private getAxiosStatus(e: any): number | null {
+    return e?.response?.status ?? null;
+  }
+
+  private extractApiErrorMessage(e: any): string {
+    const data = e?.response?.data;
+    if (!data) return e?.message || 'Request failed';
+    if (typeof data === 'string') return data;
+    if (typeof data?.message === 'string') return data.message;
+    // Laravel validation: { message, errors: { field: [..] } }
+    if (data?.errors && typeof data.errors === 'object') {
+      const firstKey = Object.keys(data.errors)[0];
+      const firstVal = firstKey ? data.errors[firstKey] : null;
+      const msg = Array.isArray(firstVal) ? firstVal[0] : firstVal;
+      if (msg) return String(msg);
+    }
+    return e?.message || 'Request failed';
+  }
+
+  private hasValidationErrorForField(e: any, field: string): boolean {
+    const data = e?.response?.data;
+    const errors = data?.errors;
+    if (!errors || typeof errors !== 'object') return false;
+    return Object.prototype.hasOwnProperty.call(errors, field);
   }
 
   /**
@@ -200,7 +272,18 @@ class ServiceManagementService {
   async createService(serviceData: Omit<Service, 'id' | 'createdAt' | 'updatedAt'>): Promise<Service> {
     try {
       const payload = this.toApiPayload(serviceData);
-      const res = await axiosInstance.post('/services', payload);
+      let res;
+      try {
+        res = await axiosInstance.post('/services', payload);
+      } catch (e: any) {
+        // Some backends require pricing_type (enum). Retry with a safe default.
+        const status = this.getAxiosStatus(e);
+        if (status === 422 && this.hasValidationErrorForField(e, 'pricing_type')) {
+          res = await axiosInstance.post('/services', this.withPricingType(payload, 'fixed'));
+        } else {
+          throw e;
+        }
+      }
       const obj = this.pickObject(res.data);
       const created = this.normalize(obj);
 
@@ -208,7 +291,16 @@ class ServiceManagementService {
       await this.getAllServices();
       return created;
     } catch (e) {
-      // if API fails, fallback to local creation (offline mode)
+      // For admin panels, do NOT silently fall back on validation/auth errors.
+      // Only fall back when the API is unreachable (network error / no response).
+      const status = this.getAxiosStatus(e);
+      if (status && status >= 400 && status < 500) {
+        const msg = this.extractApiErrorMessage(e);
+        console.error('API createService failed:', msg, e);
+        throw new Error(msg);
+      }
+
+      // Network/offline fallback
       const services = await this.getAllServices();
       const newService: Service = {
         ...(serviceData as any),
@@ -218,7 +310,7 @@ class ServiceManagementService {
       };
       const next = [...services, newService];
       this.writeServicesToStorage(next);
-      console.warn('API createService failed; stored locally as fallback:', e);
+      console.warn('API createService failed (offline); stored locally as fallback:', e);
       return newService;
     }
   }
@@ -229,12 +321,28 @@ class ServiceManagementService {
   async updateService(id: number, updates: Partial<Service>): Promise<Service | null> {
     try {
       const payload = this.toApiPayload(updates);
-      const res = await axiosInstance.put(`/services/${id}`, payload);
+      let res;
+      try {
+        res = await axiosInstance.put(`/services/${id}`, payload);
+      } catch (e: any) {
+        const status = this.getAxiosStatus(e);
+        if (status === 422 && this.hasValidationErrorForField(e, 'pricing_type')) {
+          res = await axiosInstance.put(`/services/${id}`, this.withPricingType(payload, 'fixed'));
+        } else {
+          throw e;
+        }
+      }
       const obj = this.pickObject(res.data);
       const updated = obj ? this.normalize(obj) : null;
       await this.getAllServices();
       return updated;
     } catch (e) {
+      const status = this.getAxiosStatus(e);
+      if (status && status >= 400 && status < 500) {
+        const msg = this.extractApiErrorMessage(e);
+        console.error('API updateService failed:', msg, e);
+        throw new Error(msg);
+      }
       // fallback: local update
       const services = await this.getAllServices();
       const index = services.findIndex((s) => s.id === id);
@@ -256,6 +364,12 @@ class ServiceManagementService {
       await this.getAllServices();
       return true;
     } catch (e) {
+      const status = this.getAxiosStatus(e);
+      if (status && status >= 400 && status < 500) {
+        const msg = this.extractApiErrorMessage(e);
+        console.error('API deleteService failed:', msg, e);
+        throw new Error(msg);
+      }
       // fallback local delete
       const services = await this.getAllServices();
       const filtered = services.filter((s) => s.id !== id);

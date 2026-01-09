@@ -101,8 +101,9 @@ export default function ServiceManagementPage() {
       
       await loadServices();
       handleCloseModal();
-    } catch (error) {
-      showToast('Error saving service', 'error');
+    } catch (error: any) {
+      const msg = error?.message || 'Error saving service';
+      showToast(msg, 'error');
     }
   };
 
@@ -113,8 +114,9 @@ export default function ServiceManagementPage() {
       await serviceManagementService.deleteService(id);
       showToast('Service deleted successfully', 'success');
       await loadServices();
-    } catch (error) {
-      showToast('Error deleting service', 'error');
+    } catch (error: any) {
+      const msg = error?.message || 'Error deleting service';
+      showToast(msg, 'error');
     }
   };
 
@@ -123,8 +125,9 @@ export default function ServiceManagementPage() {
       await serviceManagementService.toggleServiceStatus(id);
       showToast('Service status updated', 'success');
       await loadServices();
-    } catch (error) {
-      showToast('Error updating service status', 'error');
+    } catch (error: any) {
+      const msg = error?.message || 'Error updating service status';
+      showToast(msg, 'error');
     }
   };
 
