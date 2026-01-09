@@ -46,9 +46,11 @@ export default function ServiceSelector({ onAddService, darkMode, allowManualPri
   const handleAddService = () => {
     if (!selectedService) return;
 
-    const finalPrice = (allowManualPrice && selectedService.allowManualPrice) 
-      ? customPrice 
-      : selectedService.basePrice;
+    // ✅ Manual price override:
+    // POS / Social Commerce often needs to adjust service price per order (negotiation, extra work, etc.).
+    // If the parent enables manual pricing, always use the entered customPrice.
+    // (E-commerce can pass allowManualPrice={false} to force basePrice.)
+    const finalPrice = allowManualPrice ? customPrice : selectedService.basePrice;
 
     const serviceItem: ServiceItem = {
       id: Date.now(),
@@ -173,18 +175,18 @@ export default function ServiceSelector({ onAddService, darkMode, allowManualPri
                       onChange={(e) => setCustomPrice(parseFloat(e.target.value) || 0)}
                       min="0"
                       step="0.01"
-                      disabled={!allowManualPrice || !selectedService.allowManualPrice}
+                      disabled={!allowManualPrice}
                       className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white ${
-                        (!allowManualPrice || !selectedService.allowManualPrice) ? 'opacity-50 cursor-not-allowed' : ''
+                        (!allowManualPrice) ? 'opacity-50 cursor-not-allowed' : ''
                       }`}
                     />
-                    {(!allowManualPrice || !selectedService.allowManualPrice) && (
+                    {(!allowManualPrice) && (
                       <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
                         <span className="text-xs text-gray-500 dark:text-gray-400">Fixed</span>
                       </div>
                     )}
                   </div>
-                  {allowManualPrice && selectedService.allowManualPrice && (
+                  {allowManualPrice && (
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Base price: ৳{selectedService.basePrice}
                     </p>
