@@ -103,6 +103,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       ],
     },
     { icon: Package, label: 'Orders', href: '/orders' },
+    { icon: CreditCard, label: 'Installments', href: '/orders?view=installments' },
     { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
     { icon: Package, label: 'PreOrders', href: '/preorders' },
     { icon: AlertTriangle, label: 'Extra Panel', href: '/extra' },
@@ -162,9 +163,11 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
               const Icon = item.icon;
               const hasSubMenu = 'subMenu' in item;
 
+              const hrefPath = (href: string) => href.split('?')[0];
+
               const isActive = hasSubMenu
-                ? item.subMenu.some((sub) => sub.href === pathname)
-                : 'href' in item && item.href === pathname;
+                ? item.subMenu.some((sub) => hrefPath(sub.href) === pathname)
+                : 'href' in item && hrefPath(item.href) === pathname;
 
               const isSubMenuOpen = openMenu === item.label;
 

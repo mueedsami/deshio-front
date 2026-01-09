@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import {
@@ -277,21 +278,19 @@ export default function OrdersDashboard() {
   
 const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
 
-  const [viewMode, setViewMode] = useState<'online' | 'installments'>('online');
+  const searchParams = useSearchParams();
+  const initialViewMode = useMemo(() => {
+    const v = (searchParams.get('view') || searchParams.get('tab') || '').toLowerCase();
+    return v === 'installments' || v === 'emi' ? 'installments' : 'online';
+  }, [searchParams]);
 
-  const [selectedBackendOrder, setSelectedBackendOrder] = useState<any | null>(null);
+  const [viewMode, setViewMode] = useState<'online' | 'installments'>(() => initialViewMode);
 
-  // Installment collection modal
-  const [showInstallmentModal, setShowInstallmentModal] = useState(false);
-  const [installmentOrderId, setInstallmentOrderId] = useState<number | null>(null);
-  const [installmentAmountInput, setInstallmentAmountInput] = useState('');
-  const [installmentMethodId, setInstallmentMethodId] = useState<number | ''>('');
-  const [installmentRef, setInstallmentRef] = useState('');
-  const [installmentNotes, setInstallmentNotes] = useState('');
-  const [installmentMethods, setInstallmentMethods] = useState<PaymentMethod[]>([]);
-  const [isCollectingInstallment, setIsCollectingInstallment] = useState(false);
+  // Keep in sync if query changes (e.g., sidebar click while already on /orders)
+  useEffect(() => {
+    setViewMode(initialViewMode);
+  }, [initialViewMode]);
 
-  const [viewMode, setViewMode] = useState<'online' | 'installments'>('online');
 
   const [selectedBackendOrder, setSelectedBackendOrder] = useState<any | null>(null);
 
