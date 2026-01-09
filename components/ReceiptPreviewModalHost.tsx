@@ -4,6 +4,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Printer } from 'lucide-react';
 import { RECEIPT_MODAL_EVENT, type ReceiptModalPayload } from '@/lib/receiptModal';
 import { receiptHtml, receiptBulkHtml } from '@/lib/receiptHtml';
+import { posReceiptHtml, posReceiptBulkHtml } from '@/lib/posReceiptHtml';
+import { socialInvoiceHtml, socialInvoiceBulkHtml } from '@/lib/socialInvoiceHtml';
 import { normalizeOrderForReceipt } from '@/lib/receipt';
 
 type ViewMode = 'single' | 'bulk';
@@ -13,6 +15,7 @@ export default function ReceiptPreviewModalHost() {
   const [orders, setOrders] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
   const [title, setTitle] = useState('Receipt');
+  const [template, setTemplate] = useState<'receipt' | 'pos_receipt' | 'social_invoice'>('receipt');
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   useEffect(() => {
@@ -23,6 +26,7 @@ export default function ReceiptPreviewModalHost() {
       setOrders(list);
       setIdx(Math.max(0, Math.min(payload?.startIndex ?? 0, Math.max(0, list.length - 1))));
       setTitle(payload?.title || (list.length > 1 ? 'Bulk Receipts' : 'Receipt'));
+      setTemplate((payload as any)?.template || 'receipt');
       setOpen(true);
     };
     window.addEventListener(RECEIPT_MODAL_EVENT, handler as any);
@@ -39,16 +43,29 @@ export default function ReceiptPreviewModalHost() {
   const html = useMemo(() => {
     if (!open) return '';
     if (mode === 'bulk') {
+      if (template === 'pos_receipt') return posReceiptBulkHtml(orders, { embed: true });
+      if (template === 'social_invoice') return socialInvoiceBulkHtml(orders, { embed: true });
       return receiptBulkHtml(orders, { embed: true });
     }
-    return currentOrder ? receiptHtml(currentOrder, { embed: true }) : '<p>No order</p>';
-  }, [open, mode, orders, currentOrder]);
+    if (!currentOrder) return '<p>No order</p>';
+    if (template === 'pos_receipt') return posReceiptHtml(currentOrder, { embed: true });
+    if (template === 'social_invoice') return socialInvoiceHtml(currentOrder, { embed: true });
+    return receiptHtml(currentOrder, { embed: true });
+  }, [open, mode, orders, currentOrder, template]);
 
   const headerLabel = useMemo(() => {
     if (mode === 'bulk') return `${title} (${orders.length})`;
     const r = currentOrder ? normalizeOrderForReceipt(currentOrder) : null;
-    return r?.orderNo ? `Receipt #${r.orderNo}` : title;
-  }, [mode, title, orders.length, currentOrder]);
+    if (!r?.orderNo) return title;
+
+    if (template === 'social_invoice') {
+      const inv = String(r.orderNo).replace(/^ORD[-\s]?/i, '').trim() || r.orderNo;
+      return `Invoice #${inv}`;
+    }
+
+    if (template === 'pos_receipt') return `POS Receipt #${r.orderNo}`;
+    return `Receipt #${r.orderNo}`;
+  }, [mode, title, orders.length, currentOrder, template]);
 
   const close = () => {
     setOpen(false);

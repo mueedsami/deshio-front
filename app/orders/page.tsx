@@ -1326,7 +1326,99 @@ const derivePaymentStatus = (order: any) => {
     }
   };
 
-  // ✅ Bulk: Print receipts
+    const isSocialOrder = (o: Order | any) => {
+    const t = String((o as any)?.orderType || (o as any)?.order_type || '').toLowerCase();
+    const lbl = String((o as any)?.orderTypeLabel || '').toLowerCase();
+    return t === 'social_commerce' || t === 'social' || lbl.includes('social');
+  };
+
+  // ✅ Bulk: Print social commerce invoices (A5)
+  const handleBulkPrintInvoices = async () => {
+    if (selectedOrders.size === 0) {
+      alert('Please select at least one order to print.');
+      return;
+    }
+
+    const selectedOrdersList = filteredOrders.filter((o) => selectedOrders.has(o.id));
+    const socialList = selectedOrdersList.filter(isSocialOrder);
+
+    if (socialList.length === 0) {
+      alert('No Social Commerce orders selected. Please select Social Commerce orders to print invoices.');
+      return;
+    }
+
+    // Try to refresh printer status, but don't block printing if QZ is offline.
+    try {
+      await checkPrinterStatus();
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    } catch (e) {
+      console.warn('QZ Tray status check failed - will use browser preview fallback.', e);
+    }
+
+    let status: { connected: boolean } = { connected: false };
+    try {
+      status = await checkQZStatus();
+    } catch {}
+
+    setIsPrintingBulk(true);
+    setBulkPrintProgress({ show: true, current: 0, total: socialList.length, success: 0, failed: 0 });
+
+    try {
+      const fullOrders: any[] = [];
+
+      // fetch full orders one-by-one (keeps backend load safe)
+      for (let i = 0; i < socialList.length; i++) {
+        const o = socialList[i];
+        setBulkPrintProgress((prev) => ({ ...prev, current: i + 1 }));
+
+        try {
+          const fullOrder = await orderService.getById(o.id);
+          fullOrders.push(fullOrder);
+        } catch (e) {
+          console.error('Failed to fetch order for invoice:', o.id, e);
+          setBulkPrintProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+
+      // If QZ is offline, open ONE bulk preview window (Print → Save as PDF).
+      if (!status.connected) {
+        await printBulkReceipts(fullOrders, undefined, { template: 'social_invoice', title: 'Social Invoices' });
+        alert('Opened invoice preview. Use Print → Save as PDF.');
+        return;
+      }
+
+      // QZ online: print one-by-one
+      let successCount = 0;
+      let failedCount = 0;
+
+      for (let i = 0; i < fullOrders.length; i++) {
+        const fullOrder = fullOrders[i];
+        setBulkPrintProgress((prev) => ({ ...prev, current: i + 1 }));
+
+        try {
+          await printReceipt(fullOrder as any, selectedPrinter, { template: 'social_invoice', title: 'Invoice' });
+          successCount++;
+          setBulkPrintProgress((prev) => ({ ...prev, success: successCount }));
+        } catch {
+          failedCount++;
+          setBulkPrintProgress((prev) => ({ ...prev, failed: failedCount }));
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      }
+
+      alert(`Bulk invoice print completed!\nSuccess: ${successCount}\nFailed: ${failedCount}`);
+    } finally {
+      setIsPrintingBulk(false);
+      setTimeout(() => {
+        setBulkPrintProgress((prev) => ({ ...prev, show: false }));
+      }, 1200);
+    }
+  };
+
+// ✅ Bulk: Print receipts
   const handleBulkPrintReceipts = async () => {
     if (selectedOrders.size === 0) {
       alert('Please select at least one order to print.');
@@ -1527,6 +1619,50 @@ const derivePaymentStatus = (order: any) => {
       setSingleActionLoading(null);
     }
   };
+
+  const handleSinglePrintInvoice = async (order: Order) => {
+    if (!isSocialOrder(order)) {
+      alert('Invoice printing is only available for Social Commerce orders.');
+      return;
+    }
+
+    if (!confirm(`Print invoice for order ${order.orderNumber}?`)) return;
+
+    setSingleActionLoading({ orderId: order.id, action: 'print' });
+    setActiveMenu(null);
+
+    try {
+      try {
+        await checkPrinterStatus();
+      } catch (e) {
+        console.warn('Printer status check failed - will use browser preview fallback.', e);
+      }
+
+      let status: { connected: boolean } = { connected: false };
+      try {
+        status = await checkQZStatus();
+      } catch {}
+
+      if (!status.connected) {
+        alert('QZ Tray is offline. Opening invoice preview (Print → Save as PDF).');
+      }
+
+      const fullOrder = await orderService.getById(order.id);
+      await printReceipt(fullOrder as any, status.connected ? selectedPrinter : undefined, {
+        template: 'social_invoice',
+        title: 'Invoice',
+      });
+
+      alert('✅ Invoice ready (printed or opened in preview)!');
+    } catch (error: any) {
+      console.error('Single invoice print error:', error);
+      alert(`Failed to print invoice: ${error?.message || 'Unknown error'}`);
+    } finally {
+      setSingleActionLoading(null);
+    }
+  };
+
+
 
   // 🔁 Product picker helpers
   const fetchBatchesForStore = async (storeId: number) => {
@@ -2096,6 +2232,17 @@ const derivePaymentStatus = (order: any) => {
                       </button>
 
                       <button
+                        onClick={handleBulkPrintInvoices}
+                        disabled={isPrintingBulk}
+                        className="flex items-center gap-1 px-2 py-1.5 bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 text-[10px] font-medium"
+                        title="Print A5 invoices for selected Social Commerce orders"
+                      >
+                        <Printer className="w-3 h-3" />
+                        {isPrintingBulk ? 'Printing' : 'Invoices'}
+                      </button>
+
+
+                      <button
                         onClick={handleBulkSendToPathao}
                         disabled={isSendingBulk}
                         className="flex items-center gap-1 px-2 py-1 bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black rounded transition-colors disabled:opacity-50 text-[10px] font-medium"
@@ -2364,6 +2511,35 @@ const derivePaymentStatus = (order: any) => {
               })()}
             </span>
           </button>
+
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order || !isSocialOrder(order)) return null;
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const o = filteredOrders.find((x) => x.id === activeMenu);
+                  if (o) handleSinglePrintInvoice(o);
+                }}
+                disabled={(() => {
+                  const o = filteredOrders.find((x) => x.id === activeMenu);
+                  return o ? isSingleLoading(o.id, 'print') : false;
+                })()}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+              >
+                <Printer className="h-5 w-5 flex-shrink-0" />
+                <span>
+                  {(() => {
+                    const o = filteredOrders.find((x) => x.id === activeMenu);
+                    return o && isSingleLoading(o.id, 'print') ? 'Printing...' : 'Print Invoice';
+                  })()}
+                </span>
+              </button>
+            );
+          })()}
+
 
           <button
             onClick={(e) => {

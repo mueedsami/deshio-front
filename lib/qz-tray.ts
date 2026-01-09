@@ -8,7 +8,7 @@
 // - printReceipt(...) opens a receipt preview modal. From there user clicks Print → Save as PDF.
 // - printBulkReceipts(...) opens a combined preview (all receipts in one print job).
 
-import { openReceiptModal, openBulkReceiptModal } from '@/lib/receiptModal';
+import { openReceiptModal, openBulkReceiptModal, type ReceiptTemplate } from '@/lib/receiptModal';
 
 // --- QZ stubs (kept for compatibility)
 export async function connectQZ(): Promise<boolean> {
@@ -35,9 +35,9 @@ export function savePreferredPrinter(_printerName: string) {
   // no-op
 }
 
-export async function printReceipt(order: any, _printerName?: string): Promise<boolean> {
+export async function printReceipt(order: any, _printerName?: string, opts?: { template?: ReceiptTemplate; title?: string }): Promise<boolean> {
   try {
-    openReceiptModal(order);
+    openReceiptModal(order, { template: opts?.template, title: opts?.title });
     return true;
   } catch (e) {
     console.error('❌ Failed to open receipt modal:', e);
@@ -47,10 +47,11 @@ export async function printReceipt(order: any, _printerName?: string): Promise<b
 
 export async function printBulkReceipts(
   orders: any[],
-  _printerName?: string
+  _printerName?: string,
+  opts?: { template?: ReceiptTemplate; title?: string }
 ): Promise<{ successCount: number; failCount: number }> {
   try {
-    openBulkReceiptModal(orders);
+    openBulkReceiptModal(orders, { template: opts?.template, title: opts?.title });
     return { successCount: 0, failCount: 0 };
   } catch (e) {
     console.error('❌ Failed to open bulk receipt modal:', e);

@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import axiosInstance from '@/lib/axios';
 
 // Services
 import orderService from '@/services/orderService';
@@ -84,6 +83,7 @@ export default function POSPage() {
 
   // Printing
   const [autoPrintReceipt, setAutoPrintReceipt] = useState(true);
+  const [posReceiptStyle, setPosReceiptStyle] = useState<'compact' | 'detailed'>('compact');
   const [lastCompletedOrderId, setLastCompletedOrderId] = useState<number | null>(null);
 
   useEffect(() => {
@@ -94,6 +94,16 @@ export default function POSPage() {
       // ignore
     }
   }, []);
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('posReceiptStyle');
+      if (saved === 'compact' || saved === 'detailed') setPosReceiptStyle(saved);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+
 
   useEffect(() => {
     try {
@@ -102,6 +112,15 @@ export default function POSPage() {
       // ignore
     }
   }, [autoPrintReceipt]);
+  useEffect(() => {
+    try {
+      localStorage.setItem('posReceiptStyle', posReceiptStyle);
+    } catch {
+      // ignore
+    }
+  }, [posReceiptStyle]);
+
+
 
   // Input Mode
   const [inputMode, setInputMode] = useState<'barcode' | 'manual'>('barcode');
@@ -138,9 +157,6 @@ export default function POSPage() {
   // ✅ Customer lookup (existing customer by phone + last purchase)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
   const [autoCustomerId, setAutoCustomerId] = useState<number | null>(null);
-
-  // Public customer registration
-  const [isRegisteringCustomer, setIsRegisteringCustomer] = useState(false);
 
   // Keep mobileNo state synced for payload usage (payload still uses mobileNo)
   useEffect(() => {
@@ -235,66 +251,6 @@ export default function POSPage() {
       () => setToasts((prev) => prev.filter((toast) => toast.id !== id)),
       5000
     );
-  };
-
-  const registerCustomerFromPOS = async () => {
-    if (isRegisteringCustomer) return;
-
-    // If lookup already found a customer, no need to register again
-    if (customerLookup.customer?.id || autoCustomerId) {
-      showToast('Customer is already registered.', 'error');
-      return;
-    }
-
-    const name = (customerName || '').trim();
-    const phone = (customerLookup.phone || '').replace(/\D/g, '');
-
-    if (!name) {
-      showToast('Please enter customer name.', 'error');
-      return;
-    }
-    if (phone.length < 6) {
-      showToast('Please enter a valid phone number.', 'error');
-      return;
-    }
-
-    setIsRegisteringCustomer(true);
-    try {
-      const payload: any = {
-        name,
-        phone,
-        customer_type: 'counter',
-      };
-      if ((address || '').trim()) payload.address = (address || '').trim();
-
-      const res = await axiosInstance.post('/customer-registration', payload);
-      const created = (res as any)?.data?.data ?? (res as any)?.data;
-
-      setAutoCustomerId(created?.id ?? null);
-      if (created?.name) setCustomerName(created.name);
-      if (created?.address) setAddress(created.address);
-
-      showToast('Customer registered successfully!', 'success');
-
-      // Force refresh of existing-customer UI for the same phone number
-      const currentPhone = customerLookup.phone;
-      customerLookup.clear();
-      setTimeout(() => {
-        customerLookup.setPhone(currentPhone);
-      }, 0);
-    } catch (error: any) {
-      const status = error?.response?.status;
-      if (status === 422) {
-        const errors = error?.response?.data?.errors;
-        const phoneErr = Array.isArray(errors?.phone) ? errors.phone[0] : null;
-        const emailErr = Array.isArray(errors?.email) ? errors.email[0] : null;
-        showToast(phoneErr || emailErr || 'Validation failed', 'error');
-      } else {
-        showToast(error?.response?.data?.message || 'Registration failed', 'error');
-      }
-    } finally {
-      setIsRegisteringCustomer(false);
-    }
   };
 
   // ============ DEFECT ITEM LOADING ============
@@ -912,7 +868,7 @@ export default function POSPage() {
             }
 
             const fullOrder = await orderService.getById(order.id);
-            await printReceipt(fullOrder);
+            await printReceipt(fullOrder, undefined, { template: posReceiptStyle === 'detailed' ? 'pos_receipt' : 'receipt' });
             showToast('✅ Receipt printed', 'success');
           } catch (e: any) {
             console.error('❌ Receipt auto-print failed:', e);
@@ -996,7 +952,7 @@ export default function POSPage() {
         showToast('QZ Tray offline - opening receipt preview (Print → Save as PDF)', 'error');
       }
       const fullOrder = await orderService.getById(lastCompletedOrderId);
-      await printReceipt(fullOrder);
+      await printReceipt(fullOrder, undefined, { template: posReceiptStyle === 'detailed' ? 'pos_receipt' : 'receipt' });
       showToast('✅ Receipt printed', 'success');
     } catch (e: any) {
       console.error('❌ Receipt print failed:', e);
@@ -1576,36 +1532,9 @@ export default function POSPage() {
 
                   {/* Customer Details */}
                   <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                        Customer Details (Optional)
-                      </h3>
-
-                      <button
-                        type="button"
-                        onClick={registerCustomerFromPOS}
-                        disabled={
-                          isRegisteringCustomer ||
-                          !!customerLookup.customer?.id ||
-                          !!autoCustomerId
-                        }
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-gray-200 dark:border-gray-700 bg-gray-900 text-white hover:bg-gray-800 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
-                        title={
-                          customerLookup.customer?.id || autoCustomerId
-                            ? 'Customer already registered'
-                            : 'Register customer with name + phone'
-                        }
-                      >
-                        {isRegisteringCustomer ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <UserPlus className="w-4 h-4" />
-                        )}
-                        {customerLookup.customer?.id || autoCustomerId
-                          ? 'Registered'
-                          : 'Register Customer'}
-                      </button>
-                    </div>
+                    <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                      Customer Details (Optional)
+                    </h3>
                     <div className="grid grid-cols-3 gap-3">
                       <input
                         type="text"
@@ -1934,6 +1863,20 @@ export default function POSPage() {
                         />
                         Auto-print receipt
                       </label>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-600 dark:text-gray-400">Receipt style</span>
+                        <select
+                          value={posReceiptStyle}
+                          onChange={(e) => setPosReceiptStyle(e.target.value as any)}
+                          className="text-xs rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 text-gray-800 dark:text-gray-100"
+                          title="Choose receipt print format"
+                        >
+                          <option value="compact">Compact</option>
+                          <option value="detailed">Detailed (RISE-style)</option>
+                        </select>
+                      </div>
+
 
                       {lastCompletedOrderId && (
                         <button
