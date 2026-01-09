@@ -26,7 +26,7 @@ import {
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
 import paymentService from '@/services/paymentService';
-import paymentMethodService, { type PaymentMethod } from '@/services/paymentMethodService';
+import type { PaymentMethod } from '@/services/paymentMethodService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
 import productService from '@/services/productService';
@@ -919,10 +919,15 @@ const derivePaymentStatus = (order: any) => {
 
       // Load active payment methods (once)
       if (installmentMethods.length === 0) {
-        const methods = await paymentMethodService.getAll({ is_active: true });
-        setInstallmentMethods(methods || []);
-        if (methods?.length && installmentMethodId === '') {
-          setInstallmentMethodId(methods[0].id);
+        // Use the backend endpoint that does NOT require customer_type
+        // GET /api/payment-methods/all
+        const res = await axios.get('/payment-methods/all');
+        const methods: PaymentMethod[] =
+          res?.data?.data?.payment_methods || res?.data?.data?.payment_methods || res?.data?.data || [];
+
+        setInstallmentMethods(Array.isArray(methods) ? methods : []);
+        if (Array.isArray(methods) && methods.length && installmentMethodId === '') {
+          setInstallmentMethodId(String(methods[0].id));
         }
       }
 
