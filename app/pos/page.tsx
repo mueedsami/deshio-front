@@ -32,6 +32,9 @@ import CartTable, { CartItem } from '@/components/pos/CartTable';
 import InputModeSelector from '@/components/pos/InputModeSelector';
 import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 
+// ✅ Customer registration / edit modal
+import CustomerFormModal from '@/components/pos/CustomerFormModal';
+
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
 
@@ -157,6 +160,20 @@ export default function POSPage() {
   // ✅ Customer lookup (existing customer by phone + last purchase)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
   const [autoCustomerId, setAutoCustomerId] = useState<number | null>(null);
+
+  // ✅ Customer create/edit modal
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [customerModalMode, setCustomerModalMode] = useState<'create' | 'edit'>('create');
+
+  const openCreateCustomer = () => {
+    setCustomerModalMode('create');
+    setShowCustomerModal(true);
+  };
+
+  const openEditCustomer = () => {
+    setCustomerModalMode('edit');
+    setShowCustomerModal(true);
+  };
 
   // Keep mobileNo state synced for payload usage (payload still uses mobileNo)
   useEffect(() => {
@@ -1626,8 +1643,43 @@ export default function POSPage() {
                                 </div>
                               </div>
                             )}
+
+                            {/* ✅ Actions */}
+                            <div className="pt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={openEditCustomer}
+                                className="px-3 py-2 text-xs rounded-md bg-gray-900 text-white hover:bg-gray-800"
+                              >
+                                Edit Info
+                              </button>
+                              <button
+                                type="button"
+                                onClick={openEditCustomer}
+                                className="px-3 py-2 text-xs rounded-md border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200"
+                                title="Complete missing fields"
+                              >
+                                Add Info
+                              </button>
+                            </div>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* ✅ Register button when no customer found */}
+                    {!customerLookup.customer && (
+                      <div className="mt-3 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={openCreateCustomer}
+                          className="px-3 py-2 text-xs rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                        >
+                          Register Customer
+                        </button>
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                          Opens full customer form (name + phone required)
+                        </span>
                       </div>
                     )}
                   </div>
@@ -2006,6 +2058,30 @@ export default function POSPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ✅ Customer registration / edit modal */}
+      {showCustomerModal && (
+        <CustomerFormModal
+          mode={customerModalMode}
+          customer={customerLookup.customer as any}
+          initial={{
+            name: customerName,
+            phone: customerLookup.phone,
+            address,
+            customer_type: 'counter',
+          }}
+          onClose={() => setShowCustomerModal(false)}
+          onSaved={(savedCustomer: any) => {
+            // Sync back to POS fields
+            setCustomerName(savedCustomer?.name || '');
+            if (savedCustomer?.phone) customerLookup.setPhone(String(savedCustomer.phone));
+            setAddress(savedCustomer?.address || savedCustomer?.customer_address || '');
+            setAutoCustomerId(savedCustomer?.id ?? null);
+            showToast('✅ Customer info saved', 'success');
+            setShowCustomerModal(false);
+          }}
+        />
       )}
     </div>
   );

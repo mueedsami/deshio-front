@@ -7,6 +7,7 @@ import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
 import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 import axios from '@/lib/axios';
+import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import storeService from '@/services/storeService';
 import productImageService from '@/services/productImageService';
 import batchService from '@/services/batchService';
@@ -106,6 +107,10 @@ export default function SocialCommercePage() {
   const [lastOrderInfo, setLastOrderInfo] = useState<any | null>(null);
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [customerCheckError, setCustomerCheckError] = useState<string | null>(null);
+  const [lastPrefilledOrderId, setLastPrefilledOrderId] = useState<number | null>(null);
+
+  // ✅ Reuse lookup hook for consistent phone lookup behavior (debounced)
+  const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
 
   function getTodayDate() {
     const today = new Date();
@@ -410,88 +415,117 @@ export default function SocialCommercePage() {
     return Math.max(0, baseAmount - totalDiscount);
   };
 
-  // 🔍 Helper: check if customer exists + get last order
-  const handlePhoneBlur = async () => {
-    const rawPhone = userPhone.trim();
-    const phone = rawPhone.replace(/\D/g, '');
-    if (!phone) {
-      setExistingCustomer(null);
-      setLastOrderInfo(null);
-      setCustomerCheckError(null);
-      return;
-    }
+  // ✅ Auto-fill Pathao/international delivery fields from previous order
+  const prefillDeliveryFromOrder = async (orderId: number) => {
+    if (!orderId || orderId === lastPrefilledOrderId) return;
 
     try {
-      setIsCheckingCustomer(true);
-      setCustomerCheckError(null);
+      // Fetch full order details
+      const res = await axios.get(`/orders/${orderId}`);
+      const body: any = res.data;
+      const order = body?.data ?? body;
+      const shipping = order?.shipping_address || order?.delivery_address || {};
 
-      // Prefer new endpoint (Customer Tags API): POST /customers/find-by-phone
-      let customer: any = null;
-      try {
-        const response = await axios.post('/customers/find-by-phone', { phone });
-        const payload = response.data?.data ?? response.data;
-        customer = payload?.customer ?? payload;
-      } catch (e: any) {
-        // Fallback for older builds: GET /customers/by-phone
-        try {
-          const response = await axios.get('/customers/by-phone', { params: { phone } });
-          const payload = response.data?.data ?? response.data;
-          customer = payload?.customer ?? payload;
-        } catch {
-          customer = null;
+      // If Pathao IDs exist -> domestic
+      const cityId = shipping?.pathao_city_id ?? shipping?.pathaoCityId;
+      const zoneId = shipping?.pathao_zone_id ?? shipping?.pathaoZoneId;
+      const areaId = shipping?.pathao_area_id ?? shipping?.pathaoAreaId;
+
+      if (cityId || zoneId || areaId) {
+        if (isInternational) setIsInternational(false);
+
+        if (!streetAddress && (shipping?.street || shipping?.address)) {
+          setStreetAddress(String(shipping?.street || shipping?.address));
         }
+        if (!postalCode && shipping?.postal_code) {
+          setPostalCode(String(shipping.postal_code));
+        }
+
+        // Ensure city list exists
+        if (!pathaoCities?.length) {
+          await fetchPathaoCities();
+        }
+
+        // City -> load zones -> set zone -> load areas -> set area
+        if (!pathaoCityId && cityId) {
+          setPathaoCityId(String(cityId));
+        }
+        if (cityId) {
+          await fetchPathaoZones(Number(cityId));
+        }
+        if (!pathaoZoneId && zoneId) {
+          setPathaoZoneId(String(zoneId));
+        }
+        if (zoneId) {
+          await fetchPathaoAreas(Number(zoneId));
+        }
+        if (!pathaoAreaId && areaId) {
+          setPathaoAreaId(String(areaId));
+        }
+
+        setLastPrefilledOrderId(orderId);
+        return;
       }
 
-      if (customer?.id) {
-        setExistingCustomer(customer);
-
-        if (!userName && customer.name) setUserName(customer.name);
-        if (!userEmail && customer.email) setUserEmail(customer.email);
-
-        // Best-effort: get last order from customer orders (if endpoint exists)
-        try {
-          const lastOrderRes = await axios.get(`/customers/${customer.id}/orders`, {
-            params: { per_page: 1, sort_by: 'order_date', sort_order: 'desc' },
-          });
-          const payload = lastOrderRes.data?.data ?? lastOrderRes.data;
-          const list = payload?.data ?? payload?.orders ?? payload ?? [];
-          const last = Array.isArray(list) ? list[0] : null;
-          if (last) {
-            setLastOrderInfo({
-              date: last?.order_date || last?.created_at || last?.date,
-              summary_text: last?.summary_text || last?.order_number || `Order #${last?.id ?? ''}`,
-              total_amount: last?.total_amount ?? last?.total,
-            });
-          } else {
-            setLastOrderInfo(null);
-          }
-        } catch (err) {
-          // Fallback to older summary endpoint if present
-          try {
-            const lastOrderRes = await axios.get(`/customers/${customer.id}/last-order-summary`);
-            if (lastOrderRes.data?.success) {
-              setLastOrderInfo(lastOrderRes.data.data);
-            } else {
-              setLastOrderInfo(null);
-            }
-          } catch {
-            console.warn('Failed to load last order info', err);
-            setLastOrderInfo(null);
-          }
+      // Otherwise, treat as international if fields exist
+      const hasInternational = !!shipping?.country || !!shipping?.state || !!shipping?.city;
+      if (hasInternational) {
+        if (!isInternational) setIsInternational(true);
+        if (!country && shipping?.country) setCountry(String(shipping.country));
+        if (!state && shipping?.state) setState(String(shipping.state));
+        if (!internationalCity && shipping?.city) setInternationalCity(String(shipping.city));
+        if (!internationalPostalCode && (shipping?.postal_code || shipping?.postalCode)) {
+          setInternationalPostalCode(String(shipping?.postal_code || shipping?.postalCode));
         }
-      } else {
-        setExistingCustomer(null);
-        setLastOrderInfo(null);
+        if (!deliveryAddress && (shipping?.street || shipping?.address)) {
+          setDeliveryAddress(String(shipping?.street || shipping?.address));
+        }
+        setLastPrefilledOrderId(orderId);
       }
-    } catch (err) {
-      console.error('Customer lookup failed', err);
-      setExistingCustomer(null);
-      setLastOrderInfo(null);
-      setCustomerCheckError('Could not check existing customer. Please try again.');
-    } finally {
-      setIsCheckingCustomer(false);
+    } catch (e) {
+      console.warn('Failed to prefill delivery info from last order', e);
     }
   };
+
+  // ✅ Sync typed phone to lookup hook (debounced)
+  useEffect(() => {
+    if (customerLookup.phone !== userPhone) {
+      customerLookup.setPhone(userPhone);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userPhone]);
+
+  // ✅ Reflect lookup results into UI + auto-fill basics
+  useEffect(() => {
+    setIsCheckingCustomer(customerLookup.loading);
+    setCustomerCheckError(customerLookup.error);
+
+    const c: any = customerLookup.customer;
+    if (c?.id) {
+      setExistingCustomer(c);
+      if (!userName && c?.name) setUserName(c.name);
+      if (!userEmail && c?.email) setUserEmail(c.email);
+    } else {
+      setExistingCustomer(null);
+    }
+
+    const lo: any = customerLookup.lastOrder;
+    if (lo?.last_order_id) {
+      setLastOrderInfo({
+        id: lo.last_order_id,
+        date: lo.last_order_date,
+        total_amount: lo.last_order_total,
+      });
+    } else {
+      setLastOrderInfo(null);
+    }
+
+    // Prefill Pathao/international from last order details (if any)
+    if (lo?.last_order_id) {
+      prefillDeliveryFromOrder(Number(lo.last_order_id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customerLookup.customer, customerLookup.lastOrder, customerLookup.loading, customerLookup.error]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -1056,7 +1090,6 @@ export default function SocialCommercePage() {
                           placeholder="Phone Number"
                           value={userPhone}
                           onChange={(e) => setUserPhone(e.target.value)}
-                          onBlur={handlePhoneBlur}
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
                         />
                         {isCheckingCustomer && (

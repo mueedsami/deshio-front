@@ -253,14 +253,21 @@ export default function AmountDetailsPage() {
           quantity: item.quantity,
           unit_price: item.unit_price,
           discount_amount: item.discount_amount || 0,
+          // VAT is inclusive; do not add extra tax
+          tax_amount: 0,
         })),
+        // ✅ Services (kept separate from items)
+        ...(Array.isArray(orderData.services) && orderData.services.length > 0
+          ? { services: orderData.services }
+          : {}),
         shipping_amount: transport,
         ...(paymentOption === 'installment'
           ? {
               installment_plan: {
                 total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
                 installment_amount: installmentAmount,
-                start_date: null,
+                // Some backends validate date; omit instead of null
+                start_date: undefined,
               },
             }
           : {}),
@@ -271,12 +278,14 @@ export default function AmountDetailsPage() {
 
       console.log('📦 Creating order:', orderPayload);
       const createOrderResponse = await axios.post('/orders', orderPayload);
-
-      if (!createOrderResponse.data?.success) {
-        throw new Error(createOrderResponse.data?.message || 'Failed to create order');
+      const createBody: any = createOrderResponse.data;
+      if (createBody?.success === false) {
+        throw new Error(createBody?.message || 'Failed to create order');
       }
-
-      const createdOrder = createOrderResponse.data.data;
+      const createdOrder = createBody?.data ?? createBody;
+      if (!createdOrder?.id) {
+        throw new Error('Order was not created (missing order id)');
+      }
       console.log('✅ Order created:', createdOrder.order_number);
 
       // 2) Defective items
