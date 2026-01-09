@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import axiosInstance from '@/lib/axios';
 
 // Services
 import orderService from '@/services/orderService';
@@ -138,6 +139,9 @@ export default function POSPage() {
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
   const [autoCustomerId, setAutoCustomerId] = useState<number | null>(null);
 
+  // Public customer registration
+  const [isRegisteringCustomer, setIsRegisteringCustomer] = useState(false);
+
   // Keep mobileNo state synced for payload usage (payload still uses mobileNo)
   useEffect(() => {
     if (mobileNo !== customerLookup.phone) {
@@ -231,6 +235,66 @@ export default function POSPage() {
       () => setToasts((prev) => prev.filter((toast) => toast.id !== id)),
       5000
     );
+  };
+
+  const registerCustomerFromPOS = async () => {
+    if (isRegisteringCustomer) return;
+
+    // If lookup already found a customer, no need to register again
+    if (customerLookup.customer?.id || autoCustomerId) {
+      showToast('Customer is already registered.', 'error');
+      return;
+    }
+
+    const name = (customerName || '').trim();
+    const phone = (customerLookup.phone || '').replace(/\D/g, '');
+
+    if (!name) {
+      showToast('Please enter customer name.', 'error');
+      return;
+    }
+    if (phone.length < 6) {
+      showToast('Please enter a valid phone number.', 'error');
+      return;
+    }
+
+    setIsRegisteringCustomer(true);
+    try {
+      const payload: any = {
+        name,
+        phone,
+        customer_type: 'counter',
+      };
+      if ((address || '').trim()) payload.address = (address || '').trim();
+
+      const res = await axiosInstance.post('/customer-registration', payload);
+      const created = (res as any)?.data?.data ?? (res as any)?.data;
+
+      setAutoCustomerId(created?.id ?? null);
+      if (created?.name) setCustomerName(created.name);
+      if (created?.address) setAddress(created.address);
+
+      showToast('Customer registered successfully!', 'success');
+
+      // Force refresh of existing-customer UI for the same phone number
+      const currentPhone = customerLookup.phone;
+      customerLookup.clear();
+      setTimeout(() => {
+        customerLookup.setPhone(currentPhone);
+      }, 0);
+    } catch (error: any) {
+      const status = error?.response?.status;
+      if (status === 422) {
+        const errors = error?.response?.data?.errors;
+        const phoneErr = Array.isArray(errors?.phone) ? errors.phone[0] : null;
+        const emailErr = Array.isArray(errors?.email) ? errors.email[0] : null;
+        showToast(phoneErr || emailErr || 'Validation failed', 'error');
+      } else {
+        showToast(error?.response?.data?.message || 'Registration failed', 'error');
+      }
+    } finally {
+      setIsRegisteringCustomer(false);
+    }
   };
 
   // ============ DEFECT ITEM LOADING ============
@@ -1512,9 +1576,36 @@ export default function POSPage() {
 
                   {/* Customer Details */}
                   <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
-                      Customer Details (Optional)
-                    </h3>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+                        Customer Details (Optional)
+                      </h3>
+
+                      <button
+                        type="button"
+                        onClick={registerCustomerFromPOS}
+                        disabled={
+                          isRegisteringCustomer ||
+                          !!customerLookup.customer?.id ||
+                          !!autoCustomerId
+                        }
+                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-medium border border-gray-200 dark:border-gray-700 bg-gray-900 text-white hover:bg-gray-800 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-100 disabled:opacity-60 disabled:cursor-not-allowed"
+                        title={
+                          customerLookup.customer?.id || autoCustomerId
+                            ? 'Customer already registered'
+                            : 'Register customer with name + phone'
+                        }
+                      >
+                        {isRegisteringCustomer ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <UserPlus className="w-4 h-4" />
+                        )}
+                        {customerLookup.customer?.id || autoCustomerId
+                          ? 'Registered'
+                          : 'Register Customer'}
+                      </button>
+                    </div>
                     <div className="grid grid-cols-3 gap-3">
                       <input
                         type="text"
