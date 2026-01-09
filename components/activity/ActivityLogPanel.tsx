@@ -52,6 +52,9 @@ export default function ActivityLogPanel({
   const { category, serverParams } = useMemo(() => {
     const end = new Date();
     const start = new Date();
+    // Default window for non-entity views.
+    // For a specific record (entityId), do NOT date-limit by default,
+    // otherwise older orders will appear to have “no activity”.
     start.setDate(start.getDate() - 7);
     // Map legacy "module" to a business-history category. If it doesn't match, fall back to 'all'.
     const cat = (['product-dispatches','orders','purchase-orders','store-assignments','products'] as const).includes(module as any)
@@ -70,11 +73,13 @@ export default function ActivityLogPanel({
       }
     }
 
+    const isEntityView = entityId != null && modelName;
+
     return {
       category: cat,
       serverParams: {
-        date_from: isoDate(start),
-        date_to: isoDate(end),
+        // Date filters are great for global views, but can hide history for a specific record.
+        ...(isEntityView ? {} : { date_from: isoDate(start), date_to: isoDate(end) }),
         event: undefined,
         per_page: Math.min(Math.max(10, limit), 100),
         page: 1,
@@ -92,14 +97,22 @@ export default function ActivityLogPanel({
 
       // Optional client-side filters
       if (employeeId) rows = rows.filter(r => r.who?.id === employeeId);
-      if (search) {
+
+      // If we're already in a specific-record context, avoid overly strict
+      // client-side filtering (order numbers may not appear in descriptions).
+      const isEntityView = entityId != null && modelName;
+      if (search && !isEntityView) {
         const q = search.toLowerCase();
         rows = rows.filter(r => {
+          const subjectData = r.subject?.data;
+          const subjectDataText = subjectData ? JSON.stringify(subjectData) : '';
           const hay = [
             r.what?.description,
             r.what?.action,
             r.subject?.type,
             String(r.subject?.id ?? ''),
+            // Include subject payload (often contains order_number, invoice, etc.)
+            subjectDataText,
             r.who?.name,
             r.who?.email,
           ]
