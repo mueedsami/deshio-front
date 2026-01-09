@@ -8,6 +8,7 @@ import {
   FolderTree,
   Package,
   ClipboardList,
+  Wrench,
   CreditCard,
   ShoppingCart,
   Image,
@@ -93,6 +94,14 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     { icon: ShoppingCart, label: 'POS', href: '/pos' },
     { icon: ClipboardList, label: 'Purchase History', href: '/purchase-history' },
     { icon: ShoppingCart, label: 'Social Commerce', href: '/social-commerce' },
+    {
+      icon: Wrench,
+      label: 'Services',
+      subMenu: [
+        { label: 'Services Catalog', href: '/services-management' },
+        { label: 'Service Orders', href: '/service-orders' },
+      ],
+    },
     { icon: Package, label: 'Orders', href: '/orders' },
     { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
     { icon: Package, label: 'PreOrders', href: '/preorders' },
