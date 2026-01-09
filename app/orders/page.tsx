@@ -20,9 +20,12 @@ import {
   Printer,
   Settings,
   CheckCircle,
+  HandCoins,
 } from 'lucide-react';
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
+import paymentService from '@/services/paymentService';
+import paymentMethodService, { type PaymentMethod } from '@/services/paymentMethodService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
 import productService from '@/services/productService';
@@ -74,6 +77,16 @@ interface Order {
   // ✅ payment status separate
   paymentStatus: string;
   paymentStatusLabel: string;
+
+  // Installments / EMI
+  isInstallment?: boolean;
+  installmentInfo?: {
+    total_installments?: number;
+    paid_installments?: number;
+    installment_amount?: number;
+    next_payment_due?: string | null;
+    start_date?: string | null;
+  } | null;
 
   salesBy: string;
   store: string;
@@ -261,7 +274,36 @@ export default function OrdersDashboard() {
 
   // ✅ Separate filters
   const [orderStatusFilter, setOrderStatusFilter] = useState('All Order Status');
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
+  
+const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
+
+  const [viewMode, setViewMode] = useState<'online' | 'installments'>('online');
+
+  const [selectedBackendOrder, setSelectedBackendOrder] = useState<any | null>(null);
+
+  // Installment collection modal
+  const [showInstallmentModal, setShowInstallmentModal] = useState(false);
+  const [installmentOrderId, setInstallmentOrderId] = useState<number | null>(null);
+  const [installmentAmountInput, setInstallmentAmountInput] = useState('');
+  const [installmentMethodId, setInstallmentMethodId] = useState<number | ''>('');
+  const [installmentRef, setInstallmentRef] = useState('');
+  const [installmentNotes, setInstallmentNotes] = useState('');
+  const [installmentMethods, setInstallmentMethods] = useState<PaymentMethod[]>([]);
+  const [isCollectingInstallment, setIsCollectingInstallment] = useState(false);
+
+  const [viewMode, setViewMode] = useState<'online' | 'installments'>('online');
+
+  const [selectedBackendOrder, setSelectedBackendOrder] = useState<any | null>(null);
+
+  // Installment collection modal
+  const [showInstallmentModal, setShowInstallmentModal] = useState(false);
+  const [installmentOrderId, setInstallmentOrderId] = useState<number | null>(null);
+  const [installmentAmountInput, setInstallmentAmountInput] = useState('');
+  const [installmentMethodId, setInstallmentMethodId] = useState<number | ''>('');
+  const [installmentRef, setInstallmentRef] = useState('');
+  const [installmentNotes, setInstallmentNotes] = useState('');
+  const [installmentMethods, setInstallmentMethods] = useState<PaymentMethod[]>([]);
+  const [isCollectingInstallment, setIsCollectingInstallment] = useState(false);
 
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [editableOrder, setEditableOrder] = useState<Order | null>(null);
@@ -405,7 +447,7 @@ export default function OrdersDashboard() {
     loadOrders();
     checkPrinterStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [viewMode]);
 
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
@@ -681,6 +723,9 @@ const derivePaymentStatus = (order: any) => {
       paymentStatus: normalize(pStatusRaw) || 'pending',
       paymentStatusLabel: statusLabel(pStatusRaw || 'pending'),
 
+      isInstallment: Boolean(order.is_installment || order.is_installment_payment || order.installment_info || order.installment_plan),
+      installmentInfo: (order.installment_info ?? order.installment_plan ?? null),
+
       salesBy: order.salesman?.name || userName || 'N/A',
       store: order.store?.name || '',
       storeId: order.store?.id,
@@ -715,22 +760,36 @@ const derivePaymentStatus = (order: any) => {
   const loadOrders = async () => {
     setIsLoading(true);
     try {
-      const [social, ecommerce] = await Promise.all([
-        orderService.getAll({
-          order_type: 'social_commerce',
-          sort_by: 'created_at',
-          sort_order: 'desc',
-          per_page: 1000,
-        }),
-        orderService.getAll({
-          order_type: 'ecommerce',
-          sort_by: 'created_at',
-          sort_order: 'desc',
-          per_page: 1000,
-        }),
-      ]);
+      let allOrders: any[] = [];
 
-      const allOrders = [...(social.data || []), ...(ecommerce.data || [])];
+      if (viewMode === 'installments') {
+        const inst = await orderService.getAll({
+          order_type: 'counter',
+          installment_only: true,
+          sort_by: 'created_at',
+          sort_order: 'desc',
+          per_page: 1000,
+        });
+
+        allOrders = inst.data || [];
+      } else {
+        const [social, ecommerce] = await Promise.all([
+          orderService.getAll({
+            order_type: 'social_commerce',
+            sort_by: 'created_at',
+            sort_order: 'desc',
+            per_page: 1000,
+          }),
+          orderService.getAll({
+            order_type: 'ecommerce',
+            sort_by: 'created_at',
+            sort_order: 'desc',
+            per_page: 1000,
+          }),
+        ]);
+
+        allOrders = [...(social.data || []), ...(ecommerce.data || [])];
+      }
 
       allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
@@ -738,20 +797,9 @@ const derivePaymentStatus = (order: any) => {
 
       setOrders(transformedOrders);
       setFilteredOrders(transformedOrders);
-
-      setSelectedOrders((prev) => {
-        const stillExists = new Set(transformedOrders.map((o) => o.id));
-        const next = new Set<number>();
-        prev.forEach((id) => {
-          if (stillExists.has(id)) next.add(id);
-        });
-        return next;
-      });
     } catch (error: any) {
-      console.error('Failed to load orders:', error);
-      alert('Failed to load orders. Please check your connection.');
-      setOrders([]);
-      setFilteredOrders([]);
+      console.error('Get orders error:', error);
+      alert('Failed to fetch orders: ' + (error?.message || 'Unknown error'));
     } finally {
       setIsLoading(false);
     }
@@ -850,6 +898,7 @@ const derivePaymentStatus = (order: any) => {
 
     try {
       const fullOrder = await orderService.getById(order.id);
+      setSelectedBackendOrder(fullOrder);
       const transformedOrder = transformOrder(fullOrder);
       setSelectedOrder(transformedOrder);
       ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
@@ -862,6 +911,90 @@ const derivePaymentStatus = (order: any) => {
     }
   };
 
+
+  const openCollectInstallment = async (order: Order) => {
+    try {
+      setActiveMenu(null);
+      setIsCollectingInstallment(false);
+      setInstallmentOrderId(order.id);
+
+      // Load active payment methods (once)
+      if (installmentMethods.length === 0) {
+        const methods = await paymentMethodService.getAll({ is_active: true });
+        setInstallmentMethods(methods || []);
+        if (methods?.length && installmentMethodId === '') {
+          setInstallmentMethodId(methods[0].id);
+        }
+      }
+
+      // Fetch latest backend order (so installment info is accurate)
+      const full = await orderService.getById(order.id);
+      setSelectedBackendOrder(full);
+
+      const info = full.installment_info ?? full.installment_plan ?? null;
+      const outstanding = parseMoney(full.outstanding_amount);
+
+      const suggested = Math.min(
+        outstanding,
+        Number(info?.installment_amount ?? outstanding) || outstanding
+      );
+
+      setInstallmentAmountInput((suggested || 0).toFixed(2));
+      setInstallmentNotes('');
+      setInstallmentRef('');
+      setShowInstallmentModal(true);
+    } catch (e: any) {
+      console.error('Failed to open installment modal:', e);
+      alert(e?.message || 'Failed to open installment modal');
+    }
+  };
+
+  const submitInstallmentPayment = async () => {
+    if (!installmentOrderId) return;
+
+    const amt = parseMoney(installmentAmountInput);
+    const methodId = Number(installmentMethodId || 0);
+
+    if (!methodId) {
+      alert('Please select a payment method');
+      return;
+    }
+    if (!amt || amt <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+
+    setIsCollectingInstallment(true);
+    try {
+      await paymentService.addInstallmentPayment(installmentOrderId, {
+        payment_method_id: methodId,
+        amount: amt,
+        transaction_reference: installmentRef ? installmentRef.trim() : undefined,
+        notes: installmentNotes ? installmentNotes.trim() : undefined,
+      });
+
+      // Refresh list + details
+      await loadOrders();
+
+      try {
+        const full = await orderService.getById(installmentOrderId);
+        setSelectedBackendOrder(full);
+        const transformed = transformOrder(full);
+        setSelectedOrder((prev) => (prev?.id === installmentOrderId ? transformed : prev));
+      } catch (err) {
+        // ignore
+      }
+
+      setShowInstallmentModal(false);
+      alert('Installment payment added successfully');
+    } catch (e: any) {
+      console.error('Failed to add installment payment:', e);
+      alert(e?.message || 'Failed to add installment payment');
+    } finally {
+      setIsCollectingInstallment(false);
+    }
+  };
+
   const handleEditOrder = async (order: Order) => {
     setActiveMenu(null);
     setIsLoadingDetails(true);
@@ -869,6 +1002,7 @@ const derivePaymentStatus = (order: any) => {
 
     try {
       const fullOrder = await orderService.getById(order.id);
+      setSelectedBackendOrder(fullOrder);
       const transformedOrder = transformOrder(fullOrder);
 
       setSelectedOrder(transformedOrder);
@@ -1161,6 +1295,14 @@ const derivePaymentStatus = (order: any) => {
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">
           <Globe className="h-3 w-3" />
           E-Com
+        </span>
+      );
+    }
+    if (orderType === 'counter') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300">
+          <Package className="h-3 w-3" />
+          Counter
         </span>
       );
     }
@@ -2147,6 +2289,53 @@ const derivePaymentStatus = (order: any) => {
 
             {/* Filters */}
             <div className="max-w-7xl mx-auto px-4 py-3">
+              {/* View mode */}
+              <div className="flex items-center gap-2 mb-2">
+                <button
+                  onClick={() => {
+                    setViewMode('online');
+                    setOrderTypeFilter('All Types');
+                    setOrderStatusFilter('All Order Status');
+                    setPaymentStatusFilter('All Payment Status');
+                    setSearch('');
+                    setDateFilter('');
+                    setSelectedOrders(new Set());
+                  }}
+                  className={`px-3 py-1.5 rounded border text-xs font-semibold transition-colors ${
+                    viewMode === 'online'
+                      ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                      : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  Online Orders
+                </button>
+
+                <button
+                  onClick={() => {
+                    setViewMode('installments');
+                    setOrderTypeFilter('All Types');
+                    setOrderStatusFilter('All Order Status');
+                    setPaymentStatusFilter('All Payment Status');
+                    setSearch('');
+                    setDateFilter('');
+                    setSelectedOrders(new Set());
+                  }}
+                  className={`px-3 py-1.5 rounded border text-xs font-semibold transition-colors ${
+                    viewMode === 'installments'
+                      ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                      : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
+                  }`}
+                >
+                  Installments (EMI)
+                </button>
+
+                {viewMode === 'installments' && (
+                  <span className="text-[10px] text-gray-600 dark:text-gray-400 ml-1">
+                    Showing counter installment orders only
+                  </span>
+                )}
+              </div>
+
               <div className="flex items-center gap-2 mb-3">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -2173,8 +2362,16 @@ const derivePaymentStatus = (order: any) => {
                   className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
                   <option value="All Types">All Types</option>
-                  <option value="social_commerce">Social Commerce</option>
-                  <option value="ecommerce">E-Commerce</option>
+                  {viewMode === 'online' ? (
+                    <>
+                      <option value="social_commerce">Social Commerce</option>
+                      <option value="ecommerce">E-Commerce</option>
+                    </>
+                  ) : (
+                    <>
+                      <option value="counter">Counter</option>
+                    </>
+                  )}
                 </select>
 
                 <select
@@ -2210,6 +2407,7 @@ const derivePaymentStatus = (order: any) => {
             </div>
 
             {/* Bulk Actions */}
+            {viewMode === 'online' && (
             <div className="max-w-7xl mx-auto px-4">
               {selectedOrders.size > 0 && (
                 <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
@@ -2316,6 +2514,8 @@ const derivePaymentStatus = (order: any) => {
               )}
             </div>
 
+            )}
+
             {/* Orders Table */}
             <div className="max-w-7xl mx-auto px-4 pb-4">
               {isLoading ? (
@@ -2382,7 +2582,16 @@ const derivePaymentStatus = (order: any) => {
                             <p className="text-[10px] text-gray-500 dark:text-gray-500">#{order.id}</p>
                           </td>
 
-                          <td className="px-4 py-3">{getOrderTypeBadge(order.orderType)}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-1">
+                              {getOrderTypeBadge(order.orderType)}
+                              {order.isInstallment && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 w-fit">
+                                  EMI
+                                </span>
+                              )}
+                            </div>
+                          </td>
 
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
@@ -2413,6 +2622,12 @@ const derivePaymentStatus = (order: any) => {
                             <p className="text-sm font-bold text-black dark:text-white">৳{order.amounts.total.toFixed(2)}</p>
                             {order.amounts.due > 0 && (
                               <p className="text-xs text-red-600 dark:text-red-400">Due: ৳{order.amounts.due.toFixed(2)}</p>
+                            )}
+                            {order.isInstallment && (
+                              <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                                EMI {Number(order.installmentInfo?.paid_installments ?? 0)}/{Number(order.installmentInfo?.total_installments ?? 0) || '-'}
+                                {order.installmentInfo?.next_payment_due ? ` • Next: ${new Date(order.installmentInfo.next_payment_due).toLocaleDateString('en-GB')}` : ''}
+                              </p>
                             )}
                           </td>
 
@@ -2461,6 +2676,98 @@ const derivePaymentStatus = (order: any) => {
         </div>
       </div>
 
+      {/* Collect Installment Modal */}
+      {showInstallmentModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full border border-gray-200 dark:border-gray-800">
+            <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-black dark:text-white">Collect Installment</h3>
+                <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                  Order #{installmentOrderId || '-'}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowInstallmentModal(false)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                <XCircle className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Amount (৳)</label>
+                <input
+                  value={installmentAmountInput}
+                  onChange={(e) => setInstallmentAmountInput(e.target.value)}
+                  inputMode="decimal"
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                />
+                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                  Tip: you can adjust the amount if you’re giving discount or collecting partial.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Payment Method</label>
+                <select
+                  value={installmentMethodId}
+                  onChange={(e) => setInstallmentMethodId(Number(e.target.value))}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                >
+                  <option value="">Select method</option>
+                  {installmentMethods.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Transaction Reference (optional)</label>
+                <input
+                  value={installmentRef}
+                  onChange={(e) => setInstallmentRef(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  placeholder="bKash / Card / Bank ref"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Notes (optional)</label>
+                <textarea
+                  value={installmentNotes}
+                  onChange={(e) => setInstallmentNotes(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  rows={2}
+                  placeholder="e.g., Installment #2, discount applied"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-800 flex items-center justify-end gap-2">
+              <button
+                onClick={() => setShowInstallmentModal(false)}
+                className="px-3 py-2 text-xs font-semibold border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={submitInstallmentPayment}
+                disabled={isCollectingInstallment}
+                className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <HandCoins className="h-4 w-4" />
+                {isCollectingInstallment ? 'Processing...' : 'Collect'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Fixed Position Dropdown Menu */}
       {activeMenu !== null && menuPosition && (
         <div
@@ -2490,6 +2797,25 @@ const derivePaymentStatus = (order: any) => {
             <Edit className="h-5 w-5 flex-shrink-0" />
             <span>Edit Order</span>
           </button>
+
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order || !order.isInstallment || (order.amounts?.due ?? 0) <= 0) return null;
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const o = filteredOrders.find((x) => x.id === activeMenu);
+                  if (o) openCollectInstallment(o);
+                }}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+              >
+                <HandCoins className="h-5 w-5 flex-shrink-0" />
+                <span>Collect Installment</span>
+              </button>
+            );
+          })()}
 
           <button
             onClick={(e) => {
@@ -2541,6 +2867,7 @@ const derivePaymentStatus = (order: any) => {
           })()}
 
 
+          {viewMode === 'online' && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2561,7 +2888,10 @@ const derivePaymentStatus = (order: any) => {
               })()}
             </span>
           </button>
+          )}
 
+
+          {viewMode === 'online' && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2573,7 +2903,10 @@ const derivePaymentStatus = (order: any) => {
             <RefreshCw className="h-5 w-5 flex-shrink-0" />
             <span>Return Order</span>
           </button>
+          )}
 
+
+          {viewMode === 'online' && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2585,6 +2918,8 @@ const derivePaymentStatus = (order: any) => {
             <ArrowLeftRight className="h-5 w-5 flex-shrink-0" />
             <span>Exchange Order</span>
           </button>
+          )}
+
 
           <button
             onClick={(e) => {
@@ -2609,10 +2944,21 @@ const derivePaymentStatus = (order: any) => {
                 <h2 className="text-xl font-bold text-black dark:text-white">Order Details</h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400">{selectedOrder?.orderNumber || 'Loading...'}</p>
               </div>
+              {selectedOrder?.isInstallment && (selectedOrder.amounts?.due ?? 0) > 0 && (
+                <button
+                  onClick={() => openCollectInstallment(selectedOrder)}
+                  className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors flex items-center gap-2"
+                >
+                  <HandCoins className="h-4 w-4" />
+                  Collect Installment
+                </button>
+              )}
+
               <button
                 onClick={() => {
                   setShowDetailsModal(false);
                   setSelectedOrder(null);
+                  setSelectedBackendOrder(null);
                 }}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
@@ -2653,6 +2999,89 @@ const derivePaymentStatus = (order: any) => {
                     <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.store}</p>
                   </div>
                 </div>
+
+                {selectedOrder.isInstallment && (
+                  <div>
+                    <h3 className="text-sm font-bold text-black dark:text-white mb-3">Installment Summary</h3>
+                    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
+                      {(() => {
+                        const info = selectedOrder.installmentInfo || (selectedBackendOrder?.installment_info ?? selectedBackendOrder?.installment_plan ?? null);
+                        const totalIns = Number(info?.total_installments ?? 0) || 0;
+                        const paidIns = Number(info?.paid_installments ?? selectedBackendOrder?.installment_info?.paid_installments ?? 0) || 0;
+                        const insAmt = Number(info?.installment_amount ?? 0) || 0;
+                        const nextDue = info?.next_payment_due ?? selectedBackendOrder?.installment_info?.next_payment_due ?? null;
+
+                        return (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm text-gray-700 dark:text-gray-300">Installments</p>
+                              <p className="text-sm font-medium text-black dark:text-white">
+                                {paidIns}/{totalIns || '-'}
+                              </p>
+                            </div>
+
+                            {insAmt > 0 && (
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm text-gray-700 dark:text-gray-300">Suggested per installment</p>
+                                <p className="text-sm font-medium text-black dark:text-white">৳{insAmt.toFixed(2)}</p>
+                              </div>
+                            )}
+
+                            {nextDue && (
+                              <div className="flex items-center justify-between">
+                                <p className="text-sm text-gray-700 dark:text-gray-300">Next due</p>
+                                <p className="text-sm font-medium text-black dark:text-white">
+                                  {new Date(nextDue).toLocaleDateString('en-GB')}
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
+                              <p className="text-sm font-semibold text-gray-700 dark:text-gray-300">Outstanding</p>
+                              <p className="text-sm font-bold text-red-600 dark:text-red-400">৳{selectedOrder.amounts.due.toFixed(2)}</p>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+
+                    {/* Payment history (installments only) */}
+                    {Array.isArray(selectedBackendOrder?.payments) && selectedBackendOrder.payments.length > 0 && (
+                      <div className="mt-3 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
+                        <div className="px-4 py-2 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-800">
+                          <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">Installment Payments</p>
+                        </div>
+
+                        <div className="divide-y divide-gray-200 dark:divide-gray-800">
+                          {selectedBackendOrder.payments
+                            .filter((p: any) => String(p.payment_type || '').toLowerCase().includes('installment'))
+                            .slice()
+                            .reverse()
+                            .slice(0, 8)
+                            .map((p: any) => (
+                              <div key={p.id} className="px-4 py-2 flex items-center justify-between">
+                                <div>
+                                  <p className="text-xs font-semibold text-black dark:text-white">
+                                    ৳{parseMoney(p.amount).toFixed(2)}
+                                    <span className="ml-2 text-[10px] text-gray-500 dark:text-gray-400">
+                                      {p.payment_method || p.payment_method_name || ''}
+                                    </span>
+                                  </p>
+                                  <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                                    {p.created_at ? new Date(p.created_at).toLocaleString('en-GB') : ''}
+                                    {p.transaction_reference ? ` • Ref: ${p.transaction_reference}` : ''}
+                                  </p>
+                                </div>
+                                <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-300">
+                                  {statusLabel(p.status || '')}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div>
                   <h3 className="text-sm font-bold text-black dark:text-white mb-3">Customer Information</h3>
