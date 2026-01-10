@@ -244,18 +244,52 @@ export default function AddEditProductPage({
       // We should still allow image editing and field editing for this product.
       // So we do NOT auto-enable "hasVariations" (which is creation-mode UI).
 
-      if (product.custom_fields) {
-        const fields: FieldValue[] = product.custom_fields
-          .filter(cf => !['Primary Image', 'Additional Images', 'SKU', 'Product Name', 'Description', 'Category', 'Vendor'].includes(cf.field_title))
-          .map(cf => ({
-            fieldId: cf.field_id,
-            fieldName: cf.field_title,
-            fieldType: cf.field_type,
-            value: cf.value,
-            instanceId: `field-${cf.field_id}-${Date.now()}`,
-          }));
-        setSelectedFields(fields);
+      const baseFields: FieldValue[] = (Array.isArray(product.custom_fields) ? product.custom_fields : [])
+        .filter(cf => !['Primary Image', 'Additional Images', 'SKU', 'Product Name', 'Description', 'Category', 'Vendor'].includes(cf.field_title))
+        .map(cf => ({
+          fieldId: cf.field_id,
+          fieldName: cf.field_title,
+          fieldType: cf.field_type,
+          value: cf.value,
+          instanceId: `field-${cf.field_id}-${Date.now()}`,
+        }));
+
+      // ✅ In edit mode, always show Color/Size so users can fix missing variant info.
+      const norm = (s: any) => String(s || '').trim().toLowerCase();
+      const colorDef = availableFields.find(f => ['color', 'colour'].includes(norm(f.title)));
+      const sizeDef = availableFields.find(f => norm(f.title) === 'size');
+
+      const enhancedFields: FieldValue[] = [...baseFields];
+
+      if (isEditMode && sizeDef) {
+        const hasSize = enhancedFields.some(f => f.fieldId === sizeDef.id || norm(f.fieldName) === 'size');
+        if (!hasSize) {
+          enhancedFields.unshift({
+            fieldId: sizeDef.id,
+            fieldName: sizeDef.title,
+            fieldType: sizeDef.type,
+            value: '',
+            instanceId: `field-${sizeDef.id}-${Date.now()}-auto`,
+          });
+        }
       }
+
+      if (isEditMode && colorDef) {
+        const hasColor = enhancedFields.some(
+          f => f.fieldId === colorDef.id || ['color', 'colour'].includes(norm(f.fieldName))
+        );
+        if (!hasColor) {
+          enhancedFields.unshift({
+            fieldId: colorDef.id,
+            fieldName: colorDef.title,
+            fieldType: colorDef.type,
+            value: '',
+            instanceId: `field-${colorDef.id}-${Date.now()}-auto`,
+          });
+        }
+      }
+
+      setSelectedFields(enhancedFields);
     } catch (error) {
       console.error('Failed to fetch product:', error);
       setToast({ message: 'Failed to load product', type: 'error' });
@@ -1235,6 +1269,7 @@ export default function AddEditProductPage({
                       fields={availableFields}
                       selectedFieldIds={selectedFields.map(f => f.fieldId)}
                       onAddField={addField}
+                      allowVariantFields={isEditMode}
                     />
                   </div>
                 </div>

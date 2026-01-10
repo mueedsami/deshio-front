@@ -5,26 +5,37 @@ interface FieldsSidebarProps {
   fields: Field[];
   selectedFieldIds: number[];
   onAddField: (field: Field) => void;
+  /**
+   * When true, allow adding variant-related fields like Color/Size.
+   * Useful in edit mode when a product was created without these fields.
+   */
+  allowVariantFields?: boolean;
 }
 
-export default function FieldsSidebar({ 
-  fields, 
-  selectedFieldIds, 
-  onAddField 
+export default function FieldsSidebar({
+  fields,
+  selectedFieldIds,
+  onAddField,
+  allowVariantFields = false,
 }: FieldsSidebarProps) {
-  const excludedFields = [
-    'Primary Image', 
-    'Additional Images', 
-    'SKU', 
-    'Product Name', 
-    'Description', 
-    'Category', 
-    'Vendor', 
-    'Color', 
-    'Size'
+  const baseExcludedFields = [
+    'Primary Image',
+    'Additional Images',
+    'SKU',
+    'Product Name',
+    'Description',
+    'Category',
+    'Vendor',
+    'Color',
+    'Size',
   ];
-  
-  const availableFields = fields.filter(f => !excludedFields.includes(f.title));
+
+  const excludedFields = allowVariantFields
+    ? baseExcludedFields.filter((t) => t !== 'Color' && t !== 'Size')
+    : baseExcludedFields;
+
+  const excludedSet = new Set(excludedFields);
+  const availableFields = (fields || []).filter((f) => !excludedSet.has(f.title));
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
