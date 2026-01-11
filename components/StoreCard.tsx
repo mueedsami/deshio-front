@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { MoreVertical, MapPin, User, Package, Phone, Hash, Warehouse, Store as StoreIcon } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import { useRouter } from 'next/navigation';
 import storeService from '@/services/storeService';
 
@@ -32,6 +33,7 @@ interface StoreCardProps {
 
 export default function StoreCard({ store, showManageStock, onManageStock, onUpdate }: StoreCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
@@ -112,19 +114,26 @@ export default function StoreCard({ store, showManageStock, onManageStock, onUpd
         <div className="relative">
           <button
             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-            onClick={() => setMenuOpen((p) => !p)}
+            onClick={(e) => {
+              const next = !menuOpen;
+              if (next) {
+                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                setMenuPos(computeMenuPosition(rect, 144, 120, 6, 8));
+              }
+              setMenuOpen(next);
+            }}
             disabled={loading}
             type="button"
           >
             <MoreVertical className="w-4 h-4 text-gray-400 dark:text-gray-500" />
           </button>
 
-          {menuOpen && (
+          {menuOpen && menuPos && (
             <>
               {/* Backdrop */}
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
 
-              <div className="absolute right-0 mt-2 w-36 bg-white dark:bg-gray-700 shadow-lg rounded-lg z-20 overflow-hidden border border-gray-200 dark:border-gray-600">
+              <div className="fixed w-36 bg-white dark:bg-gray-700 shadow-lg rounded-lg z-20 overflow-hidden border border-gray-200 dark:border-gray-600" style={{ top: menuPos.top, left: menuPos.left }}>
                 <button
                   onClick={handleEdit}
                   className="block w-full px-3 py-2 text-left text-sm text-gray-900 dark:text-white hover:bg-gray-100 dark:hover:bg-gray-600"

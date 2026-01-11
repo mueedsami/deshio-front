@@ -1,6 +1,8 @@
 // components/orders/OrdersTable.tsx
 
+import { useState } from 'react';
 import { Package, MoreVertical, Edit2, Truck } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import { Order } from '@/types/order';
 
 interface OrdersTableProps {
@@ -34,6 +36,7 @@ export default function OrdersTable({
   onToggleSelect,
   onToggleSelectAll,
 }: OrdersTableProps) {
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const allSelected = selectedOrders && filteredOrders.length > 0 && selectedOrders.size === filteredOrders.length;
   const someSelected = selectedOrders && selectedOrders.size > 0 && selectedOrders.size < filteredOrders.length;
 
@@ -147,17 +150,23 @@ export default function OrdersTable({
                         </button>
                         <div className="relative inline-block">
                           <button
-                            onClick={() => setActiveMenu(activeMenu === order.id ? null : order.id)}
+                            onClick={(e) => {
+                            e.stopPropagation();
+                            const next = activeMenu === order.id ? null : order.id;
+                            if (next !== null) {
+                              const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                              setMenuPosition(computeMenuPosition(rect, 192, 260, 8, 8));
+                            }
+                            setActiveMenu(next);
+                          }}
                             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
                           >
                             <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                           </button>
                           
-                          {activeMenu === order.id && (
-                            <div className={`absolute right-0 ${
-                              index >= filteredOrders.length - 3 ? 'bottom-full mb-2' : 'top-full mt-2'
-                            } bg-white dark:bg-gray-800 shadow-2xl rounded-lg border border-gray-200 dark:border-gray-700 py-1 w-48 z-[100]`}
-                            style={{ zIndex: 100 }}>
+                          {activeMenu === order.id && menuPosition && (
+                            <div className={`fixed bg-white dark:bg-gray-800 shadow-2xl rounded-lg border border-gray-200 dark:border-gray-700 py-1 w-48 z-[100]`}
+                            style={{ top: menuPosition?.top ?? 0, left: menuPosition?.left ?? 0, zIndex: 100 }}>
                               <button
                                 onClick={() => onViewDetails(order)}
                                 className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
@@ -265,7 +274,15 @@ export default function OrdersTable({
                       <Edit2 className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     </button>
                     <button
-                      onClick={() => setActiveMenu(activeMenu === order.id ? null : order.id)}
+                      onClick={(e) => {
+                            e.stopPropagation();
+                            const next = activeMenu === order.id ? null : order.id;
+                            if (next !== null) {
+                              const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                              setMenuPosition(computeMenuPosition(rect, 192, 260, 8, 8));
+                            }
+                            setActiveMenu(next);
+                          }}
                       className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
                     >
                       <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
@@ -288,7 +305,7 @@ export default function OrdersTable({
                   <p className="text-sm font-bold text-gray-900 dark:text-white">৳{(order.amounts?.total || order.subtotal).toLocaleString()}</p>
                 </div>
                 
-                {activeMenu === order.id && (
+                {activeMenu === order.id && menuPosition && (
                   <div className="mt-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden relative z-50">
                     <button
                       onClick={() => {

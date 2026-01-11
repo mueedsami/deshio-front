@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { X, Plus, DollarSign, ShoppingCart, MoreVertical, Eye, Receipt, Loader2, AlertCircle, Pencil, Trash2 } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import { vendorService, Vendor } from '@/services/vendorService';
@@ -88,6 +89,7 @@ export default function VendorPaymentPage() {
   const [showTransactions, setShowTransactions] = useState(false);
   const [selectedVendor, setSelectedVendor] = useState<Vendor | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState<number | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
 
   // Form states - Add Vendor
   const [vendorForm, setVendorForm] = useState({
@@ -786,19 +788,20 @@ export default function VendorPaymentPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setDropdownOpen(dropdownOpen === vendor.id ? null : vendor.id);
+                                const next = dropdownOpen === vendor.id ? null : vendor.id;
+                                if (next !== null) {
+                                  const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                  setDropdownPos(computeMenuPosition(rect, 192, 180, 6, 8));
+                                }
+                                setDropdownOpen(next);
                               }}
                               className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                             >
                               <MoreVertical className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                             </button>
 
-                            {dropdownOpen === vendor.id && (
-                              <div className="fixed mt-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50"
-                                   style={{
-                                     transform: 'translateX(-100%)',
-                                     marginLeft: '-12px'
-                                   }}>
+                            {dropdownOpen === vendor.id && dropdownPos && (
+                              <div className="fixed w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50" style={{ top: dropdownPos.top, left: dropdownPos.left }}>
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();

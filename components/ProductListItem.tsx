@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import { MoreVertical, Edit, Trash2, Eye, Plus } from 'lucide-react';
 
 const ERROR_IMG_SRC =
@@ -81,10 +82,8 @@ export default function ProductListItem({
   const handleMenuClick = () => {
     if (buttonRef.current) {
       const rect = buttonRef.current.getBoundingClientRect();
-      setDropdownPos({
-        top: rect.bottom + window.scrollY + 4,
-        left: rect.left + window.scrollX - 180
-      });
+      const { top, left } = computeMenuPosition(rect, 208, 220, 4, 8);
+      setDropdownPos({ top, left });
     }
     if (!showDropdown) {
       setIsDropdownMounted(true);

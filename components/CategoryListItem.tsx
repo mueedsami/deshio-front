@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { MoreVertical, Trash2, Trash, Edit, Plus, ChevronDown, ChevronRight } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Category } from '@/services/categoryService';
 
@@ -24,6 +25,7 @@ export default function CategoryListItem({
 }: CategoryListItemProps) {
   const [showSubcategories, setShowSubcategories] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
   // Check both children and all_children
@@ -77,14 +79,19 @@ export default function CategoryListItem({
 
         <div className="relative" ref={dropdownRef}>
           <button
-            onClick={() => setShowDropdown(!showDropdown)}
+            onClick={(e) => {
+              e.stopPropagation();
+              const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+              setDropdownPos(computeMenuPosition(rect, 192, 160, 4, 8));
+              setShowDropdown(!showDropdown);
+            }}
             className="h-8 w-8 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
           >
             <MoreVertical className="w-4 h-4" />
           </button>
 
-          {showDropdown && (
-            <div className="absolute right-0 mt-1 w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50">
+          {showDropdown && dropdownPos && (
+            <div className="fixed w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50" style={{ top: dropdownPos?.top ?? 0, left: dropdownPos?.left ?? 0 }}>
               <button
                 onClick={() => {
                   onEdit(category);

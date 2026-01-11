@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import {
   ShoppingBag,
   Search,
@@ -2649,15 +2650,7 @@ const derivePaymentStatus = (order: any) => {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   const rect = e.currentTarget.getBoundingClientRect();
-                                  const menuHeight = 360;
-                                  const spaceBelow = window.innerHeight - rect.bottom;
-                                  const spaceRight = window.innerWidth - rect.right;
-
-                                  let top = rect.bottom + 4;
-                                  let left = rect.right - 224;
-
-                                  if (spaceBelow < menuHeight) top = rect.top - menuHeight - 4;
-                                  if (spaceRight < 224) left = rect.left - 224 + rect.width;
+                                  const { top, left } = computeMenuPosition(rect, 224, 360, 4, 8);
 
                                   setMenuPosition({ top, left });
                                   setActiveMenu(activeMenu === order.id ? null : order.id);

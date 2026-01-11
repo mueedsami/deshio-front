@@ -1,6 +1,8 @@
 // components/orders/OrdersTable.tsx
 
+import { useState } from 'react';
 import { Package, MoreVertical, Edit2,Plane } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import { Order } from '@/types/order';
 
 interface OrdersTableProps {
@@ -32,6 +34,7 @@ export default function OrdersTable({
   onToggleSelect,
   onToggleSelectAll,
 }: OrdersTableProps) {
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   const allSelected = selectedOrders && filteredOrders.length > 0 && selectedOrders.size === filteredOrders.length;
   const someSelected = selectedOrders && selectedOrders.size > 0 && selectedOrders.size < filteredOrders.length;
 
@@ -136,13 +139,21 @@ export default function OrdersTable({
                         </button>
                         <div className="relative inline-block">
                           <button
-                            onClick={() => setActiveMenu(activeMenu === order.id ? null : order.id)}
+                            onClick={(e) => {
+                            e.stopPropagation();
+                            const next = activeMenu === order.id ? null : order.id;
+                            if (next !== null) {
+                              const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                              setMenuPosition(computeMenuPosition(rect, 192, 260, 8, 8));
+                            }
+                            setActiveMenu(next);
+                          }}
                             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
                           >
                             <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                           </button>
                           
-                          {activeMenu === order.id && (
+                          {activeMenu === order.id && menuPosition && (
                             <div className={`absolute right-0 ${
                               index >= filteredOrders.length - 2 ? 'bottom-full mb-1' : 'top-full mt-1'
                             } bg-white dark:bg-gray-800 shadow-xl rounded-lg border border-gray-200 dark:border-gray-700 py-1 w-48 z-50`}>
