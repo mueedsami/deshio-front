@@ -84,8 +84,14 @@ export const vendorService = {
     per_page?: number;
   }): Promise<Vendor[]> {
     try {
+      // Backend vendor listing is paginated (often defaults to 15). Since most UI screens
+      // expect "all vendors" for dropdowns / lists, we default to a high per_page unless
+      // the caller explicitly sets it.
       const response = await axiosInstance.get<ApiResponse<PaginatedResponse<Vendor>>>('/vendors', {
-        params
+        params: {
+          per_page: 1000,
+          ...(params || {})
+        }
       });
       
       const result = response.data;
