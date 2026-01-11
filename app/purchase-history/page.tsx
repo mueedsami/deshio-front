@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer } from 'lucide-react';
+import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import orderService, { type OrderFilters } from '@/services/orderService';
@@ -97,6 +98,7 @@ export default function PurchaseHistoryPage() {
   const [userRole, setUserRole] = useState<string>('');
   const [userStoreId, setUserStoreId] = useState<string>('');
   const [activeMenu, setActiveMenu] = useState<number | null>(null);
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
   
   // Modal states
   const [showReturnModal, setShowReturnModal] = useState(false);
@@ -787,15 +789,20 @@ export default function PurchaseHistoryPage() {
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setActiveMenu(activeMenu === order.id ? null : order.id);
+                                  const next = activeMenu === order.id ? null : order.id;
+                                  if (next !== null) {
+                                    const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                                    setMenuPosition(computeMenuPosition(rect, 192, 220, 8, 8));
+                                  }
+                                  setActiveMenu(next);
                                 }}
                                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
                               >
                                 <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                               </button>
                               
-                              {activeMenu === order.id && (
-                                <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 z-50">
+                              {activeMenu === order.id && menuPosition && (
+                                <div className="fixed w-48 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 z-50" style={{ top: menuPosition.top, left: menuPosition.left }}>
                                   <button
                                     type="button"
                                     onClick={(e) => {
