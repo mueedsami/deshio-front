@@ -308,6 +308,9 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [editableOrder, setEditableOrder] = useState<Order | null>(null);
 
+  // ✅ Image preview in Order Details (tap product image to zoom)
+  const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
+
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
@@ -2269,7 +2272,7 @@ const derivePaymentStatus = (order: any) => {
             {/* Stats */}
             <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-800">
               <div className="max-w-7xl mx-auto">
-                <div className="grid grid-cols-4 gap-2">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                     <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-medium">Total</p>
                     <p className="text-lg font-bold text-black dark:text-white leading-none mt-0.5">{orders.length}</p>
@@ -2341,8 +2344,8 @@ const derivePaymentStatus = (order: any) => {
                 )}
               </div>
 
-              <div className="flex items-center gap-2 mb-3">
-                <div className="relative flex-1">
+              <div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
+                <div className="relative flex-1 w-full">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <input
                     type="text"
@@ -2357,14 +2360,14 @@ const derivePaymentStatus = (order: any) => {
                   type="date"
                   value={dateFilter}
                   onChange={(e) => setDateFilter(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 />
 
                 {/* ✅ NEW: Order type filter */}
                 <select
                   value={orderTypeFilter}
                   onChange={(e) => setOrderTypeFilter(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
                   <option value="All Types">All Types</option>
                   {viewMode === 'online' ? (
@@ -2382,7 +2385,7 @@ const derivePaymentStatus = (order: any) => {
                 <select
                   value={orderStatusFilter}
                   onChange={(e) => setOrderStatusFilter(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
                   <option>All Order Status</option>
                   {orderStatusOptions.map((s) => (
@@ -2395,7 +2398,7 @@ const derivePaymentStatus = (order: any) => {
                 <select
                   value={paymentStatusFilter}
                   onChange={(e) => setPaymentStatusFilter(e.target.value)}
-                  className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
                 >
                   <option>All Payment Status</option>
                   {paymentStatusOptions.map((s) => (
@@ -2416,7 +2419,7 @@ const derivePaymentStatus = (order: any) => {
             <div className="max-w-7xl mx-auto px-4">
               {selectedOrders.size > 0 && (
                 <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 bg-black dark:bg-white rounded flex items-center justify-center">
                         <span className="text-white dark:text-black text-[10px] font-bold">{selectedOrders.size}</span>
@@ -2424,7 +2427,7 @@ const derivePaymentStatus = (order: any) => {
                       <p className="text-[10px] font-semibold text-black dark:text-white">{selectedOrders.size} selected</p>
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         onClick={handleBulkPrintReceipts}
                         disabled={isPrintingBulk}
@@ -2535,6 +2538,95 @@ const derivePaymentStatus = (order: any) => {
                 </div>
               ) : (
                 <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
+                  {/* 📱 Mobile-first cards */}
+                  <div className="md:hidden">
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                      <label className="flex items-center gap-2 text-xs font-semibold text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={filteredOrders.length > 0 && selectedOrders.size === filteredOrders.length}
+                          onChange={handleToggleSelectAll}
+                          className="h-4 w-4"
+                        />
+                        Select all
+                      </label>
+                      <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                        {filteredOrders.length} shown
+                      </span>
+                    </div>
+
+                    <div className="divide-y divide-gray-200 dark:divide-gray-800">
+                      {filteredOrders.map((order) => (
+                        <div key={order.id} className="p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedOrders.has(order.id)}
+                                onChange={() => handleToggleSelect(order.id)}
+                                className="h-4 w-4 mt-1"
+                              />
+
+                              <div className="min-w-0">
+                                <p className="text-sm font-bold text-black dark:text-white leading-tight">
+                                  {order.orderNumber}
+                                </p>
+                                <p className="text-[11px] text-gray-600 dark:text-gray-400 mt-0.5 truncate">
+                                  {order.customer.name} • {order.customer.phone}
+                                </p>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-500 mt-0.5">{order.date}</p>
+
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                  {getOrderTypeBadge(order.orderType)}
+                                  {order.isInstallment && (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                                      EMI
+                                    </span>
+                                  )}
+                                  {getOrderStatusBadge(order.status)}
+                                  {getPaymentStatusBadge(order.paymentStatus)}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="text-right flex-shrink-0">
+                              <p className="text-sm font-bold text-black dark:text-white">৳{order.amounts.total.toFixed(2)}</p>
+                              {order.amounts.due > 0 && (
+                                <p className="text-[11px] text-red-600 dark:text-red-400">Due: ৳{order.amounts.due.toFixed(2)}</p>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="mt-3 flex items-center justify-end gap-2">
+                            <button
+                              onClick={() => handleViewDetails(order)}
+                              className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-xs font-semibold text-black dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                              <Eye className="h-4 w-4" />
+                              View
+                            </button>
+
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const { top, left } = computeMenuPosition(rect, 224, 360, 4, 8);
+                                setMenuPosition({ top, left });
+                                setActiveMenu(activeMenu === order.id ? null : order.id);
+                              }}
+                              className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
+                              title="More Actions"
+                            >
+                              <MoreVertical className="h-4 w-4 text-gray-700 dark:text-gray-300" />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 🖥️ Desktop table */}
+                  <div className="hidden md:block overflow-x-auto">
                   <table className="w-full">
                     <thead className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
                       <tr>
@@ -2666,6 +2758,7 @@ const derivePaymentStatus = (order: any) => {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
               )}
             </div>
@@ -2932,6 +3025,41 @@ const derivePaymentStatus = (order: any) => {
         </div>
       )}
 
+      {/* 🖼️ Product image preview (from Order Details) */}
+      {imagePreview && (
+        <div
+          className="fixed inset-0 bg-black/70 flex items-center justify-center z-[70] p-4"
+          onClick={() => setImagePreview(null)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-200 dark:border-gray-800 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-black dark:text-white truncate">{imagePreview.name}</p>
+              <button
+                onClick={() => setImagePreview(null)}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+              </button>
+            </div>
+
+            <div className="p-3">
+              <img
+                src={imagePreview.url}
+                alt={imagePreview.name}
+                className="w-full max-h-[70vh] object-contain rounded-lg bg-white dark:bg-black"
+                onError={(e) => {
+                  e.currentTarget.src = '/placeholder-product.png';
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Order Details Modal */}
       {showDetailsModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -2956,6 +3084,7 @@ const derivePaymentStatus = (order: any) => {
                   setShowDetailsModal(false);
                   setSelectedOrder(null);
                   setSelectedBackendOrder(null);
+                  setImagePreview(null);
                 }}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
@@ -3110,7 +3239,8 @@ const derivePaymentStatus = (order: any) => {
                   <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Items</h3>
                   {selectedOrder.items && selectedOrder.items.length > 0 ? (
                     <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
-                      <table className="w-full">
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[520px]">
                         <thead className="bg-gray-50 dark:bg-gray-800">
                           <tr>
                             <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">
@@ -3132,14 +3262,24 @@ const derivePaymentStatus = (order: any) => {
                             <tr key={item.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-3">
-                                  <img
-                                    src={getItemThumbSrc(item)}
-                                    alt={item.name}
-                                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
-                                    onError={(e) => {
-                                      e.currentTarget.src = '/placeholder-product.png';
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const url = getItemThumbSrc(item);
+                                      if (url) setImagePreview({ url, name: item.name });
                                     }}
-                                  />
+                                    className="w-10 h-10 rounded-md overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0"
+                                    title="Tap to zoom"
+                                  >
+                                    <img
+                                      src={getItemThumbSrc(item)}
+                                      alt={item.name}
+                                      className="w-full h-full object-cover"
+                                      onError={(e) => {
+                                        e.currentTarget.src = '/placeholder-product.png';
+                                      }}
+                                    />
+                                  </button>
                                   <div>
                                     <p className="text-sm font-medium text-black dark:text-white">{item.name}</p>
                                     <p className="text-xs text-gray-500 dark:text-gray-500">SKU: {item.sku}</p>
@@ -3163,7 +3303,8 @@ const derivePaymentStatus = (order: any) => {
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                        </table>
+                      </div>
                     </div>
                   ) : (
                     <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-8 text-center">
