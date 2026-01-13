@@ -583,7 +583,7 @@ export default function AmountDetailsPage() {
                       <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Transport</span>
+                      <span className="text-gray-700 dark:text-gray-300">Shipping Cost</span>
                       <span className="text-gray-900 dark:text-white">৳{transport.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-base font-semibold mt-2">
@@ -605,7 +605,7 @@ export default function AmountDetailsPage() {
 
                   {/* Transport */}
                   <div className="mb-4">
-                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transport (৳)</label>
+                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Shipping Cost (৳)</label>
                     <input
                       value={transportCost}
                       onChange={(e) => setTransportCost(e.target.value)}
