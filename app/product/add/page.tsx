@@ -1398,8 +1398,10 @@ export default function AddEditProductPage({
 
             {activeTab === 'variations' && showVariationsTab && (
               <>
-                {isEditMode ? (
-                  isVariantsTableProduct ? (
+                {(() => {
+                  if (isEditMode) {
+                    if (isVariantsTableProduct) {
+                      return (
                     <div className="space-y-6">
                       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                         <div className="flex items-start justify-between gap-4">
@@ -1558,7 +1560,10 @@ export default function AddEditProductPage({
                         )}
                       </div>
                     </div>
-                  ) : (
+                      );
+                    }
+
+                    return (
                     <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                       <div className="flex items-start justify-between gap-4">
@@ -1780,8 +1785,11 @@ export default function AddEditProductPage({
                       )}
                     </div>
                   </div>
-                ) : (
-                  addVariationMode ? (
+                    );
+                  }
+
+                  if (addVariationMode) {
+                    return (
                   <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
@@ -1847,7 +1855,10 @@ export default function AddEditProductPage({
                       Add Variation
                     </button>
                   </div>
-                ) : (
+                    );
+                  }
+
+                  return (
                   <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Variant Matrix (New Format)</h2>
@@ -1904,7 +1915,8 @@ export default function AddEditProductPage({
                       </div>
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </>
             )}
 
