@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { Plus, Search, ChevronLeft, ChevronRight, Filter, Grid, List, RefreshCw } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -19,6 +19,10 @@ import {
 
 export default function ProductPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const isUpdatingUrlRef = useRef(false);
+
   
   // Read URL parameters
   const [selectMode, setSelectMode] = useState(false);
@@ -35,18 +39,65 @@ export default function ProductPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [selectedCategory, setSelectedCategory] = useState<string>('');
+  const [vendorsList, setVendorsList] = useState<Vendor[]>([]);
+  const [selectedVendor, setSelectedVendor] = useState<string>('');
+  const [minPrice, setMinPrice] = useState<string>('');
+  const [maxPrice, setMaxPrice] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const itemsPerPage = 10;
 
-  // Read URL parameters on mount
+  const updateQueryParams = useCallback(
+    (updates: Record<string, string | null | undefined>) => {
+      const params = new URLSearchParams(searchParams.toString());
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === '') params.delete(key);
+        else params.set(key, value);
+      });
+
+      const qs = params.toString();
+      isUpdatingUrlRef.current = true;
+      router.replace(qs ? `${pathname}?${qs}` : pathname);
+    },
+    [router, pathname, searchParams]
+  );
+
+  const goToPage = useCallback(
+    (page: number) => {
+      const safe = Number.isFinite(page) && page > 0 ? page : 1;
+      setCurrentPage(safe);
+      updateQueryParams({ page: String(safe) });
+    },
+    [updateQueryParams]
+
+
+  );
+
+  // Keep state in sync with URL params (supports refresh + back/forward)
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search);
-      setSelectMode(params.get('selectMode') === 'true');
-      setRedirectPath(params.get('redirect') || '');
+    // If we just updated the URL ourselves, don't overwrite state.
+    if (isUpdatingUrlRef.current) {
+      isUpdatingUrlRef.current = false;
+      return;
     }
-  }, []);
+
+    const q = searchParams.get('q') ?? '';
+    const category = searchParams.get('category') ?? '';
+    const vendor = searchParams.get('vendor') ?? '';
+    const minP = searchParams.get('minPrice') ?? '';
+    const maxP = searchParams.get('maxPrice') ?? '';
+    const pageRaw = Number(searchParams.get('page') ?? '1');
+
+    setSearchQuery(q);
+    setSelectedCategory(category);
+    setSelectedVendor(vendor);
+    setMinPrice(minP);
+    setMaxPrice(maxP);
+    setCurrentPage(Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1);
+
+    setSelectMode(searchParams.get('selectMode') === 'true');
+    setRedirectPath(searchParams.get('redirect') || '');
+  }, [searchParams]);
 
   useEffect(() => {
     fetchData();
@@ -70,12 +121,19 @@ export default function ProductPage() {
         if (v && typeof v.id === 'number') vmap[v.id] = v.name;
       });
       setVendorsById(vmap);
+      setVendorsList(
+        vendorsArr
+          .filter((v) => v && v.is_active)
+          .slice()
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+      );
     } catch (err) {
       console.error('Error fetching data:', err);
       setToast({ message: 'Failed to load products', type: 'error' });
       setProducts([]);
       setCategories([]);
       setVendorsById({});
+      setVendorsList([]);
       setCatalogMetaById({});
     } finally {
       setIsLoading(false);
@@ -303,15 +361,18 @@ export default function ProductPage() {
     return Array.from(groups.values());
   }, [products, categories, vendorsById]);
 
-  // Enhanced filtering with category support
-  const filteredGroups = useMemo(() => {
+  // Enhanced filtering with category + vendor + search support (price is handled separately)
+  const baseFilteredGroups = useMemo(() => {
     let filtered = productGroups;
 
     // Category filter
     if (selectedCategory) {
-      filtered = filtered.filter(group => 
-        String(group.category_id) === selectedCategory
-      );
+      filtered = filtered.filter((group) => String(group.category_id) === selectedCategory);
+    }
+
+    // Vendor filter
+    if (selectedVendor) {
+      filtered = filtered.filter((group) => String(group.vendorId ?? '') === selectedVendor);
     }
 
     // Search filter
@@ -321,17 +382,103 @@ export default function ProductPage() {
         const nameMatch = group.baseName.toLowerCase().includes(q);
         const skuMatch = group.sku.toLowerCase().includes(q);
         const categoryMatch = group.categoryPath.toLowerCase().includes(q);
-        const colorMatch = group.variants.some(v => v.color?.toLowerCase().includes(q));
-        const sizeMatch = group.variants.some(v => v.size?.toLowerCase().includes(q));
-        
-        return nameMatch || skuMatch || categoryMatch || colorMatch || sizeMatch;
+        const vendorMatch = (group.vendorName || '').toLowerCase().includes(q);
+        const colorMatch = group.variants.some((v) => v.color?.toLowerCase().includes(q));
+        const sizeMatch = group.variants.some((v) => v.size?.toLowerCase().includes(q));
+
+        return nameMatch || skuMatch || categoryMatch || vendorMatch || colorMatch || sizeMatch;
       });
     }
 
     return filtered;
-  }, [productGroups, searchQuery, selectedCategory]);
+  }, [productGroups, searchQuery, selectedCategory, selectedVendor]);
+
+  const priceFilterActive = Boolean(minPrice || maxPrice);
+
+  // If price filter is active, fetch catalog meta for all candidate items so filtering is accurate
+  useEffect(() => {
+    if (!priceFilterActive) return;
+
+    const ids = baseFilteredGroups
+      .map((g) => g?.variants?.[0]?.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    const missing = ids.filter((id) => !catalogMetaById[id]);
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      const chunkSize = 4;
+
+      for (let i = 0; i < missing.length; i += chunkSize) {
+        if (cancelled) return;
+        const chunk = missing.slice(i, i + chunkSize);
+
+        const results = await Promise.all(
+          chunk.map(async (id) => {
+            try {
+              const detail: any = await catalogService.getProduct(id);
+              return {
+                id,
+                selling_price: typeof detail?.selling_price === 'number' ? detail.selling_price : null,
+                in_stock: Boolean(detail?.in_stock),
+                stock_quantity: typeof detail?.stock_quantity === 'number' ? detail.stock_quantity : 0,
+              };
+            } catch (e) {
+              return null;
+            }
+          })
+        );
+
+        if (cancelled) return;
+
+        setCatalogMetaById((prev) => {
+          const next = { ...prev };
+          results.forEach((r) => {
+            if (r) next[r.id] = r;
+          });
+          return next;
+        });
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [priceFilterActive, baseFilteredGroups, catalogMetaById]);
+
+  // Apply price filter using cached catalog meta
+  const filteredGroups = useMemo(() => {
+    if (!priceFilterActive) return baseFilteredGroups;
+
+    const min = minPrice ? Number(minPrice) : null;
+    const max = maxPrice ? Number(maxPrice) : null;
+
+    return baseFilteredGroups.filter((group) => {
+      const id = group?.variants?.[0]?.id;
+      if (typeof id !== 'number') return false;
+
+      const meta = catalogMetaById[id];
+      if (!meta || typeof meta.selling_price !== 'number') return false;
+
+      const p = meta.selling_price;
+      if (min !== null && Number.isFinite(min) && p < min) return false;
+      if (max !== null && Number.isFinite(max) && p > max) return false;
+      return true;
+    });
+  }, [baseFilteredGroups, priceFilterActive, minPrice, maxPrice, catalogMetaById]);
 
   const totalPages = Math.max(1, Math.ceil(filteredGroups.length / itemsPerPage));
+
+  // Clamp page if filters reduce results
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      goToPage(totalPages);
+    }
+  }, [currentPage, totalPages, goToPage]);
   const paginatedGroups = filteredGroups.slice(
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
@@ -489,10 +636,14 @@ export default function ProductPage() {
   const clearFilters = () => {
     setSearchQuery('');
     setSelectedCategory('');
+    setSelectedVendor('');
+    setMinPrice('');
+    setMaxPrice('');
     setCurrentPage(1);
+    updateQueryParams({ q: null, category: null, vendor: null, minPrice: null, maxPrice: null, page: '1' });
   };
 
-  const hasActiveFilters = searchQuery || selectedCategory;
+  const hasActiveFilters = Boolean(searchQuery || selectedCategory || selectedVendor || minPrice || maxPrice);
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -601,11 +752,13 @@ export default function ProductPage() {
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                     <input
                       type="text"
-                      placeholder="Search by name, SKU, category, color, or size..."
+                      placeholder="Search by name, SKU, category, vendor, color, or size..."
                       value={searchQuery}
                       onChange={(e) => {
-                        setSearchQuery(e.target.value);
+                        const val = e.target.value;
+                        setSearchQuery(val);
                         setCurrentPage(1);
+                        updateQueryParams({ q: val || null, page: '1' });
                       }}
                       className="w-full pl-12 pr-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 text-sm shadow-sm"
                     />
@@ -624,7 +777,7 @@ export default function ProductPage() {
                     <span className="font-medium">Filters</span>
                     {hasActiveFilters && (
                       <span className="px-2 py-0.5 text-xs bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-full">
-                        {(searchQuery ? 1 : 0) + (selectedCategory ? 1 : 0)}
+                        {(searchQuery ? 1 : 0) + (selectedCategory ? 1 : 0) + (selectedVendor ? 1 : 0) + (minPrice || maxPrice ? 1 : 0)}
                       </span>
                     )}
                   </button>
@@ -653,8 +806,10 @@ export default function ProductPage() {
                         <select
                           value={selectedCategory}
                           onChange={(e) => {
-                            setSelectedCategory(e.target.value);
+                            const val = e.target.value;
+                            setSelectedCategory(val);
                             setCurrentPage(1);
+                            updateQueryParams({ category: val || null, page: '1' });
                           }}
                           className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
                         >
@@ -665,6 +820,70 @@ export default function ProductPage() {
                             </option>
                           ))}
                         </select>
+                      </div>
+
+                      {/* Vendor Filter */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Vendor
+                        </label>
+                        <select
+                          value={selectedVendor}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setSelectedVendor(val);
+                            setCurrentPage(1);
+                            updateQueryParams({ vendor: val || null, page: '1' });
+                          }}
+                          className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                        >
+                          <option value="">All Vendors</option>
+                          {vendorsList.map((v) => (
+                            <option key={v.id} value={String(v.id)}>
+                              {v.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Price Filter */}
+                      <div className="md:col-span-2">
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Selling Price (৳)
+                        </label>
+                        <div className="flex gap-3">
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            placeholder="Min"
+                            value={minPrice}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setMinPrice(val);
+                              setCurrentPage(1);
+                              updateQueryParams({ minPrice: val || null, page: '1' });
+                            }}
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                          />
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            placeholder="Max"
+                            value={maxPrice}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setMaxPrice(val);
+                              setCurrentPage(1);
+                              updateQueryParams({ maxPrice: val || null, page: '1' });
+                            }}
+                            className="w-full px-3 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                          />
+                        </div>
+                        {(minPrice || maxPrice) && (
+                          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                            Showing only items whose selling price is within the selected range.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -739,7 +958,7 @@ export default function ProductPage() {
                   </p>
                   <div className="flex gap-2">
                     <button
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      onClick={() => goToPage(Math.max(1, currentPage - 1))}
                       disabled={currentPage === 1}
                       className="h-10 w-10 flex items-center justify-center border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-gray-900 dark:text-white shadow-sm"
                     >
@@ -759,7 +978,7 @@ export default function ProductPage() {
                       return (
                         <button
                           key={page}
-                          onClick={() => setCurrentPage(page)}
+                          onClick={() => goToPage(page)}
                           className={`h-10 w-10 flex items-center justify-center rounded-lg transition-colors font-medium shadow-sm ${
                             currentPage === page
                               ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900'
@@ -771,7 +990,7 @@ export default function ProductPage() {
                       );
                     })}
                     <button
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      onClick={() => goToPage(Math.min(totalPages, currentPage + 1))}
                       disabled={currentPage === totalPages}
                       className="h-10 w-10 flex items-center justify-center border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-gray-900 dark:text-white shadow-sm"
                     >
