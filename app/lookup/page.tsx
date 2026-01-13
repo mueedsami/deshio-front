@@ -10,6 +10,7 @@ import orderService from '@/services/orderService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
 import lookupService from '@/services/lookupService';
+import purchaseOrderService from '@/services/purchase-order.service';
 import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 
@@ -158,6 +159,11 @@ export default function LookupPage() {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [barcodeData, setBarcodeData] = useState<BarcodeHistoryData | null>(null);
+
+  // Purchase info (best effort): which PO this barcode/batch came from
+  const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId: number; poNumber?: string; vendorName?: string } | null>(null);
+  const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
+
 
   // Cache to resolve order/customer for barcode history + current_location
   const [orderMetaCache, setOrderMetaCache] = useState<
@@ -1086,6 +1092,71 @@ export default function LookupPage() {
     return bd;
   };
 
+  
+  const extractPurchaseOrderIdFromBarcode = (data: any): number | null => {
+    const tryParse = (v: any) => {
+      if (typeof v === 'number' && Number.isFinite(v)) return v;
+      if (typeof v === 'string' && v.trim() && !Number.isNaN(Number(v))) return Number(v);
+      return null;
+    };
+
+    // Most likely locations: batch fields
+    const batch = data?.current_location?.batch ?? data?.current_location?.productBatch ?? data?.batch ?? null;
+    const direct =
+      tryParse(batch?.purchase_order_id) ||
+      tryParse(batch?.purchaseOrderId) ||
+      tryParse(batch?.po_id) ||
+      tryParse(batch?.poId) ||
+      tryParse(batch?.purchase_order?.id) ||
+      tryParse(batch?.purchaseOrder?.id);
+
+    if (direct) return direct;
+
+    // Sometimes stored in history metadata
+    const hist: any[] = Array.isArray(data?.history) ? data.history : [];
+    for (const h of hist) {
+      const m =
+        tryParse(h?.purchase_order_id) ||
+        tryParse(h?.purchaseOrderId) ||
+        tryParse(h?.po_id) ||
+        tryParse(h?.poId) ||
+        tryParse(h?.metadata?.purchase_order_id) ||
+        tryParse(h?.metadata?.purchaseOrderId) ||
+        tryParse(h?.meta?.purchase_order_id) ||
+        tryParse(h?.meta?.purchaseOrderId);
+      if (m) return m;
+    }
+
+    // fallback: current_location metadata
+    const m2 =
+      tryParse(data?.current_location?.purchase_order_id) ||
+      tryParse(data?.current_location?.purchaseOrderId) ||
+      tryParse(data?.current_location?.metadata?.purchase_order_id) ||
+      tryParse(data?.current_location?.meta?.purchase_order_id);
+    return m2;
+  };
+
+  const resolveBarcodePurchaseInfo = async (data: any) => {
+    const poId = extractPurchaseOrderIdFromBarcode(data);
+    if (!poId) {
+      setBarcodePurchaseInfo(null);
+      return;
+    }
+
+    setBarcodePurchaseLoading(true);
+    try {
+      const res = await purchaseOrderService.getById(poId);
+      const po: any = res?.data || res; // api wrapper differences
+      const poNumber = po?.po_number || po?.poNumber || po?.order_number || po?.orderNumber;
+      const vendorName = po?.vendor?.name || po?.vendor_name || po?.vendorName;
+      setBarcodePurchaseInfo({ poId, poNumber, vendorName });
+    } catch {
+      setBarcodePurchaseInfo({ poId });
+    } finally {
+      setBarcodePurchaseLoading(false);
+    }
+  };
+
   const handleSearchBarcode = async () => {
     const code = barcodeInput.trim();
     if (!code) {
@@ -1096,6 +1167,7 @@ export default function LookupPage() {
     setBarcodeLoading(true);
     setError('');
     setBarcodeData(null);
+    setBarcodePurchaseInfo(null);
 
     try {
       const res = await barcodeTrackingService.getBarcodeHistory(code);
@@ -1105,6 +1177,7 @@ export default function LookupPage() {
       }
       const enriched = await enrichBarcodeHistoryWithBatchPrices(res.data as any);
       setBarcodeData(enriched as any);
+      await resolveBarcodePurchaseInfo(enriched as any);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch barcode history');
     } finally {
@@ -1296,6 +1369,7 @@ export default function LookupPage() {
     }
     if (tab === 'barcode') {
       setBarcodeData(null);
+    setBarcodePurchaseInfo(null);
     }
     if (tab === 'batch') {
       setBatchData(null);
@@ -1750,6 +1824,7 @@ export default function LookupPage() {
                                                   setActiveTab('barcode');
                                                   setBarcodeInput(code);
                                                   setBarcodeData(null);
+    setBarcodePurchaseInfo(null);
                                                   setError('');
                                                   setTimeout(() => handleSearchBarcode(), 0);
                                                 }}
@@ -1889,6 +1964,27 @@ export default function LookupPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* PURCHASE ORDER / VENDOR (NEW) */}
+                        <div className="mt-3 border border-gray-200 dark:border-gray-800 rounded p-2 bg-white dark:bg-gray-900/20">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Purchase</p>
+                            {barcodePurchaseLoading && (
+                              <span className="text-[9px] text-gray-500 dark:text-gray-400">loading…</span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-black dark:text-white mt-1">
+                            Purchase Order:{' '}
+                            <span className="font-semibold">
+                              {barcodePurchaseInfo?.poNumber ||
+                                (barcodePurchaseInfo?.poId ? `#${barcodePurchaseInfo.poId}` : '—')}
+                            </span>
+                          </p>
+                          <p className="text-[10px] text-black dark:text-white">
+                            Vendor:{' '}
+                            <span className="font-semibold">{barcodePurchaseInfo?.vendorName || '—'}</span>
+                          </p>
+                        </div>
 
                         {/* SOLD / ORDER INFO (works even if movement history is empty, if backend sends meta) */}
                         {barcodeSaleInfo && (

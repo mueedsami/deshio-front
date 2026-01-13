@@ -1199,17 +1199,22 @@ export default function SocialCommercePage() {
                                   }
                                 />
                                 {lastOrderInfo ? (
-                                  <div className="mt-1">
-                                    <p className="font-semibold">Last Order Summary:</p>
-                                    <p>
+                                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700/40 dark:bg-amber-900/15">
+                                    <p className="text-sm font-extrabold tracking-wide text-amber-900 dark:text-amber-100">
+                                      LAST ORDER
+                                    </p>
+                                    <p className="mt-1 text-[11px] text-gray-700 dark:text-gray-200">
                                       Date:{' '}
-                                      <span className="font-medium">
+                                      <span className="font-bold text-black dark:text-white">
                                         {lastOrderInfo.date ? new Date(lastOrderInfo.date).toLocaleString() : 'N/A'}
                                       </span>
                                     </p>
                                     {lastOrderInfo.summary_text && (
-                                      <p>
-                                        Items: <span className="font-medium">{lastOrderInfo.summary_text}</span>
+                                      <p className="mt-1 text-[11px] text-gray-700 dark:text-gray-200">
+                                        Items:{' '}
+                                        <span className="font-bold text-black dark:text-white">
+                                          {lastOrderInfo.summary_text}
+                                        </span>
                                       </p>
                                     )}
                                   </div>
