@@ -7,14 +7,11 @@ export interface Product {
   sku: string;
   description?: string;
   category_id: number;
-  vendor_id: number | null;
-  brand?: string | null;
+  vendor_id: number;
   is_archived: boolean;
   custom_fields?: CustomField[];
   images?: ProductImage[];
   variants?: any[]; // Product variants
-  variants_count?: number;
-  total_stock?: number;
   category?: {
     id: number;
     title: string;
@@ -60,8 +57,7 @@ export interface CreateProductData {
   sku: string;
   description?: string;
   category_id: number;
-  vendor_id?: number | null;
-  brand?: string | null;
+  vendor_id: number;
   custom_fields?: {
     field_id: number;
     value: any;
@@ -82,14 +78,11 @@ function transformProduct(product: any): Product {
     sku: product.sku,
     description: product.description,
     category_id: product.category_id,
-    vendor_id: product.vendor_id ?? null,
-    brand: product.brand ?? null,
+    vendor_id: product.vendor_id,
     is_archived: product.is_archived,
     custom_fields: product.custom_fields,
     images: product.images,
     variants: product.variants,
-    variants_count: product.variants_count ?? (Array.isArray(product.variants) ? product.variants.length : undefined),
-    total_stock: product.total_stock,
     category: product.category,
     vendor: product.vendor,
     created_at: product.created_at,

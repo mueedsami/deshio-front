@@ -13,7 +13,6 @@ import ImageGalleryManager from '@/components/product/ImageGalleryManager';
 import CategoryTreeSelector from '@/components/product/CategoryTreeSelector';
 import { productService, Field, Product } from '@/services/productService';
 import productImageService from '@/services/productImageService';
-import productVariantService from '@/services/productVariantService';
 import categoryService, { Category, CategoryTree } from '@/services/categoryService';
 import { vendorService, Vendor } from '@/services/vendorService';
 import {
@@ -128,19 +127,8 @@ export default function AddEditProductPage({
   const [availableFields, setAvailableFields] = useState<Field[]>([]);
   const [selectedFields, setSelectedFields] = useState<FieldValue[]>([]);
   const [variations, setVariations] = useState<VariationData[]>([]);
-  // New-format variant matrix builder (attributes can be any field)
-  const [variantAttributes, setVariantAttributes] = useState<Array<{ id: string; name: string; values: string }>>([
-    { id: 'attr-1', name: 'Color', values: '' },
-    { id: 'attr-2', name: 'Size', values: '' },
-  ]);
-  const [basePriceAdjustment, setBasePriceAdjustment] = useState<string>('');
-  const [isVariantsTableProduct, setIsVariantsTableProduct] = useState<boolean>(false);
   const [categories, setCategories] = useState<CategoryTree[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
-
-  // Variants list for new-format products (edit mode)
-  const [productVariants, setProductVariants] = useState<any[]>([]);
-  const [productVariantsLoading, setProductVariantsLoading] = useState<boolean>(false);
 
   useEffect(() => {
     fetchInitialData();
@@ -247,28 +235,8 @@ export default function AddEditProductPage({
         description: product.description || '',
       });
 
-      setSelectedVendorId(product.vendor_id != null ? String(product.vendor_id) : '');
+      setSelectedVendorId(String(product.vendor_id));
       setCategorySelection({ level0: String(product.category_id) });
-
-      // Detect new-format products (variants stored in product_variants table)
-      const vCount = (product as any)?.variants_count;
-      const hasVariantsTable = typeof vCount === 'number' && vCount > 0;
-      setIsVariantsTableProduct(hasVariantsTable);
-      if (hasVariantsTable) {
-        setHasVariations(true);
-        // Pre-load variants list for edit UI
-        try {
-          setProductVariantsLoading(true);
-          const list = await productVariantService.getProductVariants(product.id);
-          setProductVariants(Array.isArray(list) ? list : []);
-        } catch (e) {
-          setProductVariants([]);
-        } finally {
-          setProductVariantsLoading(false);
-        }
-      } else {
-        setIsVariantsTableProduct(false);
-      }
 
       // ImageGalleryManager will fetch and display images automatically when productId is provided
       // No need to manually fetch images here
@@ -660,21 +628,11 @@ export default function AddEditProductPage({
     //   return false;
     // }
 
-    // Legacy variations (SKU-grouped products)
-    if (!isEditMode && hasVariations && addVariationMode && variations.length > 0) {
+    if (!isEditMode && hasVariations && variations.length > 0) {
       const hasValidVariation = variations.some(v => v.color.trim());
       
       if (!hasValidVariation) {
         setToast({ message: 'Please add at least one color for variations', type: 'error' });
-        return false;
-      }
-    }
-
-    // New-format variant matrix (product_variants)
-    if (!isEditMode && hasVariations && !addVariationMode) {
-      const ok = variantAttributes.some((r) => String(r.name || '').trim() && String(r.values || '').trim());
-      if (!ok) {
-        setToast({ message: 'Please add at least one variant attribute with values', type: 'error' });
         return false;
       }
     }
@@ -792,13 +750,12 @@ export default function AddEditProductPage({
       }));
 
       if (isEditMode) {
-        const vendorIdNum = selectedVendorId ? parseInt(selectedVendorId) : null;
         await productService.update(parseInt(productId!), {
           name: formData.name,
           sku: formData.sku,
           description: formData.description,
           category_id: finalCategoryId,
-          vendor_id: vendorIdNum,
+          vendor_id: parseInt(selectedVendorId),
           custom_fields: customFields,
         });
 
@@ -811,84 +768,14 @@ export default function AddEditProductPage({
           }
         }, 1500);
       } else {
-        const vendorIdNum = selectedVendorId ? parseInt(selectedVendorId) : null;
         const baseData = {
           name: formData.name,
           sku: formData.sku,
           description: formData.description,
           category_id: finalCategoryId,
-          vendor_id: vendorIdNum,
+          vendor_id: parseInt(selectedVendorId),
         };
 
-        // Build attributes object for new-format variant matrix generation
-        const buildVariantAttributes = (): Record<string, string[]> => {
-          const attrs: Record<string, string[]> = {};
-          variantAttributes.forEach((row) => {
-            const name = String(row.name || '').trim();
-            if (!name) return;
-            const raw = String(row.values || '');
-            const values = raw
-              .split(/[\n,]/g)
-              .map((v) => v.trim())
-              .filter(Boolean);
-            const unique = Array.from(new Set(values));
-            if (unique.length > 0) attrs[name] = unique;
-          });
-          return attrs;
-        };
-
-        // ✅ NEW FORMAT (default): create one parent product, then generate variants matrix.
-        if (hasVariations && !addVariationMode) {
-          const attrs = buildVariantAttributes();
-          if (Object.keys(attrs).length === 0) {
-            setToast({ message: 'Please provide at least one variant attribute with values (comma or newline separated).', type: 'error' });
-            setLoading(false);
-            return;
-          }
-
-          // 1) Create base product
-          const created = await productService.create({
-            ...baseData,
-            custom_fields: customFields,
-          });
-
-          // 2) Upload base product images (if any)
-          if (productImages && productImages.length > 0 && created.id) {
-            for (let i = 0; i < productImages.length; i++) {
-              const imageItem = productImages[i];
-              if (imageItem?.file && !imageItem?.uploaded) {
-                try {
-                  await productImageService.uploadImage(created.id, imageItem.file, {
-                    alt_text: imageItem.alt_text || '',
-                    is_primary: imageItem.is_primary || i === 0,
-                    sort_order: imageItem.sort_order || i,
-                  });
-                } catch (e) {
-                  console.warn('Image upload warning:', e);
-                }
-              }
-            }
-          }
-
-          // 3) Generate variant matrix
-          const adj = basePriceAdjustment ? Number(basePriceAdjustment) : undefined;
-          await productVariantService.generateMatrix(created.id, {
-            attributes: attrs,
-            base_price_adjustment: Number.isFinite(adj as any) ? adj : undefined,
-          });
-
-          setToast({ message: 'Product created with variants successfully!', type: 'success' });
-          setTimeout(() => {
-            if (onSuccess) {
-              onSuccess();
-            } else {
-              router.push('/product/list');
-            }
-          }, 1500);
-          return;
-        }
-
-        // ✅ LEGACY FORMAT (temporary): create separate Product rows as variations (SKU-grouped)
         if (hasVariations && variations.length > 0) {
           const colorField = availableFields.find(f => f.title === 'Color');
           const sizeField = availableFields.find(f => f.title === 'Size');
@@ -1398,173 +1285,8 @@ export default function AddEditProductPage({
 
             {activeTab === 'variations' && showVariationsTab && (
               <>
-                {(() => {
-                  if (isEditMode) {
-                    if (isVariantsTableProduct) {
-                      return (
-                    <div className="space-y-6">
-                      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                              Variants (New Format)
-                            </h2>
-                            <p className="text-sm text-gray-600 dark:text-gray-400">
-                              This product uses the new variants table. Use the matrix generator to create combinations. Legacy SKU-grouped variations are still supported for older products.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                setLoading(true);
-                                const attrs = (() => {
-                                  const out: Record<string, string[]> = {};
-                                  variantAttributes.forEach((row) => {
-                                    const name = String(row.name || '').trim();
-                                    if (!name) return;
-                                    const values = String(row.values || '')
-                                      .split(/[\n,]/g)
-                                      .map((v) => v.trim())
-                                      .filter(Boolean);
-                                    const unique = Array.from(new Set(values));
-                                    if (unique.length) out[name] = unique;
-                                  });
-                                  return out;
-                                })();
-
-                                if (!productId) return;
-                                if (Object.keys(attrs).length === 0) {
-                                  setToast({ message: 'Please add at least one attribute with values to generate variants.', type: 'error' });
-                                  return;
-                                }
-
-                                const adj = basePriceAdjustment ? Number(basePriceAdjustment) : undefined;
-                                await productVariantService.generateMatrix(parseInt(productId), {
-                                  attributes: attrs,
-                                  base_price_adjustment: Number.isFinite(adj as any) ? adj : undefined,
-                                });
-                                const list = await productVariantService.getProductVariants(parseInt(productId));
-                                setProductVariants(Array.isArray(list) ? list : []);
-                                setToast({ message: 'Variants generated successfully!', type: 'success' });
-                              } catch (e: any) {
-                                setToast({ message: e?.message || 'Failed to generate variants', type: 'error' });
-                              } finally {
-                                setLoading(false);
-                              }
-                            }}
-                            className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Generate Matrix
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                        <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">Variant Attributes</h3>
-                        <div className="space-y-3">
-                          {variantAttributes.map((row) => (
-                            <div key={row.id} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                              <input
-                                value={row.name}
-                                onChange={(e) => setVariantAttributes((prev) => prev.map((r) => (r.id === row.id ? { ...r, name: e.target.value } : r)))}
-                                placeholder="Attribute name (e.g., Color, Material, Fit)"
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                              />
-                              <input
-                                value={row.values}
-                                onChange={(e) => setVariantAttributes((prev) => prev.map((r) => (r.id === row.id ? { ...r, values: e.target.value } : r)))}
-                                placeholder="Values (comma or newline separated)"
-                                className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white md:col-span-2"
-                              />
-                            </div>
-                          ))}
-                        </div>
-                        <div className="flex items-center justify-between mt-4">
-                          <button
-                            type="button"
-                            onClick={() => setVariantAttributes((prev) => ([...prev, { id: `attr-${Date.now()}`, name: '', values: '' }]))}
-                            className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
-                          >
-                            + Add Attribute
-                          </button>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-gray-600 dark:text-gray-400">Base price adjustment</span>
-                            <input
-                              value={basePriceAdjustment}
-                              onChange={(e) => setBasePriceAdjustment(e.target.value)}
-                              type="number"
-                              className="w-28 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                        <div className="flex items-center justify-between mb-4">
-                          <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
-                            Existing Variants ({Array.isArray(productVariants) ? productVariants.length : 0})
-                          </h3>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (!productId) return;
-                              try {
-                                setProductVariantsLoading(true);
-                                const list = await productVariantService.getProductVariants(parseInt(productId));
-                                setProductVariants(Array.isArray(list) ? list : []);
-                              } finally {
-                                setProductVariantsLoading(false);
-                              }
-                            }}
-                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
-                          >
-                            Refresh
-                          </button>
-                        </div>
-
-                        {productVariantsLoading ? (
-                          <div className="flex items-center justify-center py-10">
-                            <div className="w-10 h-10 border-4 border-gray-200 dark:border-gray-700 border-t-gray-900 dark:border-t-white rounded-full animate-spin"></div>
-                          </div>
-                        ) : productVariants.length === 0 ? (
-                          <div className="text-center py-10">
-                            <p className="text-gray-600 dark:text-gray-400">No variants yet. Generate a matrix to create them.</p>
-                          </div>
-                        ) : (
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full text-sm">
-                              <thead>
-                                <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                                  <th className="py-3 pr-4">SKU</th>
-                                  <th className="py-3 pr-4">Attributes</th>
-                                  <th className="py-3 pr-4">Barcode</th>
-                                  <th className="py-3 pr-4">Stock</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {productVariants.map((v: any) => (
-                                  <tr key={v.id} className="border-b border-gray-100 dark:border-gray-700/60">
-                                    <td className="py-3 pr-4 font-mono text-gray-900 dark:text-white">{v.sku}</td>
-                                    <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
-                                      {productVariantService.formatAttributes(v.attributes || {}) || '-'}
-                                    </td>
-                                    <td className="py-3 pr-4 text-gray-700 dark:text-gray-300">{v.barcode || '-'}</td>
-                                    <td className="py-3 pr-4 text-gray-700 dark:text-gray-300">{v.stock_quantity ?? '-'}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                      );
-                    }
-
-                    return (
-                    <div className="space-y-6">
+                {isEditMode ? (
+                  <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                       <div className="flex items-start justify-between gap-4">
                         <div>
@@ -1785,11 +1507,7 @@ export default function AddEditProductPage({
                       )}
                     </div>
                   </div>
-                    );
-                  }
-
-                  if (addVariationMode) {
-                    return (
+                ) : (
                   <div className="space-y-6">
                     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
                       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
@@ -1855,68 +1573,7 @@ export default function AddEditProductPage({
                       Add Variation
                     </button>
                   </div>
-                    );
-                  }
-
-                  return (
-                  <div className="space-y-6">
-                    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 shadow-sm">
-                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">Variant Matrix (New Format)</h2>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                        Define any attributes (e.g., Color, Size, Material, Fit) and generate combinations automatically. This will create one parent product and store variations in the <span className="font-mono">product_variants</span> table.
-                      </p>
-
-                      <div className="space-y-3">
-                        {variantAttributes.map((row) => (
-                          <div key={row.id} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            <input
-                              value={row.name}
-                              onChange={(e) => setVariantAttributes((prev) => prev.map((r) => (r.id === row.id ? { ...r, name: e.target.value } : r)))}
-                              placeholder="Attribute name (e.g., Color, Material)"
-                              className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                            />
-                            <input
-                              value={row.values}
-                              onChange={(e) => setVariantAttributes((prev) => prev.map((r) => (r.id === row.id ? { ...r, values: e.target.value } : r)))}
-                              placeholder="Values (comma or newline separated)"
-                              className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white md:col-span-2"
-                            />
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-4">
-                        <button
-                          type="button"
-                          onClick={() => setVariantAttributes((prev) => ([...prev, { id: `attr-${Date.now()}`, name: '', values: '' }]))}
-                          className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
-                        >
-                          + Add Attribute
-                        </button>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-600 dark:text-gray-400">Base price adjustment</span>
-                          <input
-                            value={basePriceAdjustment}
-                            onChange={(e) => setBasePriceAdjustment(e.target.value)}
-                            type="number"
-                            className="w-28 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="mt-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
-                        <h4 className="font-medium text-blue-900 dark:text-blue-300 mb-2 text-sm">Tips</h4>
-                        <ul className="text-sm text-blue-800 dark:text-blue-400 space-y-1">
-                          <li>• Values can be separated by commas or new lines</li>
-                          <li>• Example: Color = Red, Blue; Size = S, M, L</li>
-                          <li>• You can create one-size items by leaving Size empty and using only one attribute</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                  );
-                })()}
+                )}
               </>
             )}
 

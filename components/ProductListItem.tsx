@@ -5,7 +5,6 @@ import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import { MoreVertical, Edit, Trash2, Eye, Plus } from 'lucide-react';
 import type { ProductGroup, ProductVariant } from '@/types/product';
-import productVariantService, { ProductVariant as ApiProductVariant } from '@/services/productVariantService';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4=';
@@ -36,13 +35,6 @@ export default function ProductListItem({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
 
-  // New-format (variants table) panel state
-  const isVariantsTable = productGroup.variationModel === 'variants_table' && !!productGroup.parentProductId;
-  const parentProductId = productGroup.parentProductId;
-  const [apiVariants, setApiVariants] = useState<ApiProductVariant[]>([]);
-  const [apiVariantsLoading, setApiVariantsLoading] = useState(false);
-  const [apiVariantsError, setApiVariantsError] = useState<string | null>(null);
-
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -67,32 +59,6 @@ export default function ProductListItem({
       window.removeEventListener('scroll', handleScroll, true);
     };
   }, [showDropdown]);
-
-  // Lazy-load variants for variants_table products when the variations panel opens
-  useEffect(() => {
-    const load = async () => {
-      if (!isVariantsTable || !parentProductId) return;
-      if (!showVariations) return;
-      // avoid refetching repeatedly unless there was an error or list is empty
-      if (apiVariantsLoading) return;
-      if (apiVariants.length > 0) return;
-
-      try {
-        setApiVariantsError(null);
-        setApiVariantsLoading(true);
-        const list = await productVariantService.getProductVariants(parentProductId);
-        setApiVariants(Array.isArray(list) ? list : []);
-      } catch (e: any) {
-        setApiVariants([]);
-        setApiVariantsError(e?.message || 'Failed to load variants');
-      } finally {
-        setApiVariantsLoading(false);
-      }
-    };
-
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showVariations, isVariantsTable, parentProductId]);
 
   const handleMenuClick = () => {
     if (buttonRef.current) {
@@ -208,7 +174,7 @@ export default function ProductListItem({
               onClick={() => setShowVariations(!showVariations)}
               className="px-4 py-2 text-sm font-medium bg-gray-900 hover:bg-gray-700 text-white rounded-lg transition-colors shadow-sm"
             >
-              {showVariations ? 'Hide' : 'View'} {isVariantsTable ? 'Variants' : 'Variations'}
+              {showVariations ? 'Hide' : 'View'} Variations
             </button>
           )}
 
@@ -290,133 +256,88 @@ export default function ProductListItem({
         <div className="border-t border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-900/50">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-              Available {isVariantsTable ? 'Variants' : 'Variations'} ({productGroup.totalVariants})
+              Available Variations ({productGroup.totalVariants})
             </h4>
             <button
               onClick={() => onAddVariation(productGroup)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
-              {isVariantsTable ? 'Manage Variants' : 'Add Variation'}
+              Add Variation
             </button>
           </div>
-
-          {/* Content */}
-          {isVariantsTable ? (
-            <div className="space-y-2">
-              {apiVariantsLoading ? (
-                <div className="text-sm text-gray-600 dark:text-gray-400">Loading variants...</div>
-              ) : apiVariantsError ? (
-                <div className="text-sm text-red-600 dark:text-red-400">{apiVariantsError}</div>
-              ) : apiVariants.length === 0 ? (
-                <div className="text-sm text-gray-600 dark:text-gray-400">No variants found.</div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {apiVariants.map((v) => {
-                    const label = productVariantService.formatAttributes(v.attributes || {});
-                    return (
-                      <div
-                        key={v.id}
-                        className="flex items-center gap-2 bg-white dark:bg-gray-800 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {label || v.sku}
-                          </div>
-                          <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
-                            SKU: {v.sku}{v.barcode ? ` • Barcode: ${v.barcode}` : ''}
-                          </div>
-                        </div>
+          
+          <div className="space-y-3">
+            {Object.entries(variantsByColor).map(([color, variants]) => (
+              <div key={color} className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
+                <div className="flex items-center gap-3 mb-3">
+                  {variants[0].image && (
+                    <img
+                      src={variants[0].image}
+                      alt={color}
+                      className="w-14 h-14 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600"
+                      onError={(e) => {
+                        e.currentTarget.src = ERROR_IMG_SRC;
+                      }}
+                    />
+                  )}
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
+                      {color}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {variants.length} size{variants.length > 1 ? 's' : ''} available
+                    </p>
+                  </div>
+                </div>
+                
+                <div className="flex flex-col flex-wrap gap-2">
+                  {variants.map((variant) => (
+                    <div
+                      key={variant.id}
+                      className="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
+                    >
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {variant.size || 'One Size'}
+                      </span>
+                      <div className="flex gap-1 ml-auto">
                         <button
-                          onClick={() => onView(firstVariant.id)}
-                          className="text-xs text-gray-700 dark:text-gray-300 font-medium px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                          onClick={() => onEdit && onEdit(variant.id)}
+                          className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                        >
+                          <Edit className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`Delete "${variant.name}"?`)) {
+                              onDelete(variant.id);
+                            }
+                          }}
+                          className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-medium px-2 py-0.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                        {onSelect && (
+                          <button
+                            onClick={() => onSelect(variant)}
+                            className="text-xs text-gray-900 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-50 dark:hover:bg-blue-900/30 rounded"
+                          >
+                            Select
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onView(variant.id)}
+                          className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
                         >
                           View
                         </button>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              {productGroup.totalStock != null && (
-                <div className="text-xs text-gray-500 dark:text-gray-400 pt-2">
-                  Total stock (all variants): {productGroup.totalStock}
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {Object.entries(variantsByColor).map(([color, variants]) => (
-                <div key={color} className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
-                  <div className="flex items-center gap-3 mb-3">
-                    {variants[0].image && (
-                      <img
-                        src={variants[0].image}
-                        alt={color}
-                        className="w-14 h-14 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600"
-                        onError={(e) => {
-                          e.currentTarget.src = ERROR_IMG_SRC;
-                        }}
-                      />
-                    )}
-                    <div className="flex-1">
-                      <p className="text-sm font-semibold text-gray-900 dark:text-white mb-1">
-                        {color}
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        {variants.length} size{variants.length > 1 ? 's' : ''} available
-                      </p>
                     </div>
-                  </div>
-
-                  <div className="flex flex-col flex-wrap gap-2">
-                    {variants.map((variant) => (
-                      <div
-                        key={variant.id}
-                        className="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
-                      >
-                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          {variant.size || 'One Size'}
-                        </span>
-                        <div className="flex gap-1 ml-auto">
-                          <button
-                            onClick={() => onEdit && onEdit(variant.id)}
-                            className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                          >
-                            <Edit className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => {
-                              if (confirm(`Delete "${variant.name}"?`)) {
-                                onDelete(variant.id);
-                              }
-                            }}
-                            className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-medium px-2 py-0.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                          {onSelect && (
-                            <button
-                              onClick={() => onSelect(variant)}
-                              className="text-xs text-gray-900 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-50 dark:hover:bg-blue-900/30 rounded"
-                            >
-                              Select
-                            </button>
-                          )}
-                          <button
-                            onClick={() => onView(variant.id)}
-                            className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                          >
-                            View
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
