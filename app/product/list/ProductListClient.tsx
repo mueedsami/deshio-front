@@ -317,8 +317,13 @@ const goToPage = useCallback(
           categoryPath: getCategoryPath(product.category_id),
           category_id: product.category_id,
           hasVariations: false,
-          vendorId: product.vendor_id,
-          vendorName: vendorsById[product.vendor_id] ?? null,
+          vendorId: product.vendor_id ?? undefined,
+          vendorName: product.vendor_id != null ? (vendorsById[product.vendor_id] ?? null) : null,
+          // hybrid defaults
+          variationModel: 'legacy_products',
+          parentProductId: undefined,
+          variantsCount: null,
+          totalStock: null,
         });
       }
 
@@ -338,6 +343,20 @@ const goToPage = useCallback(
         size,
         image: variantImageUrl,
       });
+
+      // ✅ New-format products: a single parent row with variants in product_variants table.
+      // We still group by SKU for legacy compatibility, but if the group has ONLY 1 product
+      // and API says variants_count > 0, treat the group as variants_table.
+      const variantsCountFromApi = (product as any)?.variants_count;
+      const totalStockFromApi = (product as any)?.total_stock;
+      if (
+        (typeof variantsCountFromApi === 'number' && variantsCountFromApi > 0)
+      ) {
+        // mark as candidate; final decision after loop
+        group.variantsCount = variantsCountFromApi;
+        group.totalStock = typeof totalStockFromApi === 'number' ? totalStockFromApi : null;
+        group.parentProductId = product.id;
+      }
     });
 
     // Calculate variants and mark groups with variations
@@ -345,9 +364,19 @@ const goToPage = useCallback(
       // Base name should be derived from the whole group, not only the first product.
       group.baseName = getGroupBaseName(group.variants, group.baseName);
 
-      // Any group with more than 1 item should be treated as having variations
-      group.totalVariants = group.variants.length;
-      group.hasVariations = group.variants.length > 1;
+      const isLegacyMulti = group.variants.length > 1;
+      const isVariantsTable = !isLegacyMulti && (group.variantsCount != null && group.variantsCount > 0);
+
+      group.variationModel = isVariantsTable ? 'variants_table' : 'legacy_products';
+
+      // For legacy, count = # of product rows. For new-format, use API count.
+      group.totalVariants = isVariantsTable ? (group.variantsCount as number) : group.variants.length;
+      group.hasVariations = isLegacyMulti || isVariantsTable;
+
+      // If it's a new-format group but parentProductId is missing, fallback to first variant id.
+      if (isVariantsTable && !group.parentProductId && group.variants[0]) {
+        group.parentProductId = group.variants[0].id;
+      }
 
       // If the group's primary image is missing, pick first available variant image
       if (!group.primaryImage) {
@@ -591,6 +620,23 @@ const goToPage = useCallback(
   };
 
   const handleAddVariation = (group: ProductGroup) => {
+    // New-format products: variations live in product_variants table.
+    // Until legacy products are migrated, we keep SKU grouping, but we must not create
+    // duplicate Product rows. Instead, route to edit/manage variants for the parent product.
+    if (group.variationModel === 'variants_table' && group.parentProductId) {
+      // Reuse edit flow
+      sessionStorage.removeItem('editProductId');
+      sessionStorage.removeItem('productMode');
+      sessionStorage.removeItem('baseSku');
+      sessionStorage.removeItem('baseName');
+      sessionStorage.removeItem('categoryId');
+
+      sessionStorage.setItem('editProductId', String(group.parentProductId));
+      sessionStorage.setItem('productMode', 'edit');
+      router.push('/product/add');
+      return;
+    }
+
     // Clear any existing session data
     sessionStorage.removeItem('editProductId');
     sessionStorage.removeItem('productMode');

@@ -29,6 +29,19 @@ export interface ProductGroup {
   sellingPrice?: number | null;
   inStock?: boolean | null;
   stockQuantity?: number | null;
+
+  /**
+   * Hybrid mode while old SKU-grouped products still exist:
+   * - legacy_products: variations are separate Product rows grouped by SKU
+   * - variants_table: parent Product row + variants live in product_variants table
+   */
+  variationModel?: 'legacy_products' | 'variants_table';
+  /** Parent product id when variationModel === 'variants_table' */
+  parentProductId?: number;
+  /** Variants count from API when variationModel === 'variants_table' */
+  variantsCount?: number | null;
+  /** Total stock from API when variationModel === 'variants_table' */
+  totalStock?: number | null;
 }
 
 
