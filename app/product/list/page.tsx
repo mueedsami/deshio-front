@@ -7,7 +7,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import ProductListItem from '@/components/ProductListItem';
 import { productService, Product } from '@/services/productService';
-import categoryService, \{ Category \} from '@/services/categoryService';
+import categoryService, { Category } from '@/services/categoryService';
 import { vendorService, Vendor } from '@/services/vendorService';
 import catalogService from '@/services/catalogService';
 import Toast from '@/components/Toast';
@@ -75,12 +75,8 @@ export default function ProductPage() {
       setToast({ message: 'Failed to load products', type: 'error' });
       setProducts([]);
       setCategories([]);
-      const vendorsArr: Vendor[] = Array.isArray(vendorsData) ? vendorsData : [];
-      const vmap: Record<number, string> = {};
-      vendorsArr.forEach((v) => {
-        if (v && typeof v.id === 'number') vmap[v.id] = v.name;
-      });
-      setVendorsById(vmap);
+      setVendorsById({});
+      setCatalogMetaById({});
     } finally {
       setIsLoading(false);
     }

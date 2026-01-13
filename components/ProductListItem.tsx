@@ -4,35 +4,10 @@ import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import { MoreVertical, Edit, Trash2, Eye, Plus } from 'lucide-react';
+import type { ProductGroup, ProductVariant } from '@/types/product';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4=';
-
-interface ProductVariant {
-  id: number;
-  name: string;
-  sku: string;
-  color?: string;
-  size?: string;
-  image: string | null;
-}
-
-interface ProductGroup {
-  sku: string;
-  baseName: string;
-  totalVariants: number;
-  variants: ProductVariant[];
-  primaryImage: string | null;
-  categoryPath: string;
-  category_id: number;
-  hasVariations: boolean;
-  vendorId?: number;
-  vendorName?: string | null;
-  sellingPrice?: number | null;
-  inStock?: boolean | null;
-  stockQuantity?: number | null;
-}
-
 
 interface ProductListItemProps {
   productGroup: ProductGroup;
