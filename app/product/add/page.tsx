@@ -108,6 +108,7 @@ export default function AddEditProductPage({
 
   // Bulk update helpers for SKU group (frontend-only: loops update requests)
   const [bulkSelectedIds, setBulkSelectedIds] = useState<number[]>([]);
+  const [bulkApplyName, setBulkApplyName] = useState<boolean>(true);
   const [bulkApplyDescription, setBulkApplyDescription] = useState<boolean>(true);
   const [bulkApplyCategory, setBulkApplyCategory] = useState<boolean>(true);
   const [bulkApplyVendor, setBulkApplyVendor] = useState<boolean>(true);
@@ -414,14 +415,20 @@ export default function AddEditProductPage({
       return;
     }
 
-    if (!bulkApplyDescription && !bulkApplyCategory && !bulkApplyVendor) {
-      setToast({ message: 'Choose at least one field to apply (description/category/vendor).', type: 'warning' });
+    if (!bulkApplyName && !bulkApplyDescription && !bulkApplyCategory && !bulkApplyVendor) {
+      setToast({ message: 'Choose at least one field to apply (name/description/category/vendor).', type: 'warning' });
       return;
     }
 
+    const overrideName = String(formData.name || '').trim();
     const overrideDescription = String(formData.description || '');
     const overrideCategoryId = categorySelection.level0 ? Number(categorySelection.level0) : null;
     const overrideVendorId = selectedVendorId ? Number(selectedVendorId) : null;
+
+    if (bulkApplyName && !overrideName) {
+      setToast({ message: 'Enter a product name first (General Information tab).', type: 'warning' });
+      return;
+    }
 
     if (bulkApplyCategory && !overrideCategoryId) {
       setToast({ message: 'Select a category first (General Information tab).', type: 'warning' });
@@ -440,7 +447,7 @@ export default function AddEditProductPage({
         if (!p) continue;
 
         const payload: any = {
-          name: p.name,
+          name: bulkApplyName ? (overrideName || p.name) : p.name,
           sku: p.sku,
           description: bulkApplyDescription ? overrideDescription : (p.description ?? ''),
           category_id: bulkApplyCategory ? overrideCategoryId : (p.category_id ?? overrideCategoryId),
@@ -1358,6 +1365,16 @@ export default function AddEditProductPage({
                             </div>
 
                             <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-gray-800 dark:text-gray-200">
+                              <label className="inline-flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={bulkApplyName}
+                                  onChange={(e) => setBulkApplyName(e.target.checked)}
+                                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                />
+                                Name
+                              </label>
+
                               <label className="inline-flex items-center gap-2">
                                 <input
                                   type="checkbox"
