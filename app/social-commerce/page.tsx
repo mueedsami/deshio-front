@@ -89,6 +89,8 @@ export default function SocialCommercePage() {
   const [deliveryAddress, setDeliveryAddress] = useState('');
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [cart, setCart] = useState<CartProduct[]>([]);
@@ -636,7 +638,9 @@ export default function SocialCommercePage() {
   }, [pathaoZoneId, isInternational]);
 
   useEffect(() => {
-    if (!searchQuery.trim() || !Array.isArray(batches)) {
+    const hasPriceFilter = Boolean(minPrice.trim() || maxPrice.trim());
+
+    if ((!searchQuery.trim() && !hasPriceFilter) || !Array.isArray(batches)) {
       setSearchResults([]);
       return;
     }
@@ -647,7 +651,74 @@ export default function SocialCommercePage() {
     }
 
     const delayDebounce = setTimeout(async () => {
+      const min = minPrice.trim() !== '' && Number.isFinite(Number(minPrice)) ? Number(minPrice) : null;
+      const max = maxPrice.trim() !== '' && Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : null;
+
+      const withinPriceRange = (price: number) => {
+        if (min !== null && price < min) return false;
+        if (max !== null && price > max) return false;
+        return true;
+      };
+
       try {
+        // If only price filter is set (no text query), search locally from loaded batches
+        if (!searchQuery.trim()) {
+          const availableBatches = Array.isArray(batches)
+            ? batches.filter((b: any) => Number(b.quantity) > 0)
+            : [];
+
+          const productIds = [
+            ...new Set(
+              availableBatches
+                .map((b: any) => b.product?.id || b.product_id)
+                .filter((id: any) => typeof id === 'number')
+            ),
+          ];
+
+          const imagePromises = productIds.map(async (productId: number) => {
+            const imageUrl = await fetchPrimaryImage(productId);
+            return { productId, imageUrl };
+          });
+
+          const imageResults = await Promise.all(imagePromises);
+          const imageMap = new Map(imageResults.map((r) => [r.productId, r.imageUrl]));
+
+          const results: any[] = [];
+
+          for (const batch of availableBatches) {
+            const pid = batch.product?.id || batch.product_id;
+            if (!pid) continue;
+
+            const price = Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
+            if (!withinPriceRange(price)) continue;
+
+            const prod =
+              batch.product || allProducts.find((p: any) => p.id === pid) || null;
+
+            results.push({
+              id: pid,
+              name: prod?.name || batch.product_name || 'Unknown product',
+              sku: prod?.sku || batch.product_sku || '',
+              batchId: batch.id,
+              batchNumber: batch.batch_number,
+              attributes: {
+                Price: price,
+              },
+              image: imageMap.get(pid) || '/placeholder-image.jpg',
+              isDefective: false,
+            });
+
+            if (results.length >= 50) break;
+          }
+
+          setSearchResults(results);
+
+          if (results.length === 0) {
+            showToast('No products found in that price range', 'error');
+          }
+          return;
+        }
+
         const response = await axios.post('/products/advanced-search', {
           query: searchQuery,
           is_archived: false,
@@ -681,7 +752,11 @@ export default function SocialCommercePage() {
           for (const prod of products) {
             const productBatches = batches.filter((batch: any) => {
               const batchProductId = batch.product?.id || batch.product_id;
-              return batchProductId === prod.id && batch.quantity > 0;
+              if (batchProductId !== prod.id) return false;
+              if (Number(batch.quantity) <= 0) return false;
+
+              const price = Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
+              return withinPriceRange(price);
             });
 
             if (productBatches.length > 0) {
@@ -729,7 +804,7 @@ export default function SocialCommercePage() {
     }, 300);
 
     return () => clearTimeout(delayDebounce);
-  }, [searchQuery, batches, allProducts]);
+  }, [searchQuery, minPrice, maxPrice, batches, allProducts]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
@@ -748,6 +823,8 @@ export default function SocialCommercePage() {
   const handleProductSelect = (product: any) => {
     setSelectedProduct(product);
     setSearchQuery('');
+    setMinPrice('');
+    setMaxPrice('');
     setSearchResults([]);
     setQuantity('1');
     setDiscountPercent('');
@@ -1373,6 +1450,27 @@ export default function SocialCommercePage() {
                         disabled={!selectedStore || isLoadingData}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder="Min ৳"
+                          value={minPrice}
+                          onChange={(e) => setMinPrice(e.target.value)}
+                          disabled={!selectedStore || isLoadingData}
+                          className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder="Max ৳"
+                          value={maxPrice}
+                          onChange={(e) => setMaxPrice(e.target.value)}
+                          disabled={!selectedStore || isLoadingData}
+                          className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                      </div>
+
                       <button
                         disabled={!selectedStore || isLoadingData}
                         className="px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1393,9 +1491,13 @@ export default function SocialCommercePage() {
                       </div>
                     )}
 
-                    {selectedStore && !isLoadingData && searchQuery && searchResults.length === 0 && (
+                    {selectedStore && !isLoadingData && (searchQuery || minPrice || maxPrice) && searchResults.length === 0 && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
-                        No products found matching "{searchQuery}"
+                        {searchQuery ? (
+                        <>No products found matching "{searchQuery}"</>
+                      ) : (
+                        <>No products found in that price range</>
+                      )}
                       </div>
                     )}
 

@@ -26,7 +26,13 @@ interface ProductGroup {
   categoryPath: string;
   category_id: number;
   hasVariations: boolean;
+  vendorId?: number;
+  vendorName?: string | null;
+  sellingPrice?: number | null;
+  inStock?: boolean | null;
+  stockQuantity?: number | null;
 }
+
 
 interface ProductListItemProps {
   productGroup: ProductGroup;
@@ -146,7 +152,31 @@ export default function ProductListItem({
               <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
                 <span className="truncate">{productGroup.categoryPath}</span>
               </div>
-            </div>
+            
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
+                {productGroup.vendorName ? (
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                    Vendor: {productGroup.vendorName}
+                  </span>
+                ) : null}
+
+                <span
+                  className={`inline-flex items-center px-2.5 py-1 rounded-md font-medium ${
+                    productGroup.inStock === false || productGroup.stockQuantity === 0
+                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                      : productGroup.sellingPrice != null
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  {productGroup.inStock === false || productGroup.stockQuantity === 0
+                    ? 'Not in stock'
+                    : productGroup.sellingPrice != null
+                      ? `৳${Number(productGroup.sellingPrice).toFixed(2)}`
+                      : 'Checking stock...'}
+                </span>
+              </div>
+</div>
           </div>
           
           <div className="flex flex-wrap items-center gap-2">

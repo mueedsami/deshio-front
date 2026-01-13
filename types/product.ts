@@ -23,7 +23,14 @@ export interface ProductGroup {
   categoryPath: string;
   category_id: number; // required
   hasVariations: boolean;
+  // Optional UI metadata (not required by backend)
+  vendorId?: number;
+  vendorName?: string | null;
+  sellingPrice?: number | null;
+  inStock?: boolean | null;
+  stockQuantity?: number | null;
 }
+
 
 // Represents dynamic field-value pairs attached to products
 export interface FieldValue {

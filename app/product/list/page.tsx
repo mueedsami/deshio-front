@@ -7,7 +7,9 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import ProductListItem from '@/components/ProductListItem';
 import { productService, Product } from '@/services/productService';
-import categoryService, { Category } from '@/services/categoryService';
+import categoryService, \{ Category \} from '@/services/categoryService';
+import { vendorService, Vendor } from '@/services/vendorService';
+import catalogService from '@/services/catalogService';
 import Toast from '@/components/Toast';
 
 import {
@@ -26,6 +28,8 @@ export default function ProductPage() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [vendorsById, setVendorsById] = useState<Record<number, string>>({});
+  const [catalogMetaById, setCatalogMetaById] = useState<Record<number, { selling_price: number | null; in_stock: boolean; stock_quantity: number }>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
@@ -51,19 +55,32 @@ export default function ProductPage() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [productsData, categoriesData] = await Promise.all([
+      const [productsData, categoriesData, vendorsData] = await Promise.all([
         productService.getAll({ per_page: 1000 }),
         // Only count/show active categories in product list stats & filters
         categoryService.getTree(true),
+        vendorService.getAll(),
       ]);
 
       setProducts(Array.isArray(productsData.data) ? productsData.data : []);
       setCategories(Array.isArray(categoriesData) ? categoriesData : []);
+      const vendorsArr: Vendor[] = Array.isArray(vendorsData) ? vendorsData : [];
+      const vmap: Record<number, string> = {};
+      vendorsArr.forEach((v) => {
+        if (v && typeof v.id === 'number') vmap[v.id] = v.name;
+      });
+      setVendorsById(vmap);
     } catch (err) {
       console.error('Error fetching data:', err);
       setToast({ message: 'Failed to load products', type: 'error' });
       setProducts([]);
       setCategories([]);
+      const vendorsArr: Vendor[] = Array.isArray(vendorsData) ? vendorsData : [];
+      const vmap: Record<number, string> = {};
+      vendorsArr.forEach((v) => {
+        if (v && typeof v.id === 'number') vmap[v.id] = v.name;
+      });
+      setVendorsById(vmap);
     } finally {
       setIsLoading(false);
     }
@@ -241,7 +258,7 @@ export default function ProductPage() {
 
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
-          sku: sku,
+          sku: String(sku || ''),
           baseName,
           totalVariants: 0,
           variants: [],
@@ -249,6 +266,8 @@ export default function ProductPage() {
           categoryPath: getCategoryPath(product.category_id),
           category_id: product.category_id,
           hasVariations: false,
+          vendorId: product.vendor_id,
+          vendorName: vendorsById[product.vendor_id] ?? null,
         });
       }
 
@@ -286,7 +305,7 @@ export default function ProductPage() {
     });
 
     return Array.from(groups.values());
-  }, [products, categories]);
+  }, [products, categories, vendorsById]);
 
   // Enhanced filtering with category support
   const filteredGroups = useMemo(() => {
@@ -321,6 +340,71 @@ export default function ProductPage() {
     (currentPage - 1) * itemsPerPage,
     currentPage * itemsPerPage
   );
+
+  // Fetch selling price + stock info (only for visible items, cached)
+  useEffect(() => {
+    const ids = paginatedGroups
+      .map((g) => g?.variants?.[0]?.id)
+      .filter((id): id is number => typeof id === 'number');
+
+    const missing = ids.filter((id) => !catalogMetaById[id]);
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      const chunkSize = 4;
+
+      for (let i = 0; i < missing.length; i += chunkSize) {
+        const chunk = missing.slice(i, i + chunkSize);
+
+        const results = await Promise.all(
+          chunk.map(async (id) => {
+            try {
+              const detail: any = await catalogService.getProduct(id);
+              const p = detail?.product ?? detail?.data?.product ?? detail?.data ?? detail;
+
+              const selling = Number(p?.selling_price ?? p?.sellingPrice ?? NaN);
+              const inStock = Boolean(p?.in_stock ?? p?.inStock ?? false);
+              const stockQty = Number(p?.stock_quantity ?? p?.stockQuantity ?? 0);
+
+              if (!Number.isFinite(selling) && inStock) {
+                // If backend doesn't provide selling price, treat as unknown
+                return { id, meta: { selling_price: null, in_stock: inStock, stock_quantity: stockQty } };
+              }
+
+              return {
+                id,
+                meta: {
+                  selling_price: Number.isFinite(selling) ? selling : null,
+                  in_stock: inStock,
+                  stock_quantity: Number.isFinite(stockQty) ? stockQty : 0,
+                },
+              };
+            } catch (e) {
+              return null;
+            }
+          })
+        );
+
+        if (cancelled) return;
+
+        setCatalogMetaById((prev) => {
+          const next = { ...prev };
+          results.forEach((r) => {
+            if (r) next[r.id] = r.meta;
+          });
+          return next;
+        });
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [paginatedGroups, catalogMetaById]);
 
   const handleDelete = async (id: number) => {
     try {
@@ -634,7 +718,12 @@ export default function ProductPage() {
                   {paginatedGroups.map((group) => (
                     <ProductListItem
                       key={`${group.sku}-${group.variants[0].id}`}
-                      productGroup={group}
+                      productGroup={{
+                        ...group,
+                        sellingPrice: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.selling_price ?? null : null,
+                        inStock: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.in_stock ?? null : null,
+                        stockQuantity: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.stock_quantity ?? null : null,
+                      }}
                       onDelete={handleDelete}
                       onEdit={handleEdit}
                       onView={handleView}

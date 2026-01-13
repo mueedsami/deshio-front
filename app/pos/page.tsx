@@ -145,6 +145,8 @@ export default function POSPage() {
   // Products (for manual entry)
   const [products, setProducts] = useState<Product[]>([]);
   const [product, setProduct] = useState('');
+  const [minPriceFilter, setMinPriceFilter] = useState('');
+  const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
   const [sellingPrice, setSellingPrice] = useState(0);
   const [quantity, setQuantity] = useState(1);
@@ -1463,6 +1465,27 @@ export default function POSPage() {
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                             Product
                           </label>
+                          <div className="flex items-center gap-2 mb-2">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              placeholder="Min ৳"
+                              value={minPriceFilter}
+                              onChange={(e) => setMinPriceFilter(e.target.value)}
+                              disabled={!selectedOutlet}
+                              className="w-24 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm disabled:opacity-50"
+                            />
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              placeholder="Max ৳"
+                              value={maxPriceFilter}
+                              onChange={(e) => setMaxPriceFilter(e.target.value)}
+                              disabled={!selectedOutlet}
+                              className="w-24 px-3 py-2 border border-gray-200 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm disabled:opacity-50"
+                            />
+                          </div>
+
                           <select
                             value={product}
                             onChange={(e) => handleProductSelect(e.target.value)}
@@ -1471,7 +1494,29 @@ export default function POSPage() {
                           >
                             <option value="">Select Product</option>
                             {products
-                              .filter((p) => p.batches && p.batches.length > 0)
+                               .filter((p) => {
+                                if (!p.batches || p.batches.length === 0) return false;
+
+                                const min =
+                                  minPriceFilter.trim() !== '' && Number.isFinite(Number(minPriceFilter))
+                                    ? Number(minPriceFilter)
+                                    : null;
+                                const max =
+                                  maxPriceFilter.trim() !== '' && Number.isFinite(Number(maxPriceFilter))
+                                    ? Number(maxPriceFilter)
+                                    : null;
+
+                                if (min === null && max === null) return p.batches.length > 0;
+
+                                return p.batches.some((b) => {
+                                  if (Number(b.quantity) <= 0) return false;
+
+                                  const price = Number(String(b.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
+                                  if (min !== null && price < min) return false;
+                                  if (max !== null && price > max) return false;
+                                  return true;
+                                });
+                              })
                               .map((prod) => (
                                 <option key={prod.id} value={prod.name}>
                                   {prod.name} ({prod.batches?.length || 0} batches)
