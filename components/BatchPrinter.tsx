@@ -233,14 +233,13 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
 
       // ✅ Create config with the default printer
       const config = qz.configs.create(defaultPrinter, {
-        // Force exact label size to prevent extra blank labels (driver paper-size mismatch)
         units: 'mm',
-        size: { width: 39, height: 25 }, // 3.9cm x 2.5cm
+        size: { width: 35, height: 23 },
         margins: 0,
         rasterize: true,
         scaleContent: false,
       });
-      console.log(`Using printer: ${defaultPrinter}`);
+console.log(`Using printer: ${defaultPrinter}`);
 
       const data: any[] = [];
       selected.forEach((code) => {
@@ -252,91 +251,87 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
             data: `
               <html>
                 <head>
-                  <meta charset="utf-8" />
                   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                   <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; }
-                    @page { size: 39mm 25mm; margin: 0; }
-                    html, body {
-                      width: 39mm;
-                      height: 25mm;
+                    @page { 
+                      size: 35mm 23mm;
                       margin: 0;
-                      padding: 0;
-                      overflow: hidden;
-                      font-family: Arial, sans-serif;
                     }
-                    .label {
-                      width: 39mm;
-                      height: 25mm;
-                      padding: 1mm 1mm;
+                    body { 
+                      width: 35mm;
+                      height: 23mm;
+                      margin: 0;
+                      padding: 0.5mm 0.5mm;
+                      font-family: Arial, sans-serif;
                       display: flex;
                       flex-direction: column;
                       justify-content: space-between;
                       align-items: center;
-                      text-align: center;
                     }
+                    .barcode-container {
+
                     .brand {
-                      font-weight: 800;
-                      font-size: 8pt;
-                      letter-spacing: 0.4px;
-                      text-transform: lowercase;
-                      line-height: 1;
-                    }
-                    .product-name {
+                      font-size: 9pt;
                       font-weight: 700;
-                      font-size: 7pt;
-                      line-height: 1.05;
-                      max-width: 37mm;
-                      overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
-                      margin-top: 0.5mm;
+                      color: #000;
+                      margin-bottom: 0.5mm;
+                      line-height: 1;
+                      text-transform: lowercase;
                     }
-                    .barcode-wrap {
+
+                      transform: rotate(180deg);
+                      transform-origin: center;
+ 
                       width: 100%;
+                      text-align: center;
                       display: flex;
+                      flex-direction: column;
                       align-items: center;
                       justify-content: center;
                     }
-                    svg {
-                      width: 100%;
+                    .product-name { 
+                      font-weight: bold; 
+                      font-size: 7pt;
+                      line-height: 1;
+                      margin-bottom: 0.5mm;
+                      max-width: 38mm;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    }
+                    .price { 
+                      font-size: 7.5pt;
+                      font-weight: bold;
+                      color: #000;
+                      margin-bottom: 0.5mm;
+                      line-height: 1;
+                    }
+                    svg { 
+                      max-width: 38mm;
                       height: auto;
                       display: block;
-                    }
-                    .price {
-                      font-size: 7pt;
-                      font-weight: 800;
-                      line-height: 1.05;
-                      margin-top: 0.5mm;
-                    }
-                    .price span {
-                      font-weight: 700;
                     }
                   </style>
                 </head>
                 <body>
-                  <div class="label">
-                    <div>
-                      <div class="brand">deshio</div>
-                      <div class="product-name">${(product?.name || 'Product').substring(0, 28)}</div>
-                    </div>
-
-                    <div class="barcode-wrap">
-                      <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
-                    </div>
-
-                    <div class="price"><span>Price (VAT Inclusive):</span> ৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
-                  </div>
-
+                  <div class="barcode-container">
+  <div class="brand">Deshio</div>
+  <div class="product-name">${(product?.name || 'Product').substring(0, 25)}</div>
+  <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
+  <div class="price">Price (Vat Inclusive): ৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
+</div>
                   <script>
                     JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
                       format: "CODE128",
-                      width: 1.2,
-                      height: 22,
+                      width: 1.1,
+                      height: 38,
                       displayValue: true,
                       fontSize: 8,
-                      textMargin: 0,
-                      margin: 0
+                      margin: 0,
+                      marginTop: 1,
+                      marginBottom: 1,
+                      textMargin: 1
                     });
                   </script>
                 </body>
