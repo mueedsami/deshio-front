@@ -378,7 +378,7 @@ export default function AddEditProductPage({
     try {
       setSkuGroupLoading(true);
       // Backend doesn't have a dedicated "sku" filter in this front; we use search then exact-filter client-side.
-      const result = await productService.getAll({ per_page: 1000, search: cleanedSku });
+      const result = await productService.getAll({ per_page: 10000, search: cleanedSku });
       const exact = (result.data || []).filter(p => String(p.sku || '').trim() === cleanedSku);
 
       // Sort by color then size (for nicer display)
