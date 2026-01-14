@@ -517,42 +517,70 @@ export default function LookupPage() {
               <head>
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                 <style>
-                  * { margin: 0; padding: 0; box-sizing: border-box; }
-                  @page { size: 40mm 28mm; margin: 0; }
-                  body {
-                    width: 40mm; height: 28mm; margin: 0; padding: 0.5mm 1mm;
-                    font-family: Arial, sans-serif; display: flex; flex-direction: column;
-                    justify-content: space-between; align-items: center;
-                  }
-                  .barcode-container {
-                    width: 100%; text-align: center; display:flex; flex-direction:column;
-                    align-items:center; justify-content:center;
-                  }
-                  .product-name {
-                    font-weight: bold; font-size: 7pt; line-height: 1; margin-bottom: 0.5mm;
-                    max-width: 38mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-                  }
-                  .price { font-size: 9pt; font-weight: bold; color: #000; margin-bottom: 0.5mm; line-height: 1; }
-                  svg { max-width: 38mm; height: auto; display: block; }
+	                  * { margin: 0; padding: 0; box-sizing: border-box; }
+	                  /* Requested label size: ~2.5cm x 3.9cm (25mm x 39mm)
+	                     Note: Swap the two values if your printer rotates the label. */
+	                  @page { size: 39mm 25mm; margin: 0; }
+	                  body {
+	                    width: 39mm; height: 25mm; margin: 0; padding: 1mm 1mm;
+	                    font-family: Arial, sans-serif; display: flex; flex-direction: column;
+	                    align-items: center;
+	                  }
+	                  .brand {
+	                    font-weight: 800;
+	                    font-size: 8pt;
+	                    letter-spacing: 0.2pt;
+	                    margin-top: 0.2mm;
+	                    margin-bottom: 0.6mm;
+	                    text-transform: lowercase;
+	                  }
+	                  .product-name {
+	                    width: 100%;
+	                    text-align: center;
+	                    font-weight: 600;
+	                    font-size: 7pt;
+	                    line-height: 1.1;
+	                    max-height: 6mm;
+	                    overflow: hidden;
+	                    margin-bottom: 0.6mm;
+	                    padding: 0 0.5mm;
+	                  }
+	                  .barcode-box {
+	                    width: 100%;
+	                    display: flex;
+	                    align-items: center;
+	                    justify-content: center;
+	                    flex: 1;
+	                  }
+	                  svg { width: 37mm; height: auto; display: block; }
+	                  .price {
+	                    width: 100%;
+	                    text-align: center;
+	                    font-size: 7pt;
+	                    font-weight: 700;
+	                    line-height: 1.1;
+	                    margin-top: 0.6mm;
+	                    padding-bottom: 0.2mm;
+	                    white-space: nowrap;
+	                    overflow: hidden;
+	                    text-overflow: ellipsis;
+	                  }
                 </style>
               </head>
               <body>
-                <div class="barcode-container">
-                  <div class="product-name">${productName}</div>
-                  ${showPrice ? `<div class="price">${priceText}</div>` : ``}
-                  <svg id="barcode-${safeId}"></svg>
-                </div>
+	                <div class="brand">deshio</div>
+	                <div class="product-name">${(productName || '').substring(0, 40)}</div>
+	                <div class="barcode-box">
+	                  <svg id="barcode-${safeId}"></svg>
+	                </div>
+	                <div class="price">Price (Vat Inclusive): ${showPrice ? priceText : ''}</div>
                 <script>
                   JsBarcode("#barcode-${safeId}", "${params.barcode}", {
                     format: "CODE128",
-                    width: 1.3,
-                    height: 30,
-                    displayValue: true,
-                    fontSize: 9,
-                    margin: 0,
-                    marginTop: 1,
-                    marginBottom: 1,
-                    textMargin: 1
+	                    width: 1.15,
+	                    height: 18,
+	                    displayValue: false,
+	                    margin: 0
                   });
                 </script>
               </body>
