@@ -499,7 +499,13 @@ export default function LookupPage() {
       const printer = await getDefaultPrinter();
       if (!printer) throw new Error('No default printer found. Set a default printer and try again.');
 
-      const config = qz.configs.create(printer);
+      const config = qz.configs.create(printer, {
+        units: 'mm',
+        size: { width: 39, height: 25 },
+        margins: 0,
+        rasterize: true,
+        scaleContent: false,
+      });
 
       const safeId = params.barcode.replace(/[^a-zA-Z0-9]/g, '');
       const productName = (params.productName || 'Product').substring(0, 25);
@@ -515,72 +521,75 @@ export default function LookupPage() {
           data: `
             <html>
               <head>
+                <meta charset="utf-8" />
                 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                 <style>
-	                  * { margin: 0; padding: 0; box-sizing: border-box; }
-	                  /* Requested label size: ~2.5cm x 3.9cm (25mm x 39mm)
-	                     Note: Swap the two values if your printer rotates the label. */
-	                  @page { size: 39mm 25mm; margin: 0; }
-	                  body {
-	                    width: 39mm; height: 25mm; margin: 0; padding: 1mm 1mm;
-	                    font-family: Arial, sans-serif; display: flex; flex-direction: column;
-	                    align-items: center;
-	                  }
-	                  .brand {
-	                    font-weight: 800;
-	                    font-size: 8pt;
-	                    letter-spacing: 0.2pt;
-	                    margin-top: 0.2mm;
-	                    margin-bottom: 0.6mm;
-	                    text-transform: lowercase;
-	                  }
-	                  .product-name {
-	                    width: 100%;
-	                    text-align: center;
-	                    font-weight: 600;
-	                    font-size: 7pt;
-	                    line-height: 1.1;
-	                    max-height: 6mm;
-	                    overflow: hidden;
-	                    margin-bottom: 0.6mm;
-	                    padding: 0 0.5mm;
-	                  }
-	                  .barcode-box {
-	                    width: 100%;
-	                    display: flex;
-	                    align-items: center;
-	                    justify-content: center;
-	                    flex: 1;
-	                  }
-	                  svg { width: 37mm; height: auto; display: block; }
-	                  .price {
-	                    width: 100%;
-	                    text-align: center;
-	                    font-size: 7pt;
-	                    font-weight: 700;
-	                    line-height: 1.1;
-	                    margin-top: 0.6mm;
-	                    padding-bottom: 0.2mm;
-	                    white-space: nowrap;
-	                    overflow: hidden;
-	                    text-overflow: ellipsis;
-	                  }
+                  * { margin: 0; padding: 0; box-sizing: border-box; }
+                  @page { size: 39mm 25mm; margin: 0; }
+                  html, body {
+                    width: 39mm;
+                    height: 25mm;
+                    margin: 0;
+                    padding: 0;
+                    overflow: hidden;
+                    font-family: Arial, sans-serif;
+                  }
+                  .label {
+                    width: 39mm;
+                    height: 25mm;
+                    padding: 1mm 1mm;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: space-between;
+                    align-items: center;
+                    text-align: center;
+                  }
+                  .brand {
+                    font-weight: 800;
+                    font-size: 8pt;
+                    letter-spacing: 0.4px;
+                    text-transform: lowercase;
+                    line-height: 1;
+                  }
+                  .product-name {
+                    font-weight: 700;
+                    font-size: 7pt;
+                    line-height: 1.05;
+                    max-width: 37mm;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    margin-top: 0.5mm;
+                  }
+                  .barcode-wrap { width: 100%; display:flex; align-items:center; justify-content:center; }
+                  svg { width: 100%; height: auto; display:block; }
+                  .price { font-size: 7pt; font-weight: 800; line-height: 1.05; margin-top: 0.5mm; }
+                  .price span { font-weight: 700; }
                 </style>
               </head>
               <body>
-	                <div class="brand">deshio</div>
-	                <div class="product-name">${(productName || '').substring(0, 40)}</div>
-	                <div class="barcode-box">
-	                  <svg id="barcode-${safeId}"></svg>
-	                </div>
-	                <div class="price">Price (Vat Inclusive): ${showPrice ? priceText : ''}</div>
+                <div class="label">
+                  <div>
+                    <div class="brand">deshio</div>
+                    <div class="product-name">${productName}</div>
+                  </div>
+
+                  <div class="barcode-wrap">
+                    <svg id="barcode-${safeId}"></svg>
+                  </div>
+
+                  ${showPrice ? `<div class="price"><span>Price (VAT Inclusive):</span> ${priceText}</div>` : ``}
+                </div>
+
                 <script>
                   JsBarcode("#barcode-${safeId}", "${params.barcode}", {
                     format: "CODE128",
-	                    width: 1.15,
-	                    height: 18,
-	                    displayValue: false,
-	                    margin: 0
+                    width: 1.2,
+                    height: 22,
+                    displayValue: true,
+                    fontSize: 8,
+                    textMargin: 0,
+                    margin: 0
                   });
                 </script>
               </body>
