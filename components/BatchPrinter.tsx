@@ -220,123 +220,60 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       selected.forEach((code) => {
         const qty = quantities[code] || 1;
         for (let i = 0; i < qty; i++) {
-          const productName = (product?.name || 'Product').substring(0, 20);
+          const productName = (product?.name || 'Product').substring(0, 18);
           const price = batch.sellingPrice.toLocaleString('en-BD');
           
           data.push({
             type: "html",
             format: "plain",
             data: `
-              <!DOCTYPE html>
-              <html>
-                <head>
-                  <meta charset="UTF-8">
-                  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-                  <style>
-                    * { 
-                      margin: 0; 
-                      padding: 0; 
-                      box-sizing: border-box; 
-                    }
-                    
-                    @page { 
-                      size: 38mm 24mm;
-                      margin: 0;
-                    }
-                    
-                    html, body { 
-                      width: 38mm;
-                      height: 24mm;
-                      margin: 0;
-                      padding: 0;
-                      overflow: hidden;
-                    }
-                    
-                    body {
-                      font-family: Arial, sans-serif;
-                      background: white;
-                      text-align: center;
-                      display: flex;
-                      align-items: center;
-                      justify-content: center;
-                    }
-                    
-                    .label-container {
-                      width: 100%;
-                      padding: 1mm 1mm;
-                      text-align: center;
-                    }
-                    
-                    .product-name { 
-                      font-size: 5.5pt;
-                      font-weight: bold;
-                      margin: 0 auto 0.8mm auto;
-                      text-align: center;
-                      width: 100%;
-                      line-height: 1.1;
-                    }
-                    
-                    .barcode-section {
-                      width: 100%;
-                      margin: 0 auto;
-                      text-align: center;
-                    }
-                    
-                    svg { 
-                      width: 100%;
-                      max-width: 35mm;
-                      height: auto;
-                      display: block;
-                      margin: 0 auto;
-                    }
-                    
-                    .barcode-number {
-                      font-size: 6.5pt;
-                      margin: 0.5mm auto;
-                      text-align: center;
-                      width: 100%;
-                      letter-spacing: 0.3pt;
-                    }
-                    
-                    .price { 
-                      font-size: 8.5pt;
-                      font-weight: bold;
-                      margin: 0.8mm auto 0 auto;
-                      text-align: center;
-                      width: 100%;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <div class="label-container">
-                    <div class="product-name">${productName}</div>
-                    <div class="barcode-section">
-                      <svg id="barcode${i}"></svg>
-                    </div>
-                    <div class="barcode-number">${code}</div>
-                    <div class="price">৳ ${price}</div>
-                  </div>
-                  <script>
-                    window.onload = function() {
-                      try {
-                        JsBarcode("#barcode${i}", "${code}", {
-                          format: "CODE128",
-                          width: 1.3,
-                          height: 24,
-                          displayValue: false,
-                          margin: 0,
-                          marginTop: 0,
-                          marginBottom: 0,
-                          marginLeft: 0,
-                          marginRight: 0
-                        });
-                      } catch(e) {
-                        console.error('Barcode generation error:', e);
-                      }
-                    };
-                  </script>
-                </body>
-              </html>
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+  <style>
+    @page { size: 39mm 25mm; margin: 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      width: 39mm; 
+      height: 25mm; 
+      position: relative;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div style="position: absolute; top: 1mm; left: 0; right: 0; text-align: center; font-size: 5.5pt; font-weight: bold;">
+    ${productName}
+  </div>
+  
+  <div style="position: absolute; top: 4.5mm; left: 50%; transform: translateX(-50%); width: 35mm;">
+    <svg id="bc${i}" style="width: 100%; height: auto;"></svg>
+  </div>
+  
+  <div style="position: absolute; top: 15mm; left: 0; right: 0; text-align: center; font-size: 6.5pt;">
+    ${code}
+  </div>
+  
+  <div style="position: absolute; top: 19mm; left: 0; right: 0; text-align: center; font-size: 8.5pt; font-weight: bold;">
+    ৳ ${price}
+  </div>
+  
+  <script>
+    window.onload = function() {
+      JsBarcode("#bc${i}", "${code}", {
+        format: "CODE128",
+        width: 1.4,
+        height: 26,
+        displayValue: false,
+        margin: 0
+      });
+    };
+  </script>
+</body>
+</html>
             `,
           });
         }
