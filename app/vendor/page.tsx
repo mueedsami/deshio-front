@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, Plus, DollarSign, ShoppingCart, MoreVertical, Eye, Receipt, Loader2, AlertCircle, Pencil, Trash2 } from 'lucide-react';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
@@ -10,6 +10,18 @@ import purchaseOrderService, { PurchaseOrder, CreatePurchaseOrderData } from '@/
 import { vendorPaymentService, CreatePaymentRequest, PaymentMethod } from '@/services/vendorPaymentService';
 import storeService, { Store } from '@/services/storeService';
 import productService, { Product } from '@/services/productService';
+import categoryService, { Category } from '@/services/categoryService';
+
+type ProductWithId = Product & { id: number };
+
+// Outstanding API returns status as string sometimes; we accept that safely
+type OutstandingPurchaseOrder = Partial<Omit<PurchaseOrder, 'status'>> & {
+  id: number;
+  status?: string;
+  po_number?: string;
+  outstanding_amount?: number;
+};
+
 
 // Utility function to safely format currency
 const formatCurrency = (value: any): string => {
@@ -72,8 +84,10 @@ export default function VendorPaymentPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  // NOTE: outstanding purchase orders API can return a partial PO payload
+  const [purchaseOrders, setPurchaseOrders] = useState<OutstandingPurchaseOrder[]>([]);
   const [vendorPayments, setVendorPayments] = useState<any[]>([]);
 
   // Modal states
@@ -128,12 +142,35 @@ export default function VendorPaymentPage() {
     ]
   });
 
+  const PO_DRAFT_KEY = 'vendor_po_draft_v1';
+
+  // PO Product finder UI state
+  const [poSearch, setPoSearch] = useState('');
+  const [poCategoryId, setPoCategoryId] = useState('');
+  const [poShowAllProducts, setPoShowAllProducts] = useState(false);
+
+  // Draft restore banner
+  const [poDraftRestored, setPoDraftRestored] = useState(false);
+  const [poDraftSavedAt, setPoDraftSavedAt] = useState<string | null>(null);
+
+  // Quick add new product from inside PO
+  const [showQuickProduct, setShowQuickProduct] = useState(false);
+  const [quickProductForm, setQuickProductForm] = useState({
+    name: '',
+    sku: '',
+    category_id: '',
+    description: ''
+  });
+
+
   // Variant quick-add (group sizes/colors) in PO creation
   const [showVariantPicker, setShowVariantPicker] = useState(false);
   const [variantBaseProduct, setVariantBaseProduct] = useState<Product | null>(null);
-  const [variantOptions, setVariantOptions] = useState<Product[]>([]);
-  const [variantInputs, setVariantInputs] = useState<Record<number, { quantity: string; unit_cost: string }>>({});
+  const [variantOptions, setVariantOptions] = useState<ProductWithId[]>([]);
+  const [variantInputs, setVariantInputs] = useState<Record<number, { quantity: string; unit_cost: string; unit_sell_price: string }>>({});
+  const [variantBulkQty, setVariantBulkQty] = useState('');
   const [variantBulkCost, setVariantBulkCost] = useState('');
+  const [variantBulkSell, setVariantBulkSell] = useState('');
 
 
   // Form states - Payment
@@ -155,6 +192,7 @@ export default function VendorPaymentPage() {
     loadVendors();
     loadStores();
     loadProducts();
+    loadCategories();
     loadPaymentMethods();
   }, []);
 
@@ -175,6 +213,187 @@ export default function VendorPaymentPage() {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 3000);
   };
+
+
+  // Image URL normalizer (used for showing thumbnails in PO)
+  const getBaseUrl = () => {
+    const api = process.env.NEXT_PUBLIC_API_URL || '';
+    return api ? api.replace(/\/api\/?$/, '') : '';
+  };
+
+  const normalizeImageUrl = (url?: string | null) => {
+    if (!url) return '/placeholder-image.jpg';
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
+
+    const baseUrl = getBaseUrl();
+
+    if (url.startsWith('/storage')) return `${baseUrl}${url}`;
+    if (url.startsWith('/')) return url;
+
+    if (!baseUrl) return `/storage/product-images/${url}`;
+    return `${baseUrl}/storage/product-images/${url}`;
+  };
+
+  const getProductPrimaryImage = (p?: Product | null) => {
+    if (!p) return '/placeholder-image.jpg';
+    const imgs: any[] = Array.isArray((p as any).images) ? (p as any).images : [];
+    if (imgs.length === 0) return '/placeholder-image.jpg';
+
+    const primary = imgs.find((i: any) => i?.is_primary) || imgs.find((i: any) => i?.is_active) || imgs[0];
+    return normalizeImageUrl(primary?.url || primary?.image_url || primary?.image_path || primary?.image);
+  };
+
+
+
+  const getEmptyPurchaseForm = () => ({
+    vendor_id: '',
+    store_id: '',
+    expected_delivery_date: '',
+    tax_amount: '',
+    discount_amount: '',
+    shipping_cost: '',
+    notes: '',
+    terms_and_conditions: '',
+    items: [
+      {
+        product_id: '',
+        quantity_ordered: '',
+        unit_cost: '',
+        unit_sell_price: '',
+        tax_amount: '',
+        discount_amount: '',
+        notes: ''
+      }
+    ]
+  });
+
+  const poVendorProductOptions = useMemo(() => {
+    const vendorId = parseInt(purchaseForm.vendor_id || '0', 10);
+    if (vendorId && !poShowAllProducts) {
+      return products.filter((p) => p.vendor_id === vendorId);
+    }
+    return products;
+  }, [products, purchaseForm.vendor_id, poShowAllProducts]);
+
+  const poFinderProducts = useMemo(() => {
+    let list = poVendorProductOptions;
+
+    if (poCategoryId) {
+      const cid = parseInt(poCategoryId, 10);
+      if (cid) list = list.filter((p) => p.category_id === cid);
+    }
+
+    const q = poSearch.trim().toLowerCase();
+    if (q) {
+      list = list.filter((p) => {
+        const name = (p.name || '').toLowerCase();
+        const sku = (p.sku || '').toLowerCase();
+        return name.includes(q) || sku.includes(q);
+      });
+    }
+
+    return list.slice(0, 30);
+  }, [poVendorProductOptions, poSearch, poCategoryId]);
+
+  const addProductToPO = (productId: number) => {
+    if (!productId) return;
+
+    setPurchaseForm((prev: any) => {
+      const items = Array.isArray(prev.items) ? [...prev.items] : [];
+
+      const existingIdx = items.findIndex((it: any) => String(it.product_id) === String(productId));
+      if (existingIdx >= 0) {
+        const prevQty = parseInt(items[existingIdx]?.quantity_ordered || '0', 10) || 0;
+        items[existingIdx] = { ...items[existingIdx], quantity_ordered: String(Math.max(prevQty + 1, 1)) };
+        return { ...prev, items };
+      }
+
+      const blankIdx = items.findIndex((it: any) => !it.product_id);
+      const newItem = {
+        product_id: String(productId),
+        quantity_ordered: '1',
+        unit_cost: '',
+        unit_sell_price: '',
+        tax_amount: '',
+        discount_amount: '',
+        notes: ''
+      };
+
+      if (blankIdx >= 0) items[blankIdx] = { ...items[blankIdx], ...newItem };
+      else items.push(newItem);
+
+      return { ...prev, items };
+    });
+  };
+
+  const clearPoDraft = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(PO_DRAFT_KEY);
+    }
+    setPurchaseForm(getEmptyPurchaseForm());
+    setPoSearch('');
+    setPoCategoryId('');
+    setPoShowAllProducts(false);
+    setPoDraftRestored(false);
+    setPoDraftSavedAt(null);
+  };
+
+  // Restore PO draft when opening modal
+  useEffect(() => {
+    if (!showAddPurchase) return;
+    if (typeof window === 'undefined') return;
+
+    try {
+      const raw = window.localStorage.getItem(PO_DRAFT_KEY);
+      if (!raw) return;
+
+      const parsed = JSON.parse(raw || '{}');
+      const draft = parsed?.purchaseForm;
+      const savedAt = parsed?.savedAt;
+
+      const isEmptyNow = !purchaseForm.vendor_id &&
+        !purchaseForm.store_id &&
+        Array.isArray(purchaseForm.items) &&
+        purchaseForm.items.length === 1 &&
+        !purchaseForm.items[0]?.product_id;
+
+      if (draft && isEmptyNow) {
+        setPurchaseForm(draft);
+        setPoSearch(parsed?.poSearch || '');
+        setPoCategoryId(parsed?.poCategoryId || '');
+        setPoShowAllProducts(!!parsed?.poShowAllProducts);
+        setPoDraftRestored(true);
+        setPoDraftSavedAt(savedAt || null);
+      }
+    } catch (e) {
+      // ignore broken drafts
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddPurchase]);
+
+  // Auto-save PO draft while modal is open
+  useEffect(() => {
+    if (!showAddPurchase) return;
+    if (typeof window === 'undefined') return;
+
+    const t = window.setTimeout(() => {
+      try {
+        const payload = {
+          savedAt: new Date().toISOString(),
+          purchaseForm,
+          poSearch,
+          poCategoryId,
+          poShowAllProducts,
+        };
+        window.localStorage.setItem(PO_DRAFT_KEY, JSON.stringify(payload));
+      } catch (e) {
+        // ignore quota errors
+      }
+    }, 450);
+
+    return () => window.clearTimeout(t);
+  }, [showAddPurchase, purchaseForm, poSearch, poCategoryId, poShowAllProducts]);
+
 
   const getVariantGroupKey = (p: Product): string => {
     const sku = (p.sku || '').trim().toLowerCase();
@@ -222,30 +441,36 @@ export default function VendorPaymentPage() {
     const base = products.find((p) => p.id === pid);
     if (!base) return;
 
-    const options = getVariantGroupProducts(base)
-      .filter((x) => x?.id)
-      .sort((a, b) => {
-        const sa = extractTrailingSize(a);
-        const sb = extractTrailingSize(b);
-        if (sa === null && sb === null) return (a.name || '').localeCompare(b.name || '');
-        if (sa === null) return 1;
-        if (sb === null) return -1;
-        return sa - sb;
-      });
+    const options: ProductWithId[] = getVariantGroupProducts(base)
+  .filter((x): x is ProductWithId => typeof (x as any)?.id === 'number')
+  .sort((a, b) => {
+    const sa = extractTrailingSize(a);
+    const sb = extractTrailingSize(b);
+    if (sa === null && sb === null) return (a.name || '').localeCompare(b.name || '');
+    if (sa === null) return 1;
+    if (sb === null) return -1;
+    return sa - sb;
+  });
 
-    const inputs: Record<number, { quantity: string; unit_cost: string }> = {};
+
+    const inputs: Record<number, { quantity: string; unit_cost: string; unit_sell_price: string }> = {};
     options.forEach((opt) => {
       const existing = purchaseForm.items.find((it: any) => String(it.product_id) === String(opt.id));
       inputs[opt.id] = {
         quantity: existing?.quantity_ordered || '0',
         unit_cost: existing?.unit_cost || '',
+        unit_sell_price: existing?.unit_sell_price || '',
       };
     });
 
     setVariantBaseProduct(base);
     setVariantOptions(options);
     setVariantInputs(inputs);
+    setVariantBulkQty('');
+    setVariantBulkQty('');
     setVariantBulkCost('');
+    setVariantBulkSell('');
+    setVariantBulkSell('');
     setShowVariantPicker(true);
   };
 
@@ -256,7 +481,7 @@ export default function VendorPaymentPage() {
       const items = [...prev.items];
 
       variantOptions.forEach((opt) => {
-        const input = variantInputs[opt.id] || { quantity: '0', unit_cost: '' };
+        const input = variantInputs[opt.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' };
         const qty = parseInt(input.quantity || '0', 10) || 0;
         if (qty <= 0) return;
 
@@ -266,13 +491,14 @@ export default function VendorPaymentPage() {
             ...items[idx],
             quantity_ordered: String(qty),
             unit_cost: input.unit_cost || items[idx].unit_cost || '',
+            unit_sell_price: input.unit_sell_price || items[idx].unit_sell_price || '',
           };
         } else {
           items.push({
             product_id: String(opt.id),
             quantity_ordered: String(qty),
             unit_cost: input.unit_cost || '',
-            unit_sell_price: '',
+            unit_sell_price: input.unit_sell_price || '',
             tax_amount: '',
             discount_amount: '',
             notes: '',
@@ -329,6 +555,33 @@ export default function VendorPaymentPage() {
       showAlert('error', 'Failed to load warehouses');
     }
   };
+
+
+  // Load categories (for PO filters / quick-add)
+  const loadCategories = async () => {
+    try {
+      const res: any = await categoryService.getAll({ per_page: 10000, is_active: true });
+      const rootList: any[] = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+
+      const flat: Category[] = [];
+      const walk = (c: any) => {
+        if (!c) return;
+        flat.push(c as Category);
+        if (Array.isArray(c.children)) c.children.forEach(walk);
+      };
+      rootList.forEach(walk);
+
+      const unique = flat.filter((c, idx, arr) => arr.findIndex(x => x.id === c.id) === idx);
+      unique.sort((a, b) => (a.full_path || a.title).localeCompare(b.full_path || b.title));
+
+      setCategories(unique);
+    } catch (error: any) {
+      console.error('Failed to load categories:', error);
+      setCategories([]);
+      showAlert('error', error?.message || 'Failed to load categories');
+    }
+  };
+
 
   // Load products
   const loadProducts = async () => {
@@ -416,6 +669,42 @@ export default function VendorPaymentPage() {
     }
   };
 
+
+  const handleQuickCreateProduct = async () => {
+    if (!purchaseForm.vendor_id) {
+      showAlert('error', 'Please select a vendor first');
+      return;
+    }
+    if (!quickProductForm.name.trim() || !quickProductForm.sku.trim() || !quickProductForm.category_id) {
+      showAlert('error', 'Name, SKU and category are required');
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const created = await productService.create({
+        name: quickProductForm.name.trim(),
+        sku: quickProductForm.sku.trim(),
+        description: quickProductForm.description?.trim() || undefined,
+        category_id: parseInt(quickProductForm.category_id, 10),
+        vendor_id: parseInt(purchaseForm.vendor_id, 10),
+      });
+
+      await loadProducts();
+
+      addProductToPO(created.id);
+      setShowQuickProduct(false);
+      setQuickProductForm({ name: '', sku: '', category_id: '', description: '' });
+      showAlert('success', 'Product created and added to PO');
+    } catch (error: any) {
+      showAlert('error', error?.message || 'Failed to create product');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   // Handle Add Purchase Order
   const handleAddPurchase = async () => {
     if (!purchaseForm.vendor_id || !purchaseForm.store_id) {
@@ -453,26 +742,7 @@ export default function VendorPaymentPage() {
 
       await purchaseOrderService.create(purchaseData);
       
-      setPurchaseForm({
-        vendor_id: '',
-        store_id: '',
-        expected_delivery_date: '',
-        tax_amount: '',
-        discount_amount: '',
-        shipping_cost: '',
-        notes: '',
-        terms_and_conditions: '',
-        items: [{
-          product_id: '',
-          quantity_ordered: '',
-          unit_cost: '',
-          unit_sell_price: '',
-          tax_amount: '',
-          discount_amount: '',
-          notes: ''
-        }]
-      });
-      
+      clearPoDraft();
       setShowAddPurchase(false);
       showAlert('success', 'Purchase order created successfully');
       loadVendors();
@@ -524,12 +794,25 @@ export default function VendorPaymentPage() {
     
     try {
       const outstanding = await vendorPaymentService.getOutstanding(vendor.id);
-      setPurchaseOrders(outstanding.purchase_orders);
-      
-      const initialSelected: { [key: number]: { selected: boolean; amount: string } } = {};
-      outstanding.purchase_orders.forEach(po => {
-        initialSelected[po.id] = { selected: false, amount: '' };
-      });
+
+const pos: OutstandingPurchaseOrder[] = Array.isArray(outstanding?.purchase_orders)
+  ? outstanding.purchase_orders
+      .filter((po: any) => typeof po?.id === 'number')
+      .map((po: any) => ({
+        ...po,
+        // keep status as string (API is not strict)
+        status: po?.status,
+      }))
+  : [];
+
+setPurchaseOrders(pos);
+
+const initialSelected: { [key: number]: { selected: boolean; amount: string } } = {};
+pos.forEach((po) => {
+  initialSelected[po.id] = { selected: false, amount: '' };
+});
+setSelectedPOs(initialSelected);
+
       setSelectedPOs(initialSelected);
       
       setShowPayment(true);
@@ -1083,6 +1366,23 @@ export default function VendorPaymentPage() {
         size="lg"
       >
         <div className="space-y-4">
+          {poDraftRestored && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              <div className="flex flex-col">
+                <span className="font-semibold">Draft restored</span>
+                {poDraftSavedAt && (
+                  <span className="text-[11px] opacity-80">Saved: {new Date(poDraftSavedAt).toLocaleString()}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={clearPoDraft}
+                className="rounded-md bg-white px-2 py-1 text-amber-900 hover:bg-amber-100 border border-amber-200"
+              >
+                Clear
+              </button>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1132,6 +1432,120 @@ export default function VendorPaymentPage() {
             </div>
           </div>
 
+
+          <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700/30">
+            <div className="flex flex-col lg:flex-row lg:items-end gap-3">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Search & add products
+                </label>
+                <input
+                  value={poSearch}
+                  onChange={(e) => setPoSearch(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  placeholder="Type product name or SKU..."
+                />
+                <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  {purchaseForm.vendor_id && !poShowAllProducts
+                    ? 'Showing products for selected vendor (toggle “Show all” to see everything).'
+                    : 'Showing all products.'}
+                </p>
+              </div>
+
+              <div className="w-full lg:w-56">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Category
+                </label>
+                <select
+                  value={poCategoryId}
+                  onChange={(e) => setPoCategoryId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                >
+                  <option value="">All categories</option>
+                  {categories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.full_path || c.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 lg:pb-2">
+                <input
+                  type="checkbox"
+                  checked={poShowAllProducts}
+                  disabled={!purchaseForm.vendor_id}
+                  onChange={(e) => setPoShowAllProducts(e.target.checked)}
+                  className="w-4 h-4"
+                />
+                <span className="text-sm text-gray-700 dark:text-gray-300">Show all</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowQuickProduct(true)}
+                disabled={!purchaseForm.vendor_id}
+                className="inline-flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-gray-900 hover:bg-gray-700 text-white disabled:opacity-50"
+                title={!purchaseForm.vendor_id ? 'Select a vendor first' : 'Create a new product quickly'}
+              >
+                <Plus className="w-4 h-4" />
+                Quick add new product
+              </button>
+            </div>
+
+            <div className="mt-3 max-h-56 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 divide-y divide-gray-100 dark:divide-gray-700">
+              {poFinderProducts.map((p) => (
+                <div key={p.id} className="flex items-center gap-3 px-3 py-2">
+                  <img
+                    src={getProductPrimaryImage(p)}
+                    alt={p.name}
+                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700"
+                    onError={(e) => {
+                      (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
+                    }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                      {p.name}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                      {p.sku}{p.category?.title ? ` • ${p.category.title}` : ''}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => addProductToPO(p.id)}
+                    className="px-3 py-1.5 text-xs rounded-md bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    Add
+                  </button>
+
+                  {(() => {
+                    const count = getVariantGroupProducts(p).length;
+                    if (count <= 1) return null;
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => openVariantPicker(String(p.id))}
+                        className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 hover:bg-indigo-700 text-white"
+                        title="Add variations"
+                      >
+                        Variations ({count})
+                      </button>
+                    );
+                  })()}
+                </div>
+              ))}
+
+              {poFinderProducts.length === 0 && (
+                <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                  No products found. Try a different search or category.
+                </div>
+              )}
+            </div>
+          </div>
+
           <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Products</h3>
@@ -1157,10 +1571,34 @@ export default function VendorPaymentPage() {
                       className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     >
                       <option value="">Select product</option>
-                      {Array.isArray(products) && products.map(p => (
+                      {poVendorProductOptions.map(p => (
                         <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
                       ))}
                     </select>
+                    {item.product_id && (() => {
+                      const base = products.find((p) => p.id === parseInt(item.product_id, 10));
+                      if (!base) return null;
+                      return (
+                        <div className="mt-2 flex items-center gap-2">
+                          <img
+                            src={getProductPrimaryImage(base)}
+                            alt={base.name}
+                            className="w-9 h-9 rounded-md object-cover border border-gray-200 dark:border-gray-700"
+                            onError={(e) => {
+                              (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
+                            }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">
+                              {base.name}
+                            </div>
+                            <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                              {base.sku}{base.category?.title ? ` • ${base.category.title}` : ''}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
                           {item.product_id && (() => {
                             const base = products.find((p) => p.id === parseInt(item.product_id, 10));
                             const count = base ? getVariantGroupProducts(base).length : 0;
@@ -1351,10 +1789,24 @@ export default function VendorPaymentPage() {
       size="xl"
     >
       <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
-          <div className="flex-1">
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+          <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Set Unit Cost for all (optional)
+              Qty for all (optional)
+            </label>
+            <input
+              type="number"
+              value={variantBulkQty}
+              onChange={(e) => setVariantBulkQty(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              placeholder="e.g., 10"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Unit Cost for all (optional)
             </label>
             <input
               type="number"
@@ -1365,14 +1817,34 @@ export default function VendorPaymentPage() {
               placeholder="e.g., 1200"
             />
           </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+              Sell Price for all (optional)
+            </label>
+            <input
+              type="number"
+              step="0.01"
+              value={variantBulkSell}
+              onChange={(e) => setVariantBulkSell(e.target.value)}
+              className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+              placeholder="e.g., 1800"
+            />
+          </div>
+
           <button
             type="button"
             onClick={() => {
-              if (!variantBulkCost) return;
+              if (!variantBulkQty && !variantBulkCost && !variantBulkSell) return;
               setVariantInputs((prev) => {
-                const next = { ...prev };
+                const next: any = { ...prev };
                 variantOptions.forEach((v) => {
-                  next[v.id] = { ...(next[v.id] || { quantity: '0', unit_cost: '' }), unit_cost: variantBulkCost };
+                  next[v.id] = {
+                    ...(next[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }),
+                    quantity: variantBulkQty ? variantBulkQty : (next[v.id]?.quantity ?? '0'),
+                    unit_cost: variantBulkCost ? variantBulkCost : (next[v.id]?.unit_cost ?? ''),
+                    unit_sell_price: variantBulkSell ? variantBulkSell : (next[v.id]?.unit_sell_price ?? ''),
+                  };
                 });
                 return next;
               });
@@ -1380,6 +1852,32 @@ export default function VendorPaymentPage() {
             className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg"
           >
             Apply to all
+          </button>
+        </div>
+
+        <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+          <button
+            type="button"
+            onClick={() => {
+              setVariantInputs((prev) => {
+                const next: any = { ...prev };
+                variantOptions.forEach((v) => {
+                  next[v.id] = { ...(next[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), quantity: '1' };
+                });
+                return next;
+              });
+            }}
+            className="px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            Set all qty = 1
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setVariantInputs({})}
+            className="px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700"
+          >
+            Clear quantities/prices
           </button>
         </div>
 
@@ -1397,6 +1895,9 @@ export default function VendorPaymentPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
                     Unit Cost
                   </th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">
+                    Sell Price
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -1413,7 +1914,7 @@ export default function VendorPaymentPage() {
                         onChange={(e) =>
                           setVariantInputs((prev) => ({
                             ...prev,
-                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '' }), quantity: e.target.value },
+                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), quantity: e.target.value },
                           }))
                         }
                         className="w-28 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
@@ -1427,7 +1928,22 @@ export default function VendorPaymentPage() {
                         onChange={(e) =>
                           setVariantInputs((prev) => ({
                             ...prev,
-                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '' }), unit_cost: e.target.value },
+                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), unit_cost: e.target.value },
+                          }))
+                        }
+                        className="w-36 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    </td>
+
+                    <td className="px-4 py-3">
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={variantInputs[v.id]?.unit_sell_price ?? ''}
+                        onChange={(e) =>
+                          setVariantInputs((prev) => ({
+                            ...prev,
+                            [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), unit_sell_price: e.target.value },
                           }))
                         }
                         className="w-36 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
@@ -1437,7 +1953,7 @@ export default function VendorPaymentPage() {
                 ))}
                 {variantOptions.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="px-4 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
+                    <td colSpan={4} className="px-4 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
                       No variations found for this product.
                     </td>
                   </tr>
