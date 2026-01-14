@@ -231,120 +231,125 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       // Use singleton connection
       await ensureQZConnection();
 
-      // ✅ Create config with the default printer
+      // ✅ IMPORTANT: Explicit label size prevents "1 label then blanks" and mis-sizing.
+      // Your label is roughly 2.5cm × 3.9cm (25mm × 39mm). If your printer treats
+      // width/height swapped, swap width/height below.
       const config = qz.configs.create(defaultPrinter, {
         units: 'mm',
-        size: { width: 35, height: 23 },
-        margins: 0,
+        size: { width: 39, height: 25 },
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
         rasterize: true,
         scaleContent: false,
       });
-console.log(`Using printer: ${defaultPrinter}`);
+      console.log(`Using printer: ${defaultPrinter}`);
 
-      const data: any[] = [];
+      // ✅ IMPORTANT: Send as ONE HTML job with page-breaks.
+      // Some label printers advance extra labels between separate pages/jobs.
+      // We also embed the barcode value per SVG via data-barcode for reliable rendering.
+      const labels: string[] = [];
       selected.forEach((code) => {
         const qty = quantities[code] || 1;
         for (let i = 0; i < qty; i++) {
-          data.push({
-            type: "html",
-            format: "plain",
-            data: `
-              <html>
-                <head>
-                  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-                  <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    @page { 
-                      size: 35mm 23mm;
-                      margin: 0;
-                    }
-                    body { 
-                      width: 35mm;
-                      height: 23mm;
-                      margin: 0;
-                      padding: 0.5mm 0.5mm;
-                      font-family: Arial, sans-serif;
-                      display: flex;
-                      flex-direction: column;
-                      justify-content: space-between;
-                      align-items: center;
-                    }
-                    .barcode-container {
-
-                    .brand {
-                      font-size: 9pt;
-                      font-weight: 700;
-                      color: #000;
-                      margin-bottom: 0.5mm;
-                      line-height: 1;
-                      text-transform: lowercase;
-                    }
-
-                      transform: rotate(180deg);
-                      transform-origin: center;
- 
-                      width: 100%;
-                      text-align: center;
-                      display: flex;
-                      flex-direction: column;
-                      align-items: center;
-                      justify-content: center;
-                    }
-                    .product-name { 
-                      font-weight: bold; 
-                      font-size: 7pt;
-                      line-height: 1;
-                      margin-bottom: 0.5mm;
-                      max-width: 38mm;
-                      overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
-                    }
-                    .price { 
-                      font-size: 7.5pt;
-                      font-weight: bold;
-                      color: #000;
-                      margin-bottom: 0.5mm;
-                      line-height: 1;
-                    }
-                    svg { 
-                      max-width: 38mm;
-                      height: auto;
-                      display: block;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <div class="barcode-container">
-  <div class="brand">Deshio</div>
-  <div class="product-name">${(product?.name || 'Product').substring(0, 25)}</div>
-  <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
-  <div class="price">Price (Vat Inclusive): ৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
-</div>
-                  <script>
-                    JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
-                      format: "CODE128",
-                      width: 1.1,
-                      height: 38,
-                      displayValue: true,
-                      fontSize: 8,
-                      margin: 0,
-                      marginTop: 1,
-                      marginBottom: 1,
-                      textMargin: 1
-                    });
-                  </script>
-                </body>
-              </html>
-            `,
-          });
+          const safeId = `${code}`.replace(/[^a-zA-Z0-9]/g, '') + `-${i}`;
+          const productName = (product?.name || 'Product').substring(0, 28);
+          const priceText = `৳${batch.sellingPrice.toLocaleString('en-BD')}`;
+          labels.push(`
+            <div class="label">
+              <div class="brand">deshio</div>
+              <div class="product-name">${productName}</div>
+              <svg class="barcode" id="barcode-${safeId}" data-barcode="${String(code).replace(/"/g, '&quot;')}"></svg>
+              <div class="price">Price (Vat Inclusive): <span>${priceText}</span></div>
+            </div>
+          `);
         }
       });
+
+      const html = `
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              @page { size: 39mm 25mm; margin: 0; }
+              /* IMPORTANT: don't force body height when printing multiple labels */
+              html, body { width: 39mm; margin: 0; padding: 0; }
+
+              /* Each label is one page */
+              .label {
+                width: 39mm;
+                height: 25mm;
+                padding: 1mm;
+                font-family: Arial, sans-serif;
+                color: #000;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+                align-items: center;
+                gap: 1mm;
+                page-break-after: always;
+                overflow: hidden;
+              }
+
+              .brand { font-size: 7pt; font-weight: 700; letter-spacing: 0.4px; text-transform: lowercase; }
+              .product-name {
+                font-size: 6.5pt;
+                font-weight: 600;
+                line-height: 1.05;
+                max-width: 37mm;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                text-align: center;
+              }
+
+              /* Ensure SVG fits label width */
+              svg.barcode { width: 37mm; height: 11mm; display: block; }
+
+              .price { font-size: 6.5pt; font-weight: 600; line-height: 1; text-align: center; }
+              .price span { font-weight: 800; }
+            </style>
+          </head>
+          <body>
+            ${labels.join('\n')}
+          </body>
+        </html>
+      `;
+
+      // Render barcodes in one pass using the embedded data-barcode attribute.
+      const htmlWithBarcodes = html.replace(
+        '</body>',
+        `
+          <script>
+            (function(){
+              try {
+                document.querySelectorAll('svg.barcode').forEach(function(svg){
+                  const val = svg.getAttribute('data-barcode') || '';
+                  if (!val) return;
+                  JsBarcode('#' + svg.id, String(val), {
+                    format: 'CODE128',
+                    width: 1.0,
+                    height: 34,
+                    displayValue: true,
+                    fontSize: 10,
+                    textMargin: 0,
+                    margin: 0
+                  });
+                });
+              } catch(e) {}
+            })();
+          </script>
+        </body>`
+      );
+
+      const data: any[] = [{ type: 'html', format: 'plain', data: htmlWithBarcodes }];
 
       console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
       
       await qz.print(config, data);
-      alert(`✅ ${data.length} barcode(s) sent to printer "${defaultPrinter}" successfully!`);
+      // data.length is 1 now; use labels count for UX
+      const labelsCount = selected.reduce((sum, c) => sum + (quantities[c] || 1), 0);
+      alert(`✅ ${labelsCount} label(s) sent to printer "${defaultPrinter}" successfully!`);
       setIsModalOpen(false);
     } catch (err: any) {
       console.error("❌ Print error:", err);

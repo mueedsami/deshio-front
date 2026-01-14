@@ -499,87 +499,88 @@ export default function LookupPage() {
       const printer = await getDefaultPrinter();
       if (!printer) throw new Error('No default printer found. Set a default printer and try again.');
 
+      // Explicit size prevents mis-sizing and blank-label gaps on many thermal printers
       const config = qz.configs.create(printer, {
         units: 'mm',
         size: { width: 39, height: 25 },
-        margins: 0,
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
         rasterize: true,
         scaleContent: false,
       });
-const safeId = params.barcode.replace(/[^a-zA-Z0-9]/g, '');
+
+      const safeId = params.barcode.replace(/[^a-zA-Z0-9]/g, '');
       const productName = (params.productName || 'Product').substring(0, 25);
 
       const priceNum = safeNum(params.price);
       const showPrice = Number.isFinite(priceNum) && priceNum > 0;
       const priceText = showPrice ? `৳${Number(priceNum).toLocaleString('en-BD')}` : '';
 
-      const data: any[] = [
-        {
-          type: 'html',
-          format: 'plain',
-          data: `
-            <html>
-              <head>
-                <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-                <style>
+      const html = `
+        <html>
+          <head>
+            <meta charset="utf-8" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              @page { size: 39mm 25mm; margin: 0; }
+              html, body { width: 39mm; height: 25mm; margin: 0; padding: 0; }
 
-                    .brand {
-                      font-size: 9pt;
-                      font-weight: 700;
-                      color: #000;
-                      margin-bottom: 0.5mm;
-                      line-height: 1;
-                      text-transform: lowercase;
-                    }
+              .label {
+                width: 39mm;
+                height: 25mm;
+                padding: 1mm;
+                font-family: Arial, sans-serif;
+                color: #000;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+                align-items: center;
+                gap: 1mm;
+                overflow: hidden;
+              }
 
-                  * { margin: 0; padding: 0; box-sizing: border-box; }
-                  @page { size: 39mm 25mm; margin: 0; }
-                  body {
-                    width: 39mm; height: 25mm; margin: 0; padding: 0.5mm 0.5mm;
-                    font-family: Arial, sans-serif; display: flex; flex-direction: column;
-                    justify-content: space-between; align-items: center;
-                  }
-                  .barcode-container {
-                      transform: rotate(180deg);
-                      transform-origin: center;
+              .brand { font-size: 7pt; font-weight: 700; letter-spacing: 0.4px; text-transform: lowercase; }
+              .product-name {
+                font-size: 6.5pt;
+                font-weight: 600;
+                line-height: 1.05;
+                max-width: 37mm;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                text-align: center;
+              }
+              svg.barcode { width: 37mm; height: 11mm; display: block; }
+              .price { font-size: 6.5pt; font-weight: 600; line-height: 1; text-align: center; }
+              .price span { font-weight: 800; }
+            </style>
+          </head>
+          <body>
+            <div class="label">
+              <div class="brand">deshio</div>
+              <div class="product-name">${productName}</div>
+              <svg class="barcode" id="barcode-${safeId}"></svg>
+              ${showPrice ? `<div class="price">Price (Vat Inclusive): <span>${priceText}</span></div>` : ``}
+            </div>
 
-                    width: 100%; text-align: center; display:flex; flex-direction:column;
-                    align-items:center; justify-content:center;
-                  }
-                  .product-name {
-                    font-weight: bold; font-size: 7pt; line-height: 1; margin-bottom: 0.5mm;
-                    max-width: 38mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-                  }
-                  .price { 
-                      font-size: 7.5pt; font-weight: bold; color: #000; margin-bottom: 0.5mm; line-height: 1; }
-                  svg { max-width: 38mm; height: auto; display: block; }
-                </style>
-              </head>
-              <body>
-                <div class="barcode-container">
-                  <div class="brand">deshio</div>
-<div class="product-name">${productName}</div>
-                  ${showPrice ? `<div class="price">Price (Vat Inclusive): ${priceText}</div>` : ``}
-                  <svg id="barcode-${safeId}"></svg>
-                </div>
-                <script>
-                  JsBarcode("#barcode-${safeId}", "${params.barcode}", {
-                    format: "CODE128",
-                    width: 1.3,
-                    height: 30,
-                    displayValue: true,
-                    fontSize: 8,
-                    margin: 0,
-                    marginTop: 1,
-                    marginBottom: 1,
-                    textMargin: 1
-                  });
-                </script>
-              </body>
-            </html>
-          `,
-        },
-      ];
+            <script>
+              try {
+                JsBarcode("#barcode-${safeId}", "${params.barcode}", {
+                  format: "CODE128",
+                  width: 1.2,
+                  height: 34,
+                  displayValue: true,
+                  fontSize: 10,
+                  textMargin: 0,
+                  margin: 0
+                });
+              } catch (e) {}
+            </script>
+          </body>
+        </html>
+      `;
+
+      const data: any[] = [{ type: 'html', format: 'plain', data: html }];
 
       await qz.print(config, data);
     } catch (err: any) {
