@@ -231,125 +231,102 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       // Use singleton connection
       await ensureQZConnection();
 
-      // ✅ IMPORTANT: Explicit label size prevents "1 label then blanks" and mis-sizing.
-      // Your label is roughly 2.5cm × 3.9cm (25mm × 39mm). If your printer treats
-      // width/height swapped, swap width/height below.
-      const config = qz.configs.create(defaultPrinter, {
-        units: 'mm',
-        size: { width: 39, height: 25 },
-        margins: { top: 0, right: 0, bottom: 0, left: 0 },
-        rasterize: true,
-        scaleContent: false,
-      });
+      // ✅ Create config with the default printer
+      const config = qz.configs.create(defaultPrinter);
       console.log(`Using printer: ${defaultPrinter}`);
 
-      // ✅ IMPORTANT: Send as ONE HTML job with page-breaks.
-      // Some label printers advance extra labels between separate pages/jobs.
-      // We also embed the barcode value per SVG via data-barcode for reliable rendering.
-      const labels: string[] = [];
+      const data: any[] = [];
       selected.forEach((code) => {
         const qty = quantities[code] || 1;
         for (let i = 0; i < qty; i++) {
-          const safeId = `${code}`.replace(/[^a-zA-Z0-9]/g, '') + `-${i}`;
-          const productName = (product?.name || 'Product').substring(0, 28);
-          const priceText = `৳${batch.sellingPrice.toLocaleString('en-BD')}`;
-          labels.push(`
-            <div class="label">
-              <div class="brand">deshio</div>
-              <div class="product-name">${productName}</div>
-              <svg class="barcode" id="barcode-${safeId}" data-barcode="${String(code).replace(/"/g, '&quot;')}"></svg>
-              <div class="price">Price (Vat Inclusive): <span>${priceText}</span></div>
-            </div>
-          `);
+          data.push({
+            type: "html",
+            format: "plain",
+            data: `
+              <html>
+                <head>
+                  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+                  <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    @page { 
+                      size: 39mm 25mm;
+                      margin: 0;
+                    }
+                    body { 
+                      width: 39mm;
+                      height: 25mm;
+                      margin: 0;
+                      padding: 0.5mm 1mm;
+                      font-family: Arial, sans-serif;
+                      display: flex;
+                      flex-direction: column;
+                      justify-content: center;
+                      align-items: center;
+                    }
+                    .container { 
+                      width: 100%;
+                      display: flex;
+                      flex-direction: column;
+                      align-items: center;
+                      justify-content: center;
+                    }
+                    .product-name { 
+                      font-weight: bold; 
+                      font-size: 6pt;
+                      line-height: 1;
+                      margin-bottom: 0.3mm;
+                      max-width: 37mm;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    }
+                    .price { 
+                      font-size: 8pt;
+                      font-weight: bold;
+                      color: #000;
+                      margin-bottom: 0.3mm;
+                      line-height: 1;
+                    }
+                    svg { 
+                      max-width: 37mm;
+                      height: auto;
+                      display: block;
+                    }
+                    .barcode-text {
+                      font-size: 7pt;
+                      margin-top: 0.2mm;
+                    }
+                  </style>
+                </head>
+                <body>
+                  <div class="container">
+                    <div class="product-name">${(product?.name || 'Product').substring(0, 22)}</div>
+                    <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
+                    <div class="barcode-text">${code}</div>
+                    <div class="price">৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
+                  </div>
+                  <script>
+                    JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
+                      format: "CODE128",
+                      width: 1.2,
+                      height: 25,
+                      displayValue: false,
+                      margin: 0,
+                      marginTop: 0,
+                      marginBottom: 0
+                    });
+                  </script>
+                </body>
+              </html>
+            `,
+          });
         }
       });
-
-      const html = `
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-            <style>
-              * { margin: 0; padding: 0; box-sizing: border-box; }
-              @page { size: 39mm 25mm; margin: 0; }
-              /* IMPORTANT: don't force body height when printing multiple labels */
-              html, body { width: 39mm; margin: 0; padding: 0; }
-
-              /* Each label is one page */
-              .label {
-                width: 39mm;
-                height: 25mm;
-                padding: 1mm;
-                font-family: Arial, sans-serif;
-                color: #000;
-                display: flex;
-                flex-direction: column;
-                justify-content: flex-start;
-                align-items: center;
-                gap: 1mm;
-                page-break-after: always;
-                overflow: hidden;
-              }
-
-              .brand { font-size: 7pt; font-weight: 700; letter-spacing: 0.4px; text-transform: lowercase; }
-              .product-name {
-                font-size: 6.5pt;
-                font-weight: 600;
-                line-height: 1.05;
-                max-width: 37mm;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                text-align: center;
-              }
-
-              /* Ensure SVG fits label width */
-              svg.barcode { width: 37mm; height: 11mm; display: block; }
-
-              .price { font-size: 6.5pt; font-weight: 600; line-height: 1; text-align: center; }
-              .price span { font-weight: 800; }
-            </style>
-          </head>
-          <body>
-            ${labels.join('\n')}
-          </body>
-        </html>
-      `;
-
-      // Render barcodes in one pass using the embedded data-barcode attribute.
-      const htmlWithBarcodes = html.replace(
-        '</body>',
-        `
-          <script>
-            (function(){
-              try {
-                document.querySelectorAll('svg.barcode').forEach(function(svg){
-                  const val = svg.getAttribute('data-barcode') || '';
-                  if (!val) return;
-                  JsBarcode('#' + svg.id, String(val), {
-                    format: 'CODE128',
-                    width: 1.0,
-                    height: 34,
-                    displayValue: true,
-                    fontSize: 10,
-                    textMargin: 0,
-                    margin: 0
-                  });
-                });
-              } catch(e) {}
-            })();
-          </script>
-        </body>`
-      );
-
-      const data: any[] = [{ type: 'html', format: 'plain', data: htmlWithBarcodes }];
 
       console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
       
       await qz.print(config, data);
-      // data.length is 1 now; use labels count for UX
-      const labelsCount = selected.reduce((sum, c) => sum + (quantities[c] || 1), 0);
-      alert(`✅ ${labelsCount} label(s) sent to printer "${defaultPrinter}" successfully!`);
+      alert(`✅ ${data.length} barcode(s) sent to printer "${defaultPrinter}" successfully!`);
       setIsModalOpen(false);
     } catch (err: any) {
       console.error("❌ Print error:", err);
