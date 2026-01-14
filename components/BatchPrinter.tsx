@@ -20,10 +20,9 @@ interface Batch {
 interface BatchPrinterProps {
   batch: Batch;
   product?: Product;
-  barcodes?: string[]; // Accept pre-fetched barcodes from parent
+  barcodes?: string[];
 }
 
-// Global QZ connection state to prevent multiple connection attempts
 let qzConnectionPromise: Promise<void> | null = null;
 let qzConnected = false;
 
@@ -33,17 +32,14 @@ async function ensureQZConnection() {
     throw new Error("QZ Tray not available");
   }
 
-  // If already connected, return immediately
   if (qzConnected && await qz.websocket.isActive()) {
     return;
   }
 
-  // If connection is in progress, wait for it
   if (qzConnectionPromise) {
     return qzConnectionPromise;
   }
 
-  // Start new connection
   qzConnectionPromise = (async () => {
     try {
       if (!(await qz.websocket.isActive())) {
@@ -101,24 +97,19 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     return () => clearInterval(interval);
   }, []);
 
-  // Update barcodes if external barcodes change
   useEffect(() => {
     if (externalBarcodes && externalBarcodes.length > 0) {
       setBarcodes(externalBarcodes);
     }
   }, [externalBarcodes]);
 
-  // Don't load printer automatically - only when user clicks print
-
   const loadDefaultPrinter = async () => {
     try {
       const qz = (window as any).qz;
       if (!qz) return;
 
-      // Use singleton connection
       await ensureQZConnection();
 
-      // Get default printer
       try {
         const printer = await qz.printers.getDefault();
         console.log("✅ Default printer loaded:", printer);
@@ -127,7 +118,6 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       } catch (err: any) {
         console.error("❌ No default printer found:", err);
         
-        // Try to get first available printer as fallback
         try {
           const printers = await qz.printers.find();
           if (printers && printers.length > 0) {
@@ -148,9 +138,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     }
   };
 
-  // Fetch barcodes from backend when modal opens (only if not provided externally)
   const fetchBarcodes = async () => {
-    // If barcodes are already provided from parent, don't fetch
     if (externalBarcodes && externalBarcodes.length > 0) {
       setBarcodes(externalBarcodes);
       return;
@@ -165,11 +153,9 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     setBarcodeError(null);
 
     try {
-      // Use batch-specific endpoint instead of product endpoint
       const response = await barcodeTrackingService.getBatchBarcodes(batch.id);
       
       if (response.success && response.data.barcodes) {
-        // Extract active barcode strings from the response
         const barcodeCodes = response.data.barcodes
           .filter((b) => b.is_active)
           .map((b) => b.barcode);
@@ -194,7 +180,6 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
   const handleOpenModal = async () => {
     setIsModalOpen(true);
     
-    // Load printer when user actually wants to print
     if (!defaultPrinter && isQzLoaded) {
       await loadDefaultPrinter();
     }
@@ -215,23 +200,19 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       return;
     }
 
-    // Load printer if not already loaded
     if (!defaultPrinter) {
       console.log("Loading printer before print...");
       await loadDefaultPrinter();
     }
 
-    // Check if printer is available after loading
     if (!defaultPrinter) {
       alert("No printer available. Please check your printer settings and try again.");
       return;
     }
 
     try {
-      // Use singleton connection
       await ensureQZConnection();
 
-      // ✅ Create config with the default printer
       const config = qz.configs.create(defaultPrinter);
       console.log(`Using printer: ${defaultPrinter}`);
 
@@ -239,82 +220,120 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       selected.forEach((code) => {
         const qty = quantities[code] || 1;
         for (let i = 0; i < qty; i++) {
+          const productName = (product?.name || 'Product').substring(0, 20);
+          const price = batch.sellingPrice.toLocaleString('en-BD');
+          
           data.push({
             type: "html",
             format: "plain",
             data: `
+              <!DOCTYPE html>
               <html>
                 <head>
+                  <meta charset="UTF-8">
                   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                   <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    * { 
+                      margin: 0; 
+                      padding: 0; 
+                      box-sizing: border-box; 
+                    }
+                    
                     @page { 
-                      size: 39mm 25mm;
+                      size: 38mm 24mm;
                       margin: 0;
                     }
-                    body { 
-                      width: 39mm;
-                      height: 25mm;
+                    
+                    html, body { 
+                      width: 38mm;
+                      height: 24mm;
                       margin: 0;
-                      padding: 0.5mm 1mm;
-                      font-family: Arial, sans-serif;
-                      display: flex;
-                      flex-direction: column;
-                      justify-content: center;
-                      align-items: center;
-                    }
-                    .container { 
-                      width: 100%;
-                      display: flex;
-                      flex-direction: column;
-                      align-items: center;
-                      justify-content: center;
-                    }
-                    .product-name { 
-                      font-weight: bold; 
-                      font-size: 6pt;
-                      line-height: 1;
-                      margin-bottom: 0.3mm;
-                      max-width: 37mm;
+                      padding: 0;
                       overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
                     }
-                    .price { 
-                      font-size: 8pt;
+                    
+                    body {
+                      font-family: Arial, sans-serif;
+                      background: white;
+                      text-align: center;
+                      display: flex;
+                      align-items: center;
+                      justify-content: center;
+                    }
+                    
+                    .label-container {
+                      width: 100%;
+                      padding: 1mm 1mm;
+                      text-align: center;
+                    }
+                    
+                    .product-name { 
+                      font-size: 5.5pt;
                       font-weight: bold;
-                      color: #000;
-                      margin-bottom: 0.3mm;
-                      line-height: 1;
+                      margin: 0 auto 0.8mm auto;
+                      text-align: center;
+                      width: 100%;
+                      line-height: 1.1;
                     }
+                    
+                    .barcode-section {
+                      width: 100%;
+                      margin: 0 auto;
+                      text-align: center;
+                    }
+                    
                     svg { 
-                      max-width: 37mm;
+                      width: 100%;
+                      max-width: 35mm;
                       height: auto;
                       display: block;
+                      margin: 0 auto;
                     }
-                    .barcode-text {
-                      font-size: 7pt;
-                      margin-top: 0.2mm;
+                    
+                    .barcode-number {
+                      font-size: 6.5pt;
+                      margin: 0.5mm auto;
+                      text-align: center;
+                      width: 100%;
+                      letter-spacing: 0.3pt;
+                    }
+                    
+                    .price { 
+                      font-size: 8.5pt;
+                      font-weight: bold;
+                      margin: 0.8mm auto 0 auto;
+                      text-align: center;
+                      width: 100%;
                     }
                   </style>
                 </head>
                 <body>
-                  <div class="container">
-                    <div class="product-name">${(product?.name || 'Product').substring(0, 22)}</div>
-                    <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
-                    <div class="barcode-text">${code}</div>
-                    <div class="price">৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
+                  <div class="label-container">
+                    <div class="product-name">${productName}</div>
+                    <div class="barcode-section">
+                      <svg id="barcode${i}"></svg>
+                    </div>
+                    <div class="barcode-number">${code}</div>
+                    <div class="price">৳ ${price}</div>
                   </div>
                   <script>
-                    JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
-                      format: "CODE128",
-                      width: 1.2,
-                      height: 25,
-                      displayValue: false,
-                      margin: 0,
-                      marginTop: 0,
-                      marginBottom: 0
-                    });
+                    window.onload = function() {
+                      try {
+                        JsBarcode("#barcode${i}", "${code}", {
+                          format: "CODE128",
+                          width: 1.3,
+                          height: 24,
+                          displayValue: false,
+                          margin: 0,
+                          marginTop: 0,
+                          marginBottom: 0,
+                          marginLeft: 0,
+                          marginRight: 0
+                        });
+                      } catch(e) {
+                        console.error('Barcode generation error:', e);
+                      }
+                    };
                   </script>
                 </body>
               </html>
