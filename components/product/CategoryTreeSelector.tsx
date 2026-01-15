@@ -9,6 +9,18 @@ interface CategoryTreeSelectorProps {
   selectedCategoryId: string;
   onSelect: (categoryId: string) => void;
   disabled?: boolean;
+  /** Optional label (default: "Category") */
+  label?: string;
+  /** Whether to show required asterisk on label (default: true) */
+  required?: boolean;
+  /** Placeholder text shown when no category is selected (default: "Select category") */
+  placeholder?: string;
+  /** Whether to show the helper line "Selected: ..." (default: true) */
+  showSelectedInfo?: boolean;
+  /** Whether to show the clear option at top of dropdown (default: true) */
+  allowClear?: boolean;
+  /** Text for the clear option (default: "Clear selection") */
+  clearText?: string;
 }
 
 interface TreeNodeProps {
@@ -80,6 +92,12 @@ export default function CategoryTreeSelector({
   selectedCategoryId,
   onSelect,
   disabled = false,
+  label = 'Category',
+  required = true,
+  placeholder = 'Select category',
+  showSelectedInfo = true,
+  allowClear = true,
+  clearText = 'Clear selection',
 }: CategoryTreeSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -94,15 +112,15 @@ export default function CategoryTreeSelector({
       return null;
     };
 
-    if (!selectedCategoryId) return 'Select category';
+    if (!selectedCategoryId) return placeholder;
     const found = findCategory(categories, selectedCategoryId);
-    return found ? found.title : 'Select category';
+    return found ? found.title : placeholder;
   };
 
   return (
     <div className="relative">
       <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-        Category <span className="text-red-500">*</span>
+        {label}{required ? <span className="text-red-500"> *</span> : null}
       </label>
       
       <button
@@ -127,15 +145,17 @@ export default function CategoryTreeSelector({
           />
           <div className="absolute z-20 mt-2 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg shadow-lg max-h-80 overflow-y-auto">
             <div className="p-2">
-              <button
-                onClick={() => {
-                  onSelect('');
-                  setIsOpen(false);
-                }}
-                className="w-full px-3 py-2 text-left text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-              >
-                Clear selection
-              </button>
+              {allowClear && (
+                <button
+                  onClick={() => {
+                    onSelect('');
+                    setIsOpen(false);
+                  }}
+                  className="w-full px-3 py-2 text-left text-sm text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                >
+                  {clearText}
+                </button>
+              )}
               {categories.map((category) => (
                 <TreeNode
                   key={category.id}
@@ -153,7 +173,7 @@ export default function CategoryTreeSelector({
         </>
       )}
 
-      {selectedCategoryId && (
+      {showSelectedInfo && selectedCategoryId && (
         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
           Selected: {getSelectedCategoryName()}
         </p>

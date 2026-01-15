@@ -22,7 +22,8 @@ import purchaseOrderService, { PurchaseOrder, CreatePurchaseOrderData } from '@/
 import { vendorPaymentService, CreatePaymentRequest, PaymentMethod } from '@/services/vendorPaymentService';
 import storeService, { Store } from '@/services/storeService';
 import productService, { Product } from '@/services/productService';
-import categoryService, { Category } from '@/services/categoryService';
+import categoryService, { Category, CategoryTree } from '@/services/categoryService';
+import CategoryTreeSelector from '@/components/product/CategoryTreeSelector';
 
 /**
  * Product.id sometimes ends up optional-ish in runtime indexing flows,
@@ -109,11 +110,15 @@ export default function VendorPaymentPage() {
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // ✅ Image preview (tap product image to zoom) — same UX as Orders > View Details
+  const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
+
   // Data states
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [categoryTree, setCategoryTree] = useState<CategoryTree[]>([]);
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<OutstandingPurchaseOrder[]>([]);
   const [vendorPayments, setVendorPayments] = useState<any[]>([]);
@@ -295,12 +300,49 @@ export default function VendorPaymentPage() {
     return products;
   }, [products, purchaseForm.vendor_id, poShowAllProducts]);
 
+  // If a parent category is chosen, include all child categories (tree-based filtering)
+  const poCategoryIdSet = useMemo(() => {
+    const cid = parseInt(poCategoryId || '0', 10);
+    if (!cid) return null;
+
+    const ids = new Set<number>();
+    const collectAll = (node: any) => {
+      if (!node) return;
+      if (typeof node.id === 'number') ids.add(node.id);
+      const children = node.children || node.all_children || [];
+      if (Array.isArray(children)) children.forEach(collectAll);
+    };
+    const findAndCollect = (nodes: any[]): boolean => {
+      for (const n of nodes) {
+        if (!n) continue;
+        if (n.id === cid) {
+          collectAll(n);
+          return true;
+        }
+        const children = n.children || n.all_children || [];
+        if (Array.isArray(children) && findAndCollect(children)) return true;
+      }
+      return false;
+    };
+
+    if (Array.isArray(categoryTree) && categoryTree.length > 0) {
+      findAndCollect(categoryTree as any);
+    }
+
+    // Fallback: if tree wasn't loaded for any reason, keep exact match
+    if (ids.size === 0) ids.add(cid);
+    return ids;
+  }, [poCategoryId, categoryTree]);
+
   const poFinderProducts = useMemo(() => {
     let list = poVendorProductOptions;
 
-    if (poCategoryId) {
-      const cid = parseInt(poCategoryId, 10);
-      if (cid) list = list.filter((p) => (p as any).category_id === cid);
+    if (poCategoryIdSet && poCategoryIdSet.size > 0) {
+      list = list.filter((p: any) => {
+        const raw = p?.category_id ?? p?.category?.id;
+        const pid = typeof raw === 'string' ? parseInt(raw, 10) : raw;
+        return typeof pid === 'number' && poCategoryIdSet.has(pid);
+      });
     }
 
     const q = poSearch.trim().toLowerCase();
@@ -313,7 +355,7 @@ export default function VendorPaymentPage() {
     }
 
     return list.slice(0, 30);
-  }, [poVendorProductOptions, poSearch, poCategoryId]);
+  }, [poVendorProductOptions, poSearch, poCategoryIdSet]);
 
   const addProductToPO = (productId: number) => {
     if (!productId) return;
@@ -577,8 +619,12 @@ export default function VendorPaymentPage() {
   // Load categories (for PO filters / quick-add)
   const loadCategories = async () => {
     try {
-      const res: any = await categoryService.getAll({ per_page: 1000, is_active: true });
-      const rootList: any[] = Array.isArray(res) ? res : Array.isArray(res?.data) ? res.data : [];
+      // Prefer tree for nicer selection UI (same as Product Add page)
+      const tree = await categoryService.getTree(true);
+      setCategoryTree(Array.isArray(tree) ? tree : []);
+
+      // Also keep a flat list for legacy selects (e.g. quick add product)
+      const rootList: any[] = Array.isArray(tree) ? tree : [];
 
       const flat: Category[] = [];
       const walk = (c: any) => {
@@ -595,6 +641,7 @@ export default function VendorPaymentPage() {
     } catch (error: any) {
       console.error('Failed to load categories:', error);
       setCategories([]);
+      setCategoryTree([]);
       showAlert('error', error?.message || 'Failed to load categories');
     }
   };
@@ -990,6 +1037,41 @@ export default function VendorPaymentPage() {
 
         {alert && <Alert type={alert.type} message={alert.message} />}
 
+        {/* 🖼️ Product image preview (same UX as Orders > View Details) */}
+        {imagePreview && (
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-[999] p-4"
+            onClick={() => setImagePreview(null)}
+          >
+            <div
+              className="bg-white dark:bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-200 dark:border-gray-800 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-black dark:text-white truncate">{imagePreview.name}</p>
+                <button
+                  onClick={() => setImagePreview(null)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+                </button>
+              </div>
+
+              <div className="p-3">
+                <img
+                  src={imagePreview.url}
+                  alt={imagePreview.name}
+                  className="w-full max-h-[70vh] object-contain rounded-lg bg-white dark:bg-black"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <main className="p-6">
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Vendor Payment Management</h1>
@@ -1382,19 +1464,18 @@ export default function VendorPaymentPage() {
               </div>
 
               <div className="lg:col-span-3">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Category</label>
-                <select
-                  value={poCategoryId}
-                  onChange={(e) => setPoCategoryId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                >
-                  <option value="">All categories</option>
-                  {categories.map((c: any) => (
-                    <option key={c.id} value={c.id}>
-                      {c.full_path || c.title}
-                    </option>
-                  ))}
-                </select>
+                <CategoryTreeSelector
+                  categories={categoryTree}
+                  selectedCategoryId={poCategoryId}
+                  onSelect={setPoCategoryId}
+                  disabled={false}
+                  label="Category"
+                  required={false}
+                  placeholder="All categories"
+                  showSelectedInfo={false}
+                  allowClear={true}
+                  clearText="All categories"
+                />
               </div>
 
               <div className="lg:col-span-2 flex items-center gap-2 pb-1">
@@ -1428,7 +1509,9 @@ export default function VendorPaymentPage() {
                   <img
                     src={getProductPrimaryImage(p)}
                     alt={p.name}
-                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700"
+                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 cursor-zoom-in"
+                    title="View image"
+                    onClick={() => setImagePreview({ url: getProductPrimaryImage(p), name: p.name })}
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
                     }}
@@ -1511,7 +1594,9 @@ export default function VendorPaymentPage() {
                             <img
                               src={getProductPrimaryImage(base)}
                               alt={base.name}
-                              className="w-9 h-9 rounded-md object-cover border border-gray-200 dark:border-gray-700"
+                              className="w-9 h-9 rounded-md object-cover border border-gray-200 dark:border-gray-700 cursor-zoom-in"
+                              title="View image"
+                              onClick={() => setImagePreview({ url: getProductPrimaryImage(base), name: base.name })}
                               onError={(e) => {
                                 (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
                               }}
