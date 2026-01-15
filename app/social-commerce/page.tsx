@@ -1073,11 +1073,11 @@ export default function SocialCommercePage() {
 
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <div className="max-w-7xl mx-auto">
-              <div className="flex items-center justify-between mb-4 md:mb-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
                 <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
 
                 {defectiveProduct && (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
+                  <div className="w-full sm:w-auto flex items-center flex-wrap gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
                     <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
                     <span className="text-sm font-medium text-orange-900 dark:text-orange-300">
                       Defective Item: {defectiveProduct.productName}
@@ -1440,7 +1440,7 @@ export default function SocialCommercePage() {
                       )}
                     </div>
 
-                    <div className="flex gap-2 mb-4">
+                    <div className="flex flex-col sm:flex-row gap-2 mb-4">
                       <input
                         type="text"
                         placeholder={
@@ -1455,7 +1455,7 @@ export default function SocialCommercePage() {
                         disabled={!selectedStore || isLoadingData}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
-                      <div className="flex items-center gap-2 flex-shrink-0">
+                      <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2 sm:flex-shrink-0">
                         <input
                           type="number"
                           inputMode="numeric"
@@ -1463,7 +1463,7 @@ export default function SocialCommercePage() {
                           value={minPrice}
                           onChange={(e) => setMinPrice(e.target.value)}
                           disabled={!selectedStore || isLoadingData}
-                          className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <input
                           type="number"
@@ -1472,13 +1472,13 @@ export default function SocialCommercePage() {
                           value={maxPrice}
                           onChange={(e) => setMaxPrice(e.target.value)}
                           disabled={!selectedStore || isLoadingData}
-                          className="w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                       </div>
 
                       <button
                         disabled={!selectedStore || isLoadingData}
-                        className="px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-full sm:w-auto px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Search size={18} />
                       </button>

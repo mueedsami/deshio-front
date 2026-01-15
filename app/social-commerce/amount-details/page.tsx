@@ -553,7 +553,7 @@ export default function AmountDetailsPage() {
                       {orderData.items?.map((item: any, idx: number) => {
                         const itemAmount = calculateItemAmount(item);
                         return (
-                          <div key={idx} className="flex justify-between items-start p-2 rounded bg-gray-50 dark:bg-gray-700">
+                          <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-gray-50 dark:bg-gray-700">
                             <div className="min-w-0 flex-1">
                               <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
                               <p className="text-xs text-gray-600 dark:text-gray-400">
@@ -565,7 +565,7 @@ export default function AmountDetailsPage() {
                                 </p>
                               )}
                             </div>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white ml-2">৳{itemAmount.toFixed(2)}</p>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white sm:ml-2 self-end sm:self-auto">৳{itemAmount.toFixed(2)}</p>
                           </div>
                         );
                       })}
