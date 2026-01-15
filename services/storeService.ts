@@ -5,8 +5,6 @@ export interface Store {
   name: string;
   address: string;
   pathao_key: string;
-  /** Pathao numeric Store ID used by Pathao create-order API */
-  pathao_store_id?: string | number | null;
   type: string;
   is_online: boolean;
   is_active: boolean;
@@ -23,7 +21,25 @@ export interface StoreFormData {
   id?: number;
   name: string;
   address: string;
+
+  /** Pathao store id (numeric) - kept in this UI field */
   pathao_key: string;
+
+  /** Optional store contact info */
+  phone?: string;
+  email?: string;
+  contact_person?: string;
+  store_code?: string;
+
+  /** Pathao pickup/contact config */
+  pathao_contact_name?: string;
+  pathao_contact_number?: string;
+  pathao_secondary_contact?: string;
+  pathao_city_id?: number | null;
+  pathao_zone_id?: number | null;
+  pathao_area_id?: number | null;
+  pathao_registered?: boolean;
+
   type: string;
   is_online: boolean;
 }
@@ -60,32 +76,60 @@ class StoreService {
 
   // Create store
   async createStore(data: StoreFormData) {
-    // In backend, Pathao order creation uses store.pathao_store_id.
-    // User-facing UI keeps a single input (pathao_key), so mirror it.
-    const pathaoStoreId = (data.pathao_key || '').trim();
     const payload = {
       name: data.name,
       address: data.address,
+
+      // Pathao Store ID is stored in `pathao_key` in the UI.
+      // Backend expects `pathao_store_id` when creating Pathao orders.
       pathao_key: data.pathao_key,
-      pathao_store_id: pathaoStoreId || null,
+      pathao_store_id: data.pathao_key,
+
+      phone: data.phone,
+      email: data.email,
+      contact_person: data.contact_person,
+      store_code: data.store_code,
+
+      pathao_contact_name: data.pathao_contact_name,
+      pathao_contact_number: data.pathao_contact_number,
+      pathao_secondary_contact: data.pathao_secondary_contact,
+      pathao_city_id: data.pathao_city_id ?? null,
+      pathao_zone_id: data.pathao_zone_id ?? null,
+      pathao_area_id: data.pathao_area_id ?? null,
+      pathao_registered: data.pathao_registered ?? false,
+
       is_warehouse: data.type === 'warehouse',
-      is_online: data.is_online,
-    };
+      is_online: data.is_online,};
     const response = await axios.post('/stores', payload);
     return response.data;
   }
 
   // Update store
   async updateStore(id: number, data: StoreFormData) {
-    const pathaoStoreId = (data.pathao_key || '').trim();
     const payload = {
       name: data.name,
       address: data.address,
+
+      // Pathao Store ID is stored in `pathao_key` in the UI.
+      // Backend expects `pathao_store_id` when creating Pathao orders.
       pathao_key: data.pathao_key,
-      pathao_store_id: pathaoStoreId || null,
+      pathao_store_id: data.pathao_key,
+
+      phone: data.phone,
+      email: data.email,
+      contact_person: data.contact_person,
+      store_code: data.store_code,
+
+      pathao_contact_name: data.pathao_contact_name,
+      pathao_contact_number: data.pathao_contact_number,
+      pathao_secondary_contact: data.pathao_secondary_contact,
+      pathao_city_id: data.pathao_city_id ?? null,
+      pathao_zone_id: data.pathao_zone_id ?? null,
+      pathao_area_id: data.pathao_area_id ?? null,
+      pathao_registered: data.pathao_registered ?? false,
+
       is_warehouse: data.type === 'warehouse',
-      is_online: data.is_online,
-    };
+      is_online: data.is_online,};
     const response = await axios.put(`/stores/${id}`, payload);
     return response.data;
   }

@@ -1,12 +1,55 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+impor
+
+  // Auto-load zones/areas when editing an existing store
+  useEffect(() => {
+    const cityId = formData.pathao_city_id ? Number(formData.pathao_city_id) : null;
+    if (!cityId) return;
+    if (zones.length > 0) return;
+
+    const loadZones = async () => {
+      try {
+        setLoadingPathao(true);
+        const z = await shipmentService.getPathaoZones(cityId);
+        setZones(z);
+      } catch (e) {
+        // ignore
+      } finally {
+        setLoadingPathao(false);
+      }
+    };
+    loadZones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.pathao_city_id]);
+
+  useEffect(() => {
+    const zoneId = formData.pathao_zone_id ? Number(formData.pathao_zone_id) : null;
+    if (!zoneId) return;
+    if (areas.length > 0) return;
+
+    const loadAreas = async () => {
+      try {
+        setLoadingPathao(true);
+        const a = await shipmentService.getPathaoAreas(zoneId);
+        setAreas(a);
+      } catch (e) {
+        // ignore
+      } finally {
+        setLoadingPathao(false);
+      }
+    };
+    loadAreas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.pathao_zone_id]);
+t { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import { ArrowLeft, Save, ChevronDown } from 'lucide-react';
 import Link from 'next/link';
 import storeService, { StoreFormData } from '@/services/storeService';
+import shipmentService, { PathaoCity, PathaoZone, PathaoArea } from '@/services/shipmentService';
 
 type AddStorePageProps = {
   /** Next.js App Router query params (e.g. /store/add-store?id=123) */
@@ -18,6 +61,12 @@ type AddStorePageProps = {
 export default function AddStorePage({ searchParams }: AddStorePageProps) {
   const editId = searchParams?.id ? String(searchParams.id) : null;
   const [darkMode, setDarkMode] = useState(false);
+
+  // Pathao pickup config selectors
+  const [cities, setCities] = useState<PathaoCity[]>([]);
+  const [zones, setZones] = useState<PathaoZone[]>([]);
+  const [areas, setAreas] = useState<PathaoArea[]>([]);
+  const [loadingPathao, setLoadingPathao] = useState(false);
   const [isTypeOpen, setIsTypeOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +77,17 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
     name: '',
     address: '',
     pathao_key: '',
+    phone: '',
+    email: '',
+    contact_person: '',
+    store_code: '',
+    pathao_contact_name: '',
+    pathao_contact_number: '',
+    pathao_secondary_contact: '',
+    pathao_city_id: null,
+    pathao_zone_id: null,
+    pathao_area_id: null,
+    pathao_registered: false,
     type: 'store',
     is_online: false,
   });
@@ -49,9 +109,18 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
         id: store.id,
         name: store.name,
         address: store.address,
-        // Backend Pathao sending uses store.pathao_store_id.
-        // UI keeps a single field (pathao_key), so show whichever is present.
         pathao_key: store.pathao_key || store.pathao_store_id || '',
+        phone: store.phone || '',
+        email: store.email || '',
+        contact_person: store.contact_person || '',
+        store_code: store.store_code || '',
+        pathao_contact_name: store.pathao_contact_name || '',
+        pathao_contact_number: store.pathao_contact_number || '',
+        pathao_secondary_contact: store.pathao_secondary_contact || '',
+        pathao_city_id: store.pathao_city_id ?? null,
+        pathao_zone_id: store.pathao_zone_id ?? null,
+        pathao_area_id: store.pathao_area_id ?? null,
+        pathao_registered: !!store.pathao_registered,
         type: store.is_warehouse ? 'warehouse' : 'store',
         is_online: store.is_online,
       });
@@ -92,7 +161,45 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
     }));
   };
 
-  const selectType = (type: string) => {
+  
+  const handleCityChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const cityId = e.target.value ? Number(e.target.value) : null;
+    setFormData(prev => ({ ...prev, pathao_city_id: cityId, pathao_zone_id: null, pathao_area_id: null }));
+    setZones([]);
+    setAreas([]);
+    if (!cityId) return;
+    try {
+      setLoadingPathao(true);
+      const z = await shipmentService.getPathaoZones(cityId);
+      setZones(z);
+    } catch (err) {
+      // ignore
+    } finally {
+      setLoadingPathao(false);
+    }
+  };
+
+  const handleZoneChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const zoneId = e.target.value ? Number(e.target.value) : null;
+    setFormData(prev => ({ ...prev, pathao_zone_id: zoneId, pathao_area_id: null }));
+    setAreas([]);
+    if (!zoneId) return;
+    try {
+      setLoadingPathao(true);
+      const a = await shipmentService.getPathaoAreas(zoneId);
+      setAreas(a);
+    } catch (err) {
+      // ignore
+    } finally {
+      setLoadingPathao(false);
+    }
+  };
+
+  const handleAreaChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const areaId = e.target.value ? Number(e.target.value) : null;
+    setFormData(prev => ({ ...prev, pathao_area_id: areaId }));
+  };
+const selectType = (type: string) => {
     setFormData(prev => ({ ...prev, type }));
     setIsTypeOpen(false);
   };
@@ -173,7 +280,7 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
                     />
                   </div>
 
-                  {/* Pathao Store ID (aka "Pathao Key" in UI) */}
+                  {/* Pathao Store ID */}
                   <div>
                     <label htmlFor="pathao_key" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                       Pathao Store ID
@@ -184,12 +291,153 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
                       name="pathao_key"
                       value={formData.pathao_key}
                       onChange={handleChange}
-                      placeholder="Enter Pathao store id (e.g. 329652)"
+                      placeholder="Enter Pathao Store ID (numeric)"
                       required
                       className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
                     />
                   </div>
 
+
+                  {/* Contact Info */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label htmlFor="phone" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                        Store Phone
+                      </label>
+                      <input
+                        type="text"
+                        id="phone"
+                        name="phone"
+                        value={formData.phone || ''}
+                        onChange={handleChange}
+                        placeholder="e.g. 017XXXXXXXX"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="contact_person" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                        Contact Person
+                      </label>
+                      <input
+                        type="text"
+                        id="contact_person"
+                        name="contact_person"
+                        value={formData.contact_person || ''}
+                        onChange={handleChange}
+                        placeholder="Store Manager"
+                        className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Pathao Pickup Configuration */}
+                  <div className="mt-2 p-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800/40">
+                    <div className="flex items-center justify-between mb-3">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white">Pathao Pickup Configuration</p>
+                      <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={!!formData.pathao_registered}
+                          onChange={(e) => setFormData(prev => ({ ...prev, pathao_registered: e.target.checked }))}
+                          className="rounded border-gray-300 dark:border-gray-600"
+                        />
+                        Registered
+                      </label>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label htmlFor="pathao_contact_name" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                          Pathao Contact Name
+                        </label>
+                        <input
+                          type="text"
+                          id="pathao_contact_name"
+                          name="pathao_contact_name"
+                          value={formData.pathao_contact_name || ''}
+                          onChange={handleChange}
+                          placeholder="Store Manager"
+                          className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                        />
+                      </div>
+
+                      <div>
+                        <label htmlFor="pathao_contact_number" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                          Pathao Contact Number
+                        </label>
+                        <input
+                          type="text"
+                          id="pathao_contact_number"
+                          name="pathao_contact_number"
+                          value={formData.pathao_contact_number || ''}
+                          onChange={handleChange}
+                          placeholder="e.g. 017XXXXXXXX"
+                          className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                        />
+                      </div>
+
+                      <div>
+                        <label htmlFor="pathao_city_id" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                          Pickup City
+                        </label>
+                        <select
+                          id="pathao_city_id"
+                          value={formData.pathao_city_id ?? ''}
+                          onChange={handleCityChange}
+                          className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                        >
+                          <option value="">Select city</option>
+                          {cities.map(c => (
+                            <option key={c.city_id} value={c.city_id}>{c.city_name}</option>
+                          ))}
+                        </select>
+                        {loadingPathao && (
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Loading Pathao locations…</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label htmlFor="pathao_zone_id" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                          Pickup Zone
+                        </label>
+                        <select
+                          id="pathao_zone_id"
+                          value={formData.pathao_zone_id ?? ''}
+                          onChange={handleZoneChange}
+                          disabled={!formData.pathao_city_id}
+                          className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                        >
+                          <option value="">Select zone</option>
+                          {zones.map(z => (
+                            <option key={z.zone_id} value={z.zone_id}>{z.zone_name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="md:col-span-2">
+                        <label htmlFor="pathao_area_id" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                          Pickup Area
+                        </label>
+                        <select
+                          id="pathao_area_id"
+                          value={formData.pathao_area_id ?? ''}
+                          onChange={handleAreaChange}
+                          disabled={!formData.pathao_zone_id}
+                          className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
+                        >
+                          <option value="">Select area</option>
+                          {areas.map(a => (
+                            <option key={a.area_id} value={a.area_id}>{a.area_name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                      Note: Your backend sends Pathao orders using <span className="font-medium">store.pathao_store_id</span>.
+                      This form automatically mirrors the Pathao Store ID into that backend field.
+                    </p>
+                  </div>
                   {/* Type Selection */}
                   <div>
                     <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
