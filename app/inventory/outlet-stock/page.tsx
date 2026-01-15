@@ -6,6 +6,7 @@ import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import storeService, { Store } from '@/services/storeService';
 import dispatchService, { ProductDispatch, DispatchStatistics } from '@/services/dispatchService';
+import { getPendingScans, getPendingScansCount, removePendingScans, savePendingScans } from '@/lib/dispatchPendingScans';
 import DispatchStatisticsCards from '@/components/dispatch/DispatchStatisticsCards';
 import DispatchFilters from '@/components/dispatch/DispatchFilters';
 import DispatchTable from '@/components/dispatch/DispatchTable';
@@ -126,6 +127,22 @@ export default function DispatchManagementPage() {
         });
       }
 
+      // Persist any barcode scans done during creation (draft only).
+      // These will be auto-synced to the backend right after "Mark Dispatched"
+      // because backend only stores scans when dispatch is in_transit.
+      if (Array.isArray(data?.draft_scan_history) && data.draft_scan_history.length > 0) {
+        savePendingScans(dispatchId, {
+          created_at: new Date().toISOString(),
+          source_store_id: parseInt(data.source_store_id),
+          destination_store_id: parseInt(data.destination_store_id),
+          scans: data.draft_scan_history,
+        });
+        showToast(
+          `Saved ${data.draft_scan_history.length} draft scan(s). They will sync after you click Mark Dispatched.`,
+          'success'
+        );
+      }
+
       showToast('Dispatch created successfully', 'success');
       setShowCreateModal(false);
       fetchDispatches();
@@ -157,7 +174,62 @@ export default function DispatchManagementPage() {
     try {
       setLoading(true);
       await dispatchService.markDispatched(id);
+
       showToast('Dispatch marked as in transit', 'success');
+
+      // Auto-sync any draft scans captured during Create Dispatch.
+      const pending = getPendingScans(id);
+      if (pending?.scans?.length) {
+        let synced = 0;
+        const failed: typeof pending.scans = [];
+
+        try {
+          const details = await dispatchService.getDispatch(id);
+          const dispatch = details.data;
+          const items = Array.isArray(dispatch?.items) ? dispatch.items : [];
+
+          const batchToItemId: Record<string, number> = {};
+          for (const it of items) {
+            const batchId = it?.batch?.id;
+            if (batchId) batchToItemId[String(batchId)] = it.id;
+          }
+
+          for (const s of pending.scans) {
+            const itemId = batchToItemId[String(s.batch_id)];
+            if (!itemId) {
+              failed.push(s);
+              continue;
+            }
+            try {
+              await dispatchService.scanBarcode(id, itemId, s.barcode);
+              synced += 1;
+            } catch {
+              failed.push(s);
+            }
+          }
+        } catch {
+          // If we can't fetch details, keep all scans as failed
+          failed.push(...pending.scans);
+        }
+
+        if (failed.length === 0) {
+          removePendingScans(id);
+          if (synced > 0) showToast(`Synced ${synced} barcode(s) to this dispatch.`, 'success');
+        } else {
+          // keep only unsynced scans
+          savePendingScans(id, {
+            created_at: pending.created_at || new Date().toISOString(),
+            source_store_id: pending.source_store_id,
+            destination_store_id: pending.destination_store_id,
+            scans: failed,
+          });
+          showToast(
+            `Dispatch in transit. Synced ${synced} barcode(s), but ${failed.length} could not be synced. Open “Scan to Send” to retry.`,
+            'error'
+          );
+        }
+      }
+
       fetchDispatches();
       fetchStatistics();
     } catch (error: any) {
@@ -356,6 +428,7 @@ export default function DispatchManagementPage() {
               onCancel={handleCancel}
               onScanBarcodes={handleScanBarcodes}
               currentStoreId={store?.id}
+              getDraftScanCount={(dispatchId) => getPendingScansCount(dispatchId)}
             />
           </main>
         </div>

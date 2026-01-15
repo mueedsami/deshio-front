@@ -376,6 +376,10 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
     onSubmit({
       ...formData,
       items,
+      // IMPORTANT: These scans are only a draft list at creation time.
+      // Backend stores scanned barcodes ONLY after dispatch is marked "in_transit".
+      // We persist this draft list in frontend and auto-sync right after "Mark Dispatched".
+      draft_scan_history: scanHistory,
     });
   };
 
@@ -546,7 +550,7 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
               </button>
               {addMode === 'barcode' && (
                 <span className="text-xs text-gray-500 dark:text-gray-400">
-                  Each scan adds <b>1 unit</b> to the matching batch.
+                  Each scan adds <b>1 unit</b> to the matching batch. Draft scans will be synced to the dispatch after you click <b>Mark Dispatched</b>.
                 </span>
               )}
             </div>
@@ -641,6 +645,13 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                         </div>
                       )}
                     </div>
+                  </div>
+                )}
+
+                {/* Sync hint */}
+                {scanHistory.length > 0 && (
+                  <div className="mt-2 text-[11px] text-gray-600 dark:text-gray-400">
+                    These barcodes will be <b>saved to the dispatch</b> after you click <b>Mark Dispatched</b> (backend stores scans only when status is <span className="font-mono">in_transit</span>).
                   </div>
                 )}
               </div>

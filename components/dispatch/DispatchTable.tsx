@@ -12,6 +12,7 @@ interface DispatchTableProps {
   onCancel: (id: number) => void;
   onScanBarcodes?: (dispatch: ProductDispatch, mode: 'send' | 'receive') => void;
   currentStoreId?: number;
+  getDraftScanCount?: (dispatchId: number) => number;
 }
 
 const DispatchTable: React.FC<DispatchTableProps> = ({
@@ -24,6 +25,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
   onCancel,
   onScanBarcodes,
   currentStoreId,
+  getDraftScanCount,
 }) => {
   const getStatusBadge = (status: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
@@ -151,6 +153,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
               dispatches.map((dispatch) => {
                 const atDestination = isDestinationStore(dispatch);
                 const atSource = isSourceStore(dispatch);
+                const draftScanCount = getDraftScanCount ? getDraftScanCount(dispatch.id) : 0;
                 
                 return (
                   <tr
@@ -164,6 +167,11 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                       {dispatch.tracking_number && (
                         <div className="text-xs text-gray-500 dark:text-gray-400">
                           Track: {dispatch.tracking_number}
+                        </div>
+                      )}
+                      {draftScanCount > 0 && dispatch.status !== 'delivered' && dispatch.status !== 'cancelled' && (
+                        <div className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1">
+                          🧾 Draft scans: {draftScanCount}
                         </div>
                       )}
                       {dispatch.status === 'in_transit' && currentStoreId && atDestination && (
