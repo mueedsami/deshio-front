@@ -325,6 +325,7 @@ export default function BatchPage() {
 
       setBatches((prev) => prev.map((b) => (b.id === batchId ? response.data : b)));
       showToast('Batch updated successfully', 'success');
+      sessionStorage.setItem('product_list_refresh_needed', '1');
     } catch (err: any) {
       console.error('Failed to update batch:', err);
       const errorMsg = err.response?.data?.message || 'Failed to update batch';

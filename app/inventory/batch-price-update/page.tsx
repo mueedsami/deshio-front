@@ -275,7 +275,9 @@ export default function BatchPriceUpdatePage() {
           : (firstSuccess?.message || 'Updated selling price for all batches.')
       );
 
-      // Show update rows from the first response (usually enough for verification)
+      
+      sessionStorage.setItem('product_list_refresh_needed', '1');
+// Show update rows from the first response (usually enough for verification)
       setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
 
       // Reload batches for the currently selected product (so table reflects new price)
