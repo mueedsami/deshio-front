@@ -49,7 +49,9 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
         id: store.id,
         name: store.name,
         address: store.address,
-        pathao_key: store.pathao_key,
+        // Backend Pathao sending uses store.pathao_store_id.
+        // UI keeps a single field (pathao_key), so show whichever is present.
+        pathao_key: store.pathao_key || store.pathao_store_id || '',
         type: store.is_warehouse ? 'warehouse' : 'store',
         is_online: store.is_online,
       });
@@ -171,10 +173,10 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
                     />
                   </div>
 
-                  {/* Pathao Key */}
+                  {/* Pathao Store ID (aka "Pathao Key" in UI) */}
                   <div>
                     <label htmlFor="pathao_key" className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">
-                      Pathao Key
+                      Pathao Store ID
                     </label>
                     <input
                       type="text"
@@ -182,7 +184,7 @@ export default function AddStorePage({ searchParams }: AddStorePageProps) {
                       name="pathao_key"
                       value={formData.pathao_key}
                       onChange={handleChange}
-                      placeholder="Enter Pathao key"
+                      placeholder="Enter Pathao store id (e.g. 329652)"
                       required
                       className="w-full px-3 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors"
                     />

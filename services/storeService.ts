@@ -5,6 +5,8 @@ export interface Store {
   name: string;
   address: string;
   pathao_key: string;
+  /** Pathao numeric Store ID used by Pathao create-order API */
+  pathao_store_id?: string | number | null;
   type: string;
   is_online: boolean;
   is_active: boolean;
@@ -58,10 +60,14 @@ class StoreService {
 
   // Create store
   async createStore(data: StoreFormData) {
+    // In backend, Pathao order creation uses store.pathao_store_id.
+    // User-facing UI keeps a single input (pathao_key), so mirror it.
+    const pathaoStoreId = (data.pathao_key || '').trim();
     const payload = {
       name: data.name,
       address: data.address,
       pathao_key: data.pathao_key,
+      pathao_store_id: pathaoStoreId || null,
       is_warehouse: data.type === 'warehouse',
       is_online: data.is_online,
     };
@@ -71,10 +77,12 @@ class StoreService {
 
   // Update store
   async updateStore(id: number, data: StoreFormData) {
+    const pathaoStoreId = (data.pathao_key || '').trim();
     const payload = {
       name: data.name,
       address: data.address,
       pathao_key: data.pathao_key,
+      pathao_store_id: pathaoStoreId || null,
       is_warehouse: data.type === 'warehouse',
       is_online: data.is_online,
     };
