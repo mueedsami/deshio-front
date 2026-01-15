@@ -9,11 +9,13 @@ import { Copy, Check, Image as ImageIcon, Eye } from 'lucide-react';
 import inventoryService, { GlobalInventoryItem } from '@/services/inventoryService';
 import productImageService from '@/services/productImageService';
 import storeService from '@/services/storeService';
+import batchService from '@/services/batchService';
 
 interface ProductWithInventory {
   product_id: number;
   product_name: string;
   sku: string;
+  sell_price: number | null;
   total_quantity: number;
   online_quantity: number;
   offline_quantity: number;
@@ -42,6 +44,8 @@ export default function GalleryPage() {
   const [allLightboxImages, setAllLightboxImages] = useState<string[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
+  const [minPrice, setMinPrice] = useState('');
+  const [maxPrice, setMaxPrice] = useState('');
   const [copiedImage, setCopiedImage] = useState<string | null>(null);
   const [copyType, setCopyType] = useState<'image' | 'link' | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'online' | 'offline' | 'not-online'>('all');
@@ -151,10 +155,24 @@ const fetchInventoryData = async () => {
           }
         });
 
+
+        // Fetch selling price (use the maximum sell_price among batches for this product)
+        let sell_price: number | null = null;
+        try {
+          const productBatches = await batchService.getBatchesArray({ product_id: item.product_id, per_page: 200 });
+          const prices = (productBatches || [])
+            .map((b: any) => Number(String(b?.sell_price ?? b?.selling_price ?? '').replace(/[^0-9.-]/g, '')))
+            .filter((n: number) => Number.isFinite(n) && n > 0);
+          sell_price = prices.length ? Math.max(...prices) : null;
+        } catch (e) {
+          sell_price = null;
+        }
+
         return {
           product_id: item.product_id,
           product_name: item.product_name,
           sku: item.sku,
+          sell_price,
           total_quantity: item.total_quantity,
           online_quantity,
           offline_quantity,
@@ -332,6 +350,13 @@ const fetchInventoryData = async () => {
     
     if (!matchesSearch) return false;
 
+    const min = minPrice ? Number(String(minPrice).replace(/[^0-9.-]/g, '')) : null;
+    const max = maxPrice ? Number(String(maxPrice).replace(/[^0-9.-]/g, '')) : null;
+    const price = p.sell_price ?? null;
+
+    if (min !== null && Number.isFinite(min) && (price === null || price < min)) return false;
+    if (max !== null && Number.isFinite(max) && (price === null || price > max)) return false;
+
     switch (filterMode) {
       case 'online':
         return p.online_quantity > 0;
@@ -366,14 +391,36 @@ const fetchInventoryData = async () => {
               </div>
             </div>
 
-            <div className="flex flex-col sm:flex-row gap-3">
-              <input
-                type="text"
-                placeholder="Search by product name or SKU..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="flex-1 px-4 py-2 rounded-lg bg-transparent border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
-              />
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Search by product name or SKU..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="flex-1 px-4 py-2 rounded-lg bg-transparent border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                />
+
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="Min ৳"
+                    value={minPrice}
+                    onChange={(e) => setMinPrice(e.target.value)}
+                    className="w-full sm:w-28 px-4 py-2 rounded-lg bg-transparent border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                  />
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="Max ৳"
+                    value={maxPrice}
+                    onChange={(e) => setMaxPrice(e.target.value)}
+                    className="w-full sm:w-28 px-4 py-2 rounded-lg bg-transparent border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
+                  />
+                </div>
+              </div>
+
               <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={() => setFilterMode('all')}
@@ -417,6 +464,7 @@ const fetchInventoryData = async () => {
                 </button>
               </div>
             </div>
+
           </div>
 
           {loading ? (
@@ -502,6 +550,13 @@ const fetchInventoryData = async () => {
                         </Link>
                       </div>
                       
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs text-gray-600 dark:text-gray-400 font-medium">Price</span>
+                        <span className="text-lg font-extrabold text-gray-900 dark:text-white">
+                          {product.sell_price !== null ? `৳${product.sell_price.toFixed(2)}` : '—'}
+                        </span>
+                      </div>
+
                       <div className="space-y-1.5 text-xs">
                         <div className="flex items-center justify-between pb-1.5 border-b border-gray-100 dark:border-gray-700">
                           <span className="text-gray-600 dark:text-gray-400 font-medium">
