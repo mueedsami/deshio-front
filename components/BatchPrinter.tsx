@@ -232,13 +232,18 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       await ensureQZConnection();
 
       // ✅ Create config with the default printer
+      // Thermal printers render HTML as an image (rasterize). If the image DPI doesn't
+      // match the printer DPI, you'll often see "only a corner prints" (content is scaled
+      // up and gets clipped). Setting `density` and enabling `scaleContent` fixes this.
+      // Most 4" thermal printers are 203 DPI; if your printer is 300 DPI, change 203→300.
       const config = qz.configs.create(defaultPrinter, {
-        // Force exact label size to prevent extra blank labels (driver paper-size mismatch)
         units: 'mm',
-        size: { width: 39, height: 25 }, // 3.9cm x 2.5cm
-        margins: 0,
+        size: { width: 39, height: 25 }, // 39x25mm
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
         rasterize: true,
-        scaleContent: false,
+        density: 203,
+        // Important: fit the rasterized HTML into the label size.
+        scaleContent: true,
       });
       console.log(`Using printer: ${defaultPrinter}`);
 
@@ -256,19 +261,19 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                   <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; }
-                    @page { size: 39mm 25mm; margin: 0; }
+                    @page { margin: 0; }
                     html, body {
-                      width: 39mm;
-                      height: 25mm;
+                      width: 100%;
+                      height: 100%;
                       margin: 0;
                       padding: 0;
                       overflow: hidden;
                       font-family: Arial, sans-serif;
                     }
                     .label {
-                      width: 39mm;
-                      height: 25mm;
-                      padding: 1mm 1mm;
+                      width: 100%;
+                      height: 100%;
+                      padding: 1mm;
                       display: flex;
                       flex-direction: column;
                       justify-content: space-between;
@@ -286,7 +291,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                       font-weight: 700;
                       font-size: 7pt;
                       line-height: 1.05;
-                      max-width: 37mm;
+                      max-width: 100%;
                       overflow: hidden;
                       text-overflow: ellipsis;
                       white-space: nowrap;
@@ -298,11 +303,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                       align-items: center;
                       justify-content: center;
                     }
-                    svg {
-                      width: 100%;
-                      height: auto;
-                      display: block;
-                    }
+                    svg { width: 100%; height: auto; display: block; }
                     .price {
                       font-size: 7pt;
                       font-weight: 800;
@@ -331,8 +332,8 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                   <script>
                     JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
                       format: "CODE128",
-                      width: 1,
-                      height: 22,
+                      width: 1.2,
+                      height: 30,
                       displayValue: true,
                       fontSize: 8,
                       textMargin: 0,
