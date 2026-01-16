@@ -62,6 +62,113 @@ async function ensureQZConnection() {
   return qzConnectionPromise;
 }
 
+
+// Label geometry
+const LABEL_WIDTH_MM = 39;
+const LABEL_HEIGHT_MM = 25;
+const DEFAULT_DPI = 203; // most 2" thermal label printers are 203dpi
+
+function mmToIn(mm: number) {
+  return mm / 25.4;
+}
+
+async function ensureJsBarcode() {
+  // QzTrayLoader loads JsBarcode globally, but keep a fallback for safety.
+  if (typeof window === 'undefined') return;
+  if ((window as any).JsBarcode) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Failed to load JsBarcode'));
+    document.head.appendChild(s);
+  });
+}
+
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const ellipsis = '…';
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + ellipsis).width > maxWidth) {
+    t = t.slice(0, -1);
+  }
+  return t.length ? (t + ellipsis) : '';
+}
+
+async function renderLabelBase64(opts: {
+  code: string;
+  productName: string;
+  price: number;
+  dpi?: number;
+}) {
+  await ensureJsBarcode();
+
+  const dpi = opts.dpi ?? DEFAULT_DPI;
+  const wIn = mmToIn(LABEL_WIDTH_MM);
+  const hIn = mmToIn(LABEL_HEIGHT_MM);
+  const wPx = Math.max(50, Math.round(wIn * dpi));
+  const hPx = Math.max(50, Math.round(hIn * dpi));
+
+  const canvas = document.createElement('canvas');
+  canvas.width = wPx;
+  canvas.height = hPx;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas not supported');
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, wPx, hPx);
+
+  const pad = Math.round(wPx * 0.04); // ~4%
+  const centerX = wPx / 2;
+
+  // Brand
+  ctx.fillStyle = '#000';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`; // ~22px @ 200px
+  ctx.fillText('Deshio', centerX, pad);
+
+  // Product name
+  const nameY = pad + Math.round(hPx * 0.14);
+  ctx.font = `700 ${Math.round(hPx * 0.09)}px Arial`; // ~18px
+  const safeName = fitText(ctx, (opts.productName || 'Product').trim(), wPx - pad * 2);
+  ctx.fillText(safeName, centerX, nameY);
+
+  // Barcode canvas
+  const bcCanvas = document.createElement('canvas');
+  bcCanvas.width = wPx - pad * 2;
+  bcCanvas.height = Math.round(hPx * 0.52);
+
+  const JsBarcode = (window as any).JsBarcode;
+  // Use a thinner bar width to prevent overflow on small labels.
+  JsBarcode(bcCanvas, opts.code, {
+    format: 'CODE128',
+    width: 2, // will be scaled by canvas width
+    height: Math.round(hPx * 0.24),
+    displayValue: true,
+    fontSize: Math.round(hPx * 0.08),
+    textMargin: 0,
+    margin: 0,
+  });
+
+  const bcY = pad + Math.round(hPx * 0.28);
+  ctx.drawImage(bcCanvas, pad, bcY);
+
+  // Price
+  const priceText = `Price (VAT Inclusive): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
+  ctx.textBaseline = 'bottom';
+  ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
+  const priceY = hPx - pad;
+  ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
+
+  const dataUrl = canvas.toDataURL('image/png');
+  return dataUrl.split(',')[1];
+}
+
 export default function BatchPrinter({ batch, product, barcodes: externalBarcodes }: BatchPrinterProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isQzLoaded, setIsQzLoaded] = useState(false);
@@ -231,125 +338,43 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       // Use singleton connection
       await ensureQZConnection();
 
-      // ✅ Create config with the default printer
-      // Thermal printers render HTML as an image (rasterize). If the image DPI doesn't
-      // match the printer DPI, you'll often see "only a corner prints" (content is scaled
-      // up and gets clipped). Setting `density` and enabling `scaleContent` fixes this.
-      // Most 4" thermal printers are 203 DPI; if your printer is 300 DPI, change 203→300.
-      const config = qz.configs.create(defaultPrinter, {
-        units: 'mm',
-        size: { width: 39, height: 25 }, // 39x25mm
-        margins: { top: 0, right: 0, bottom: 0, left: 0 },
-        rasterize: true,
-        density: 203,
-        // Important: fit the rasterized HTML into the label size.
-        scaleContent: true,
-      });
-      console.log(`Using printer: ${defaultPrinter}`);
+// Print as a pixel-perfect image instead of HTML.
+// HTML printing can be affected by OS/browser scaling and may clip on small labels.
+// Pixel printing lets us control exact label dimensions.
+const dpi = DEFAULT_DPI;
+const config = qz.configs.create(defaultPrinter, {
+  units: 'in',
+  size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
+  margins: { top: 0, right: 0, bottom: 0, left: 0 },
+  density: dpi,
+  colorType: 'blackwhite',
+  interpolation: 'nearest-neighbor',
+  scaleContent: false,
+});
+console.log(`Using printer: ${defaultPrinter}`);
 
-      const data: any[] = [];
-      selected.forEach((code) => {
-        const qty = quantities[code] || 1;
-        for (let i = 0; i < qty; i++) {
-          data.push({
-            type: "html",
-            format: "plain",
-            data: `
-              <html>
-                <head>
-                  <meta charset="utf-8" />
-                  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-                  <style>
-                    * { margin: 0; padding: 0; box-sizing: border-box; }
-                    @page { margin: 0; }
-                    html, body {
-                      width: 100%;
-                      height: 100%;
-                      margin: 0;
-                      padding: 0;
-                      overflow: hidden;
-                      font-family: Arial, sans-serif;
-                    }
-                    .label {
-                      width: 100%;
-                      height: 100%;
-                      padding: 1mm;
-                      display: flex;
-                      flex-direction: column;
-                      justify-content: space-between;
-                      align-items: center;
-                      text-align: center;
-                    }
-                    .brand {
-                      font-weight: 800;
-                      font-size: 8pt;
-                      letter-spacing: 0.4px;
-                      text-transform: lowercase;
-                      line-height: 1;
-                    }
-                    .product-name {
-                      font-weight: 700;
-                      font-size: 7pt;
-                      line-height: 1.05;
-                      max-width: 100%;
-                      overflow: hidden;
-                      text-overflow: ellipsis;
-                      white-space: nowrap;
-                      margin-top: 0.5mm;
-                    }
-                    .barcode-wrap {
-                      width: 100%;
-                      display: flex;
-                      align-items: center;
-                      justify-content: center;
-                    }
-                    svg { width: 100%; height: auto; display: block; }
-                    .price {
-                      font-size: 7pt;
-                      font-weight: 800;
-                      line-height: 1.05;
-                      margin-top: 0.5mm;
-                    }
-                    .price span {
-                      font-weight: 700;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <div class="label">
-                    <div>
-                      <div class="brand">Deshio</div>
-                      <div class="product-name">${(product?.name || 'Product').substring(0, 28)}</div>
-                    </div>
+const data: any[] = [];
+for (const code of selected) {
+  const qty = quantities[code] || 1;
+  for (let i = 0; i < qty; i++) {
+    const base64 = await renderLabelBase64({
+      code,
+      productName: (product?.name || 'Product').substring(0, 28),
+      price: batch.sellingPrice,
+      dpi,
+    });
+    data.push({
+      type: 'pixel',
+      format: 'image',
+      flavor: 'base64',
+      data: base64,
+    });
+  }
+}
 
-                    <div class="barcode-wrap">
-                      <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
-                    </div>
+console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
 
-                    <div class="price"><span>Price (VAT Inclusive):</span> ৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
-                  </div>
-
-                  <script>
-                    JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
-                      format: "CODE128",
-                      width: 1.2,
-                      height: 30,
-                      displayValue: true,
-                      fontSize: 8,
-                      textMargin: 0,
-                      margin: 0
-                    });
-                  </script>
-                </body>
-              </html>
-            `,
-          });
-        }
-      });
-
-      console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
-      
-      await qz.print(config, data);
+await qz.print(config, data);
       alert(`✅ ${data.length} barcode(s) sent to printer "${defaultPrinter}" successfully!`);
       setIsModalOpen(false);
     } catch (err: any) {
