@@ -67,6 +67,9 @@ async function ensureQZConnection() {
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
+// Fine alignment tweak: shift whole label content horizontally.
+// Negative moves left, positive moves right.
+const SHIFT_X_MM = -1; // requested: move left by 1mm
 
 function mmToIn(mm: number) {
   return mm / 25.4;
@@ -123,7 +126,8 @@ async function renderLabelBase64(opts: {
   ctx.fillRect(0, 0, wPx, hPx);
 
   const pad = Math.round(wPx * 0.04); // ~4%
-  const centerX = wPx / 2;
+  const shiftPx = Math.round((SHIFT_X_MM / 25.4) * dpi);
+  const centerX = wPx / 2 + shiftPx;
 
   // Brand
   ctx.fillStyle = '#000';
@@ -180,7 +184,7 @@ async function renderLabelBase64(opts: {
   const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
   const drawW = Math.round(bcCanvas.width * scale);
   const drawH = Math.round(bcCanvas.height * scale);
-  const bcX = Math.round((wPx - drawW) / 2);
+  const bcX = Math.round((wPx - drawW) / 2 + shiftPx);
 
   // Keep it crisp on thermal printers
   ctx.imageSmoothingEnabled = false;
