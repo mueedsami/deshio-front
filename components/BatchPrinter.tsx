@@ -142,10 +142,11 @@ async function renderLabelBase64(opts: {
   // So we render, then center it horizontally and scale down ONLY if it would overflow.
   const JsBarcode = (window as any).JsBarcode;
 
-  const maxBcW = Math.round((wPx - pad * 2) * 0.96); // keep a tiny breathing room
-  const maxBcH = Math.round(hPx * 0.52);
-  const bcHeight = Math.round(hPx * 0.24);
-  const bcFontSize = Math.round(hPx * 0.08);
+  // Slightly larger barcode + number (still safe within 39x25mm)
+  const maxBcW = Math.round((wPx - pad * 2) * 0.98);
+  const maxBcH = Math.round(hPx * 0.56);
+  const bcHeight = Math.round(hPx * 0.28);
+  const bcFontSize = Math.round(hPx * 0.09);
 
   const renderBarcodeCanvas = (barWidth: number) => {
     const c = document.createElement('canvas');
@@ -155,18 +156,27 @@ async function renderLabelBase64(opts: {
       height: bcHeight,
       displayValue: true,
       fontSize: bcFontSize,
+      fontOptions: 'bold',
       textMargin: 0,
       margin: 0,
     });
     return c;
   };
 
-  // Two-pass: measure width at barWidth=1, then pick the largest integer barWidth that fits.
-  const measure = renderBarcodeCanvas(1);
-  const bestBarWidth = Math.max(1, Math.floor(maxBcW / Math.max(1, measure.width)));
-  const bcCanvas = renderBarcodeCanvas(bestBarWidth);
+  // Pick the largest integer barWidth that fits (keeps prints crisp on thermal printers)
+  let bw = 1;
+  let bcCanvas = renderBarcodeCanvas(bw);
+  while (bw < 6) {
+    const next = renderBarcodeCanvas(bw + 1);
+    if (next.width <= maxBcW && next.height <= maxBcH) {
+      bw += 1;
+      bcCanvas = next;
+      continue;
+    }
+    break;
+  }
 
-  const bcY = pad + Math.round(hPx * 0.28);
+  const bcY = pad + Math.round(hPx * 0.27);
   const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
   const drawW = Math.round(bcCanvas.width * scale);
   const drawH = Math.round(bcCanvas.height * scale);
