@@ -69,6 +69,9 @@ export default function SocialCommercePage() {
 
   const [isInternational, setIsInternational] = useState(false);
 
+  // ✅ Domestic: auto-detect Pathao City/Zone/Area from address text (recommended)
+  const [useAutoPathaoLocation, setUseAutoPathaoLocation] = useState(true);
+
   // ✅ Domestic (Pathao)
   const [pathaoCities, setPathaoCities] = useState<PathaoCity[]>([]);
   const [pathaoZones, setPathaoZones] = useState<PathaoZone[]>([]);
@@ -1260,6 +1263,7 @@ export default function SocialCommercePage() {
                           setIsInternational(!isInternational);
 
                           // reset domestic
+                          setUseAutoPathaoLocation(true);
                           setPathaoCityId('');
                           setPathaoZoneId('');
                           setPathaoAreaId('');

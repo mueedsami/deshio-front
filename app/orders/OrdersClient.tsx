@@ -381,6 +381,7 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
 
   // 📦 Address editing (Social Commerce: Pathao / International, E-commerce checkout)
   const [scIsInternational, setScIsInternational] = useState(false);
+  const [scUseAutoPathaoLocation, setScUseAutoPathaoLocation] = useState(true);
 
   const [pathaoCities, setPathaoCities] = useState<PathaoCity[]>([]);
   const [pathaoZones, setPathaoZones] = useState<PathaoZone[]>([]);
@@ -3554,92 +3555,136 @@ const derivePaymentStatus = (order: any) => {
                           </div>
                         </div>
                       ) : (
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City (Pathao)*</label>
-                            <select
-                              value={pathaoCityId}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setPathaoCityId(v);
-                                setPathaoZoneId('');
-                                setPathaoAreaId('');
-                                setPathaoZones([]);
-                                setPathaoAreas([]);
-                              }}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
-                            >
-                              <option value="">Select City</option>
-                              {pathaoCities.map((c) => (
-                                <option key={c.city_id} value={String(c.city_id)}>
-                                  {c.city_name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Zone (Pathao)*</label>
-                            <select
-                              value={pathaoZoneId}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setPathaoZoneId(v);
-                                setPathaoAreaId('');
-                                setPathaoAreas([]);
-                              }}
-                              disabled={!pathaoCityId}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
-                            >
-                              <option value="">{pathaoCityId ? 'Select Zone' : 'Select City first'}</option>
-                              {pathaoZones.map((z) => (
-                                <option key={z.zone_id} value={String(z.zone_id)}>
-                                  {z.zone_name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Area (Pathao)*</label>
-                            <select
-                              value={pathaoAreaId}
-                              onChange={(e) => setPathaoAreaId(e.target.value)}
-                              disabled={!pathaoZoneId}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
-                            >
-                              <option value="">{pathaoZoneId ? 'Select Area' : 'Select Zone first'}</option>
-                              {pathaoAreas.map((a) => (
-                                <option key={a.area_id} value={String(a.area_id)}>
-                                  {a.area_name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs font-medium text-gray-600 dark:text-gray-400">Auto-detect Pathao location</p>
                             <input
-                              type="text"
-                              value={scPostalCode}
-                              onChange={(e) => setScPostalCode(e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
-                              placeholder="e.g., 1212"
+                              type="checkbox"
+                              checked={scUseAutoPathaoLocation}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                setScUseAutoPathaoLocation(checked);
+                                if (checked) {
+                                  setPathaoCityId('');
+                                  setPathaoZoneId('');
+                                  setPathaoAreaId('');
+                                  setPathaoZones([]);
+                                  setPathaoAreas([]);
+                                }
+                              }}
+                              className="h-4 w-4"
                             />
                           </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400">Include area + city in street address (e.g., Uttara, Dhaka) for best results.</p>
 
-                          <div className="col-span-2">
-                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
-                            <textarea
-                              rows={2}
-                              value={scStreetAddress}
-                              onChange={(e) => setScStreetAddress(e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
-                              placeholder="House 12, Road 5, etc."
-                            />
-                          </div>
+                          {!scUseAutoPathaoLocation && (
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City (Pathao)*</label>
+                                <select
+                                  value={pathaoCityId}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setPathaoCityId(v);
+                                    setPathaoZoneId('');
+                                    setPathaoAreaId('');
+                                    setPathaoZones([]);
+                                    setPathaoAreas([]);
+                                  }}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                                >
+                                  <option value="">Select City</option>
+                                  {pathaoCities.map((c) => (
+                                    <option key={c.city_id} value={String(c.city_id)}>{c.city_name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Zone (Pathao)*</label>
+                                <select
+                                  value={pathaoZoneId}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setPathaoZoneId(v);
+                                    setPathaoAreaId('');
+                                    setPathaoAreas([]);
+                                  }}
+                                  disabled={!pathaoCityId}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
+                                >
+                                  <option value="">{pathaoCityId ? 'Select Zone' : 'Select City first'}</option>
+                                  {pathaoZones.map((z) => (
+                                    <option key={z.zone_id} value={String(z.zone_id)}>{z.zone_name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Area (Pathao)*</label>
+                                <select
+                                  value={pathaoAreaId}
+                                  onChange={(e) => setPathaoAreaId(e.target.value)}
+                                  disabled={!pathaoZoneId}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm disabled:opacity-60"
+                                >
+                                  <option value="">{pathaoZoneId ? 'Select Area' : 'Select Zone first'}</option>
+                                  {pathaoAreas.map((a) => (
+                                    <option key={a.area_id} value={String(a.area_id)}>{a.area_name}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
+                                <input
+                                  type="text"
+                                  value={scPostalCode}
+                                  onChange={(e) => setScPostalCode(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                                  placeholder="e.g., 1212"
+                                />
+                              </div>
+
+                              <div className="col-span-2">
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
+                                <textarea
+                                  rows={2}
+                                  value={scStreetAddress}
+                                  onChange={(e) => setScStreetAddress(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                                  placeholder="House 12, Road 5, Sector 11, Uttara, Dhaka"
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {scUseAutoPathaoLocation && (
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
+                                <input
+                                  type="text"
+                                  value={scPostalCode}
+                                  onChange={(e) => setScPostalCode(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                                  placeholder="e.g., 1212"
+                                />
+                              </div>
+                              <div className="col-span-2">
+                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
+                                <textarea
+                                  rows={2}
+                                  value={scStreetAddress}
+                                  onChange={(e) => setScStreetAddress(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                                  placeholder="House 12, Road 5, Sector 11, Uttara, Dhaka"
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      )}
+                        )}
                     </div>
                   ) : normalize(editableOrder.orderType) === 'ecommerce' ? (
                     <div className="grid grid-cols-2 gap-4">
