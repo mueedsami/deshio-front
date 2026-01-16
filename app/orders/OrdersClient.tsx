@@ -381,7 +381,10 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
 
   // 📦 Address editing (Social Commerce: Pathao / International, E-commerce checkout)
   const [scIsInternational, setScIsInternational] = useState(false);
-  const [scUseAutoPathaoLocation, setScUseAutoPathaoLocation] = useState(true);
+
+  // ✅ NEW: Pathao auto location (address -> city/zone/area mapping happens inside Pathao)
+  // If enabled, City/Zone/Area are optional in the editor.
+  const [scUsePathaoAutoLocation, setScUsePathaoAutoLocation] = useState<boolean>(true);
 
   const [pathaoCities, setPathaoCities] = useState<PathaoCity[]>([]);
   const [pathaoZones, setPathaoZones] = useState<PathaoZone[]>([]);
@@ -554,6 +557,8 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
         setScInternationalPostalCode(sa.postal_code || '');
         setScInternationalStreet(sa.street || sa.address || '');
       } else {
+        const hasAllIds = !!sa.pathao_city_id && !!sa.pathao_zone_id && !!sa.pathao_area_id;
+        setScUsePathaoAutoLocation(!hasAllIds);
         setPathaoCityId(sa.pathao_city_id ? String(sa.pathao_city_id) : '');
         setPathaoZoneId(sa.pathao_zone_id ? String(sa.pathao_zone_id) : '');
         setPathaoAreaId(sa.pathao_area_id ? String(sa.pathao_area_id) : '');
@@ -576,16 +581,34 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     if (!showEditModal) return;
     if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
     if (scIsInternational) return;
+    if (scUsePathaoAutoLocation) return;
 
     fetchPathaoCities();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showEditModal, editableOrder?.orderType, scIsInternational]);
+  }, [showEditModal, editableOrder?.orderType, scIsInternational, scUsePathaoAutoLocation]);
+
+  // If auto-location is enabled, clear any manual Pathao selections
+  useEffect(() => {
+    if (!showEditModal) return;
+    if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
+    if (scIsInternational) return;
+
+    if (scUsePathaoAutoLocation) {
+      setPathaoCityId('');
+      setPathaoZoneId('');
+      setPathaoAreaId('');
+      setPathaoZones([]);
+      setPathaoAreas([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scUsePathaoAutoLocation, showEditModal, editableOrder?.orderType, scIsInternational]);
 
   // Cascading: City -> Zones
   useEffect(() => {
     if (!showEditModal) return;
     if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
     if (scIsInternational) return;
+    if (scUsePathaoAutoLocation) return;
 
     if (!pathaoCityId) {
       setPathaoZones([]);
@@ -604,6 +627,7 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     if (!showEditModal) return;
     if (normalize(editableOrder?.orderType) !== 'social_commerce') return;
     if (scIsInternational) return;
+    if (scUsePathaoAutoLocation) return;
 
     if (!pathaoZoneId) {
       setPathaoAreas([]);
@@ -905,7 +929,8 @@ const derivePaymentStatus = (order: any) => {
       setSelectedBackendOrder(fullOrder);
       const transformedOrder = transformOrder(fullOrder);
       setSelectedOrder(transformedOrder);
-      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
+      // Ensure we always pass an array (never undefined) and keep types narrow for TS
+      ensureProductThumbs((fullOrder.items ?? []).map((it: any) => it?.product_id));
     } catch (error: any) {
       console.error('Failed to load order details:', error);
       alert('Failed to load order details: ' + error.message);
@@ -932,7 +957,7 @@ const derivePaymentStatus = (order: any) => {
 
         setInstallmentMethods(Array.isArray(methods) ? methods : []);
         if (Array.isArray(methods) && methods.length && installmentMethodId === '') {
-          setInstallmentMethodId(String(methods[0].id));
+          setInstallmentMethodId(methods[0].id);
         }
       }
 
@@ -1016,7 +1041,7 @@ const derivePaymentStatus = (order: any) => {
 
       setSelectedOrder(transformedOrder);
       setEditableOrder(transformedOrder);
-      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
+      ensureProductThumbs((fullOrder.items ?? []).map((it: any) => it?.product_id));
       if (fullOrder.store?.id) {
         setPickerStoreId(fullOrder.store.id);
       }
@@ -1036,7 +1061,7 @@ const derivePaymentStatus = (order: any) => {
       const transformed = transformOrder(fullOrder);
       setSelectedOrder(transformed);
       setEditableOrder(transformed);
-      ensureProductThumbs(fullOrder.items?.map((it: any) => it.product_id));
+      ensureProductThumbs((fullOrder.items ?? []).map((it: any) => it?.product_id));
       await loadOrders();
     } catch (e: any) {
       console.error('Failed to reload order after item change:', e);
@@ -2088,35 +2113,44 @@ const derivePaymentStatus = (order: any) => {
           const parts = [scInternationalStreet, scCity, scState, scCountry].filter(Boolean);
           customer_address_text = parts.join(', ') + (scInternationalPostalCode ? ` - ${scInternationalPostalCode}` : '');
         } else {
-          const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
-          const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
-          const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+          const isAuto = scUsePathaoAutoLocation;
 
-          const cityIdNum = pathaoCityId ? Number(pathaoCityId) : undefined;
-          const zoneIdNum = pathaoZoneId ? Number(pathaoZoneId) : undefined;
-          const areaIdNum = pathaoAreaId ? Number(pathaoAreaId) : undefined;
+          if (isAuto) {
+            // ✅ Auto mode: no city/zone/area IDs (Pathao will infer from address text)
+            shipping_address = {
+              ...shipping_address,
+              name: customerName ?? shipping_address.name ?? '',
+              phone: customerPhone ?? shipping_address.phone ?? '',
+              street: scStreetAddress,
+              postal_code: scPostalCode || undefined,
+            };
 
-          shipping_address = {
-            ...shipping_address,
-            name: customerName ?? shipping_address.name ?? '',
-            phone: customerPhone ?? shipping_address.phone ?? '',
-            street: scStreetAddress,
-            area: areaObj?.area_name || shipping_address.area || '',
-            city: cityObj?.city_name || shipping_address.city || '',
-            pathao_city_id: cityIdNum,
-            pathao_zone_id: zoneIdNum,
-            pathao_area_id: areaIdNum,
-            postal_code: scPostalCode || undefined,
-          };
+            customer_address_text = `${scStreetAddress}${scPostalCode ? ` - ${scPostalCode}` : ''}`;
+          } else {
+            const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+            const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+            const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
 
-          const parts = [
-            scStreetAddress,
-            areaObj?.area_name || '',
-            zoneObj?.zone_name || '',
-            cityObj?.city_name || '',
-          ].filter(Boolean);
+            const cityIdNum = pathaoCityId ? Number(pathaoCityId) : undefined;
+            const zoneIdNum = pathaoZoneId ? Number(pathaoZoneId) : undefined;
+            const areaIdNum = pathaoAreaId ? Number(pathaoAreaId) : undefined;
 
-          customer_address_text = parts.join(', ') + (scPostalCode ? ` - ${scPostalCode}` : '');
+            shipping_address = {
+              ...shipping_address,
+              name: customerName ?? shipping_address.name ?? '',
+              phone: customerPhone ?? shipping_address.phone ?? '',
+              street: scStreetAddress,
+              area: areaObj?.area_name || shipping_address.area || '',
+              city: cityObj?.city_name || shipping_address.city || '',
+              pathao_city_id: cityIdNum,
+              pathao_zone_id: zoneIdNum,
+              pathao_area_id: areaIdNum,
+              postal_code: scPostalCode || undefined,
+            };
+
+            const parts = [scStreetAddress, areaObj?.area_name || '', zoneObj?.zone_name || '', cityObj?.city_name || ''].filter(Boolean);
+            customer_address_text = parts.join(', ') + (scPostalCode ? ` - ${scPostalCode}` : '');
+          }
         }
       } else if (orderType === 'ecommerce') {
         shipping_address = {
@@ -3556,28 +3590,25 @@ const derivePaymentStatus = (order: any) => {
                         </div>
                       ) : (
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <p className="text-xs font-medium text-gray-600 dark:text-gray-400">Auto-detect Pathao location</p>
-                            <input
-                              type="checkbox"
-                              checked={scUseAutoPathaoLocation}
-                              onChange={(e) => {
-                                const checked = e.target.checked;
-                                setScUseAutoPathaoLocation(checked);
-                                if (checked) {
-                                  setPathaoCityId('');
-                                  setPathaoZoneId('');
-                                  setPathaoAreaId('');
-                                  setPathaoZones([]);
-                                  setPathaoAreas([]);
-                                }
-                              }}
-                              className="h-4 w-4"
-                            />
+                          {/* ✅ Auto-detect toggle (recommended) */}
+                          <div className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/20 p-3">
+                            <div>
+                              <p className="text-xs font-semibold text-gray-900 dark:text-white">Auto-detect Pathao location</p>
+                              <p className="mt-0.5 text-[11px] text-gray-600 dark:text-gray-300">
+                                When ON, City/Zone/Area are not required. Pathao will infer the location from the full address text.
+                              </p>
+                            </div>
+                            <label className="inline-flex items-center cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={scUsePathaoAutoLocation}
+                                onChange={(e) => setScUsePathaoAutoLocation(e.target.checked)}
+                                className="h-4 w-4"
+                              />
+                            </label>
                           </div>
-                          <p className="text-[11px] text-gray-500 dark:text-gray-400">Include area + city in street address (e.g., Uttara, Dhaka) for best results.</p>
 
-                          {!scUseAutoPathaoLocation && (
+                          {!scUsePathaoAutoLocation && (
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">City (Pathao)*</label>
@@ -3595,7 +3626,9 @@ const derivePaymentStatus = (order: any) => {
                                 >
                                   <option value="">Select City</option>
                                   {pathaoCities.map((c) => (
-                                    <option key={c.city_id} value={String(c.city_id)}>{c.city_name}</option>
+                                    <option key={c.city_id} value={String(c.city_id)}>
+                                      {c.city_name}
+                                    </option>
                                   ))}
                                 </select>
                               </div>
@@ -3615,7 +3648,9 @@ const derivePaymentStatus = (order: any) => {
                                 >
                                   <option value="">{pathaoCityId ? 'Select Zone' : 'Select City first'}</option>
                                   {pathaoZones.map((z) => (
-                                    <option key={z.zone_id} value={String(z.zone_id)}>{z.zone_name}</option>
+                                    <option key={z.zone_id} value={String(z.zone_id)}>
+                                      {z.zone_name}
+                                    </option>
                                   ))}
                                 </select>
                               </div>
@@ -3630,7 +3665,9 @@ const derivePaymentStatus = (order: any) => {
                                 >
                                   <option value="">{pathaoZoneId ? 'Select Area' : 'Select Zone first'}</option>
                                   {pathaoAreas.map((a) => (
-                                    <option key={a.area_id} value={String(a.area_id)}>{a.area_name}</option>
+                                    <option key={a.area_id} value={String(a.area_id)}>
+                                      {a.area_name}
+                                    </option>
                                   ))}
                                 </select>
                               </div>
@@ -3645,21 +3682,10 @@ const derivePaymentStatus = (order: any) => {
                                   placeholder="e.g., 1212"
                                 />
                               </div>
-
-                              <div className="col-span-2">
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
-                                <textarea
-                                  rows={2}
-                                  value={scStreetAddress}
-                                  onChange={(e) => setScStreetAddress(e.target.value)}
-                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
-                                  placeholder="House 12, Road 5, Sector 11, Uttara, Dhaka"
-                                />
-                              </div>
                             </div>
                           )}
 
-                          {scUseAutoPathaoLocation && (
+                          {scUsePathaoAutoLocation && (
                             <div className="grid grid-cols-2 gap-4">
                               <div>
                                 <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Postal Code</label>
@@ -3671,20 +3697,28 @@ const derivePaymentStatus = (order: any) => {
                                   placeholder="e.g., 1212"
                                 />
                               </div>
-                              <div className="col-span-2">
-                                <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Street Address*</label>
-                                <textarea
-                                  rows={2}
-                                  value={scStreetAddress}
-                                  onChange={(e) => setScStreetAddress(e.target.value)}
-                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
-                                  placeholder="House 12, Road 5, Sector 11, Uttara, Dhaka"
-                                />
+                              <div className="text-[11px] text-gray-600 dark:text-gray-300 flex items-end">
+                                Tip: include area + city (e.g., <span className="font-semibold">Uttara, Dhaka</span>) in the address.
                               </div>
                             </div>
                           )}
+
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                              {scUsePathaoAutoLocation ? 'Full Address*' : 'Street Address*'}
+                            </label>
+                            <textarea
+                              rows={scUsePathaoAutoLocation ? 3 : 2}
+                              value={scStreetAddress}
+                              onChange={(e) => setScStreetAddress(e.target.value)}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              placeholder={
+                                scUsePathaoAutoLocation ? 'House 71, Road 15, Sector 11, Uttara, Dhaka' : 'House 12, Road 5, etc.'
+                              }
+                            />
+                          </div>
                         </div>
-                        )}
+                      )}
                     </div>
                   ) : normalize(editableOrder.orderType) === 'ecommerce' ? (
                     <div className="grid grid-cols-2 gap-4">

@@ -106,6 +106,22 @@ export interface Order {
   paid_amount: string;
   outstanding_amount: string;
   is_installment: boolean;
+
+  // Installment / EMI details (present for installment orders)
+  // Backend may return either installment_info (computed) or installment_plan (original plan)
+  installment_info?: {
+    total_installments?: number;
+    paid_installments?: number;
+    installment_amount?: string | number;
+    next_payment_due?: string | null;
+    start_date?: string | null;
+  } | null;
+  installment_plan?: {
+    total_installments?: number;
+    installment_amount?: string | number;
+    start_date?: string | null;
+  } | null;
+
   order_date: string;
   created_at: string;
   fulfilled_at?: string;
