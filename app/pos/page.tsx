@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ChevronDown,
   CheckCircle2,
@@ -141,6 +141,21 @@ export default function POSPage() {
 
   // Cart
   const [cart, setCart] = useState<ExtendedCartItem[]>([]);
+
+  // Fast lookup for scanned barcodes currently in cart (prevents duplicate scans)
+  const scannedBarcodes = useMemo(() => {
+    const s = new Set<string>();
+    for (const item of cart) {
+      if (item.barcode) s.add(String(item.barcode));
+    }
+    return s;
+  }, [cart]);
+
+  // Ref-based copy used to block ultra-fast duplicate scan events before React state re-renders
+  const scannedBarcodesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    scannedBarcodesRef.current = new Set(scannedBarcodes);
+  }, [scannedBarcodes]);
 
   // Products (for manual entry)
   const [products, setProducts] = useState<Product[]>([]);
@@ -362,6 +377,15 @@ export default function POSPage() {
    * Add scanned product to cart
    */
   const handleProductScanned = (scannedProduct: ScannedProduct) => {
+    // ✅ Prevent adding the same physical barcode more than once in a single sale
+    // (each barcode represents a unique item).
+    const b = scannedProduct?.barcode ? String(scannedProduct.barcode) : '';
+    if (b && scannedBarcodesRef.current.has(b)) {
+      showToast(`⚠️ Already scanned: ${scannedProduct.barcode}`, 'error');
+      return;
+    }
+    if (b) scannedBarcodesRef.current.add(b);
+
     const newItem: ExtendedCartItem = {
       id: Date.now() + Math.random(),
       productId: scannedProduct.productId,
@@ -433,6 +457,10 @@ export default function POSPage() {
    * Remove item from cart
    */
   const removeFromCart = (id: number) => {
+    const itemToRemove = cart.find((item) => item.id === id);
+    if (itemToRemove?.barcode) {
+      scannedBarcodesRef.current.delete(String(itemToRemove.barcode));
+    }
     setCart((prev) => prev.filter((item) => item.id !== id));
     showToast('Item removed from cart', 'success');
   };
@@ -980,6 +1008,8 @@ export default function POSPage() {
   };
 
   const resetForm = () => {
+    // Clear local barcode cache immediately so the next sale can scan again without waiting for re-render
+    scannedBarcodesRef.current.clear();
     setCart([]);
     setCustomerName('');
     setMobileNo('');
