@@ -234,7 +234,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                   <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
                   <style>
                     * { 
-                      margin: 5; 
+                      margin: 0; 
                       padding: 0; 
                       box-sizing: border-box; 
                     }
@@ -284,7 +284,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                     
                     svg { 
                       width: 100%;
-                      max-width: 35mm;
+                      max-width: 30mm;
                       height: auto;
                       display: block;
                       margin: 0 auto;
@@ -321,14 +321,14 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                       try {
                         JsBarcode("#barcode${i}", "${code}", {
                           format: "CODE128",
-                          width: 1.3,
+                          width: 1,
                           height: 24,
                           displayValue: false,
                           margin: 0,
                           marginTop: 0,
                           marginBottom: 0,
-                          marginLeft: 10,
-                          marginRight: 0
+                          marginLeft: 0,
+                          marginRight: 10
                         });
                       } catch(e) {
                         console.error('Barcode generation error:', e);
