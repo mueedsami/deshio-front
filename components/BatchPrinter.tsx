@@ -66,7 +66,7 @@ async function ensureQZConnection() {
 // Label geometry
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
-const DEFAULT_DPI = 203; // most 2" thermal label printers are 203dpi
+const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
 
 function mmToIn(mm: number) {
   return mm / 25.4;
@@ -138,25 +138,43 @@ async function renderLabelBase64(opts: {
   const safeName = fitText(ctx, (opts.productName || 'Product').trim(), wPx - pad * 2);
   ctx.fillText(safeName, centerX, nameY);
 
-  // Barcode canvas
-  const bcCanvas = document.createElement('canvas');
-  bcCanvas.width = wPx - pad * 2;
-  bcCanvas.height = Math.round(hPx * 0.52);
-
+  // Barcode (pixel-perfect): JsBarcode will override canvas.width/height based on content.
+  // So we render, then center it horizontally and scale down ONLY if it would overflow.
   const JsBarcode = (window as any).JsBarcode;
-  // Use a thinner bar width to prevent overflow on small labels.
-  JsBarcode(bcCanvas, opts.code, {
-    format: 'CODE128',
-    width: 2, // will be scaled by canvas width
-    height: Math.round(hPx * 0.24),
-    displayValue: true,
-    fontSize: Math.round(hPx * 0.08),
-    textMargin: 0,
-    margin: 0,
-  });
+
+  const maxBcW = Math.round((wPx - pad * 2) * 0.96); // keep a tiny breathing room
+  const maxBcH = Math.round(hPx * 0.52);
+  const bcHeight = Math.round(hPx * 0.24);
+  const bcFontSize = Math.round(hPx * 0.08);
+
+  const renderBarcodeCanvas = (barWidth: number) => {
+    const c = document.createElement('canvas');
+    JsBarcode(c, opts.code, {
+      format: 'CODE128',
+      width: Math.max(1, Math.floor(barWidth)),
+      height: bcHeight,
+      displayValue: true,
+      fontSize: bcFontSize,
+      textMargin: 0,
+      margin: 0,
+    });
+    return c;
+  };
+
+  // Two-pass: measure width at barWidth=1, then pick the largest integer barWidth that fits.
+  const measure = renderBarcodeCanvas(1);
+  const bestBarWidth = Math.max(1, Math.floor(maxBcW / Math.max(1, measure.width)));
+  const bcCanvas = renderBarcodeCanvas(bestBarWidth);
 
   const bcY = pad + Math.round(hPx * 0.28);
-  ctx.drawImage(bcCanvas, pad, bcY);
+  const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
+  const drawW = Math.round(bcCanvas.width * scale);
+  const drawH = Math.round(bcCanvas.height * scale);
+  const bcX = Math.round((wPx - drawW) / 2);
+
+  // Keep it crisp on thermal printers
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
 
   // Price
   const priceText = `Price (VAT Inclusive): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
@@ -337,75 +355,6 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     try {
       // Use singleton connection
       await ensureQZConnection();
-
-      const printerName = String(defaultPrinter || "");
-      const isTL5X = /\bTL5/i.test(printerName) || /\bSP-?TL5/i.test(printerName);
-
-      // TL5X printers support TSPL (see device manual). Raw TSPL printing avoids the
-      // common "prints only a corner" issue caused by driver/page scaling when printing
-      // HTML/pixel data via the OS print pipeline.
-      if (isTL5X) {
-        const rawConfig = qz.configs.create(defaultPrinter, {
-          encoding: 'UTF-8',
-          forceRaw: true,
-        });
-
-        const dpi = DEFAULT_DPI;
-        const dotsPerMm = Math.max(8, Math.round(dpi / 25.4)); // 203dpi ~= 8 dots/mm
-        const cleanText = (s: string) =>
-          String(s || '')
-            .replace(/\r?\n/g, ' ')
-            .replace(/"/g, "'")
-            .trim();
-
-        const buildTSPL = (p: { code: string; productName: string; price: number }) => {
-          const productName = cleanText(p.productName).slice(0, 28);
-          const priceText = `Price (VAT Inclusive): Tk ${Number(p.price || 0).toLocaleString('en-BD')}`;
-
-          // Positions are in dots (1 dot = 0.125mm at 203dpi)
-          const x = 8; // 1mm
-          const yBrand = 6;
-          const yName = 24;
-          const yBarcode = 48;
-          const barcodeHeight = 80; // ~10mm
-          const yPrice = Math.max(0, Math.round((LABEL_HEIGHT_MM - 5) * dotsPerMm));
-
-          return [
-            `SIZE ${LABEL_WIDTH_MM} mm,${LABEL_HEIGHT_MM} mm`,
-            `GAP 2 mm,0 mm`,
-            `OFFSET 0 mm`,
-            `DIRECTION 1`,
-            `REFERENCE 0,0`,
-            `CLS`,
-            `TEXT ${x},${yBrand},\"0\",0,1,1,\"deshio\"`,
-            `TEXT ${x},${yName},\"0\",0,1,1,\"${productName}\"`,
-            // narrow/wide = 1 keeps CODE128 compact for 39mm labels
-            `BARCODE ${x},${yBarcode},\"128\",${barcodeHeight},1,0,1,1,\"${cleanText(p.code)}\"`,
-            `TEXT ${x},${yPrice},\"0\",0,1,1,\"${priceText}\"`,
-            `PRINT 1,1`,
-            ``
-          ].join('\r\n');
-        };
-
-        const data: any[] = [];
-        for (const code of selected) {
-          const qty = quantities[code] || 1;
-          for (let i = 0; i < qty; i++) {
-            // Strings are treated as raw commands by QZ Tray
-            data.push(buildTSPL({
-              code,
-              productName: product?.name || 'Product',
-              price: batch.sellingPrice,
-            }));
-          }
-        }
-
-        console.log(`📄 Printing ${data.length} TSPL label(s) to printer: ${defaultPrinter}`);
-        await qz.print(rawConfig, data);
-        alert(`✅ ${data.length} barcode(s) sent to printer "${defaultPrinter}" successfully!`);
-        setIsModalOpen(false);
-        return;
-      }
 
 // Print as a pixel-perfect image instead of HTML.
 // HTML printing can be affected by OS/browser scaling and may clip on small labels.
