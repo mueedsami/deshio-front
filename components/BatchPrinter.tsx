@@ -69,7 +69,8 @@ const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
 // Fine alignment tweak: shift whole label content horizontally.
 // Negative moves left, positive moves right.
-const SHIFT_X_MM = -1; // requested: move left by 1mm
+// Positive = shift right, Negative = shift left
+const SHIFT_X_MM = 2; // requested: move right by 2mm
 
 function mmToIn(mm: number) {
   return mm / 25.4;
