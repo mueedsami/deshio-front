@@ -20,9 +20,10 @@ interface Batch {
 interface BatchPrinterProps {
   batch: Batch;
   product?: Product;
-  barcodes?: string[];
+  barcodes?: string[]; // Accept pre-fetched barcodes from parent
 }
 
+// Global QZ connection state to prevent multiple connection attempts
 let qzConnectionPromise: Promise<void> | null = null;
 let qzConnected = false;
 
@@ -32,14 +33,17 @@ async function ensureQZConnection() {
     throw new Error("QZ Tray not available");
   }
 
+  // If already connected, return immediately
   if (qzConnected && await qz.websocket.isActive()) {
     return;
   }
 
+  // If connection is in progress, wait for it
   if (qzConnectionPromise) {
     return qzConnectionPromise;
   }
 
+  // Start new connection
   qzConnectionPromise = (async () => {
     try {
       if (!(await qz.websocket.isActive())) {
@@ -97,19 +101,24 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     return () => clearInterval(interval);
   }, []);
 
+  // Update barcodes if external barcodes change
   useEffect(() => {
     if (externalBarcodes && externalBarcodes.length > 0) {
       setBarcodes(externalBarcodes);
     }
   }, [externalBarcodes]);
 
+  // Don't load printer automatically - only when user clicks print
+
   const loadDefaultPrinter = async () => {
     try {
       const qz = (window as any).qz;
       if (!qz) return;
 
+      // Use singleton connection
       await ensureQZConnection();
 
+      // Get default printer
       try {
         const printer = await qz.printers.getDefault();
         console.log("✅ Default printer loaded:", printer);
@@ -118,6 +127,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       } catch (err: any) {
         console.error("❌ No default printer found:", err);
         
+        // Try to get first available printer as fallback
         try {
           const printers = await qz.printers.find();
           if (printers && printers.length > 0) {
@@ -138,7 +148,9 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     }
   };
 
+  // Fetch barcodes from backend when modal opens (only if not provided externally)
   const fetchBarcodes = async () => {
+    // If barcodes are already provided from parent, don't fetch
     if (externalBarcodes && externalBarcodes.length > 0) {
       setBarcodes(externalBarcodes);
       return;
@@ -153,9 +165,11 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     setBarcodeError(null);
 
     try {
+      // Use batch-specific endpoint instead of product endpoint
       const response = await barcodeTrackingService.getBatchBarcodes(batch.id);
       
       if (response.success && response.data.barcodes) {
+        // Extract active barcode strings from the response
         const barcodeCodes = response.data.barcodes
           .filter((b) => b.is_active)
           .map((b) => b.barcode);
@@ -180,6 +194,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
   const handleOpenModal = async () => {
     setIsModalOpen(true);
     
+    // Load printer when user actually wants to print
     if (!defaultPrinter && isQzLoaded) {
       await loadDefaultPrinter();
     }
@@ -200,19 +215,23 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       return;
     }
 
+    // Load printer if not already loaded
     if (!defaultPrinter) {
       console.log("Loading printer before print...");
       await loadDefaultPrinter();
     }
 
+    // Check if printer is available after loading
     if (!defaultPrinter) {
       alert("No printer available. Please check your printer settings and try again.");
       return;
     }
 
     try {
+      // Use singleton connection
       await ensureQZConnection();
 
+      // ✅ Create config with the default printer
       const config = qz.configs.create(defaultPrinter);
       console.log(`Using printer: ${defaultPrinter}`);
 
@@ -220,60 +239,83 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
       selected.forEach((code) => {
         const qty = quantities[code] || 1;
         for (let i = 0; i < qty; i++) {
-          const productName = (product?.name || 'Product').substring(0, 18);
-          const price = batch.sellingPrice.toLocaleString('en-BD');
-          
           data.push({
             type: "html",
             format: "plain",
             data: `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
-  <style>
-    @page { size: 39mm 25mm; margin: 0; }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { 
-      width: 39mm; 
-      height: 25mm; 
-      position: relative;
-      font-family: Arial, sans-serif;
-      overflow: hidden;
-    }
-  </style>
-</head>
-<body>
-  <div style="position: absolute; top: 1mm; left: 0; right: 0; text-align: center; font-size: 5.5pt; font-weight: bold;">
-    ${productName}
-  </div>
-  
-  <div style="position: absolute; top: 4.5mm; left: 50%; transform: translateX(-50%); width: 35mm;">
-    <svg id="bc${i}" style="width: 100%; height: auto;"></svg>
-  </div>
-  
-  <div style="position: absolute; top: 15mm; left: 0; right: 0; text-align: center; font-size: 6.5pt;">
-    ${code}
-  </div>
-  
-  <div style="position: absolute; top: 19mm; left: 0; right: 0; text-align: center; font-size: 8.5pt; font-weight: bold;">
-    ৳ ${price}
-  </div>
-  
-  <script>
-    window.onload = function() {
-      JsBarcode("#bc${i}", "${code}", {
-        format: "CODE128",
-        width: 1.4,
-        height: 26,
-        displayValue: false,
-        margin: 0
-      });
-    };
-  </script>
-</body>
-</html>
+              <html>
+                <head>
+                  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js"></script>
+                  <style>
+                    * { margin: 0; padding: 0; box-sizing: border-box; }
+                    @page { 
+                      size: 40mm 28mm;
+                      margin: 0;
+                    }
+                    body { 
+                      width: 40mm;
+                      height: 28mm;
+                      margin: 0;
+                      padding: 0.5mm 1mm;
+                      font-family: Arial, sans-serif;
+                      display: flex;
+                      flex-direction: column;
+                      justify-content: space-between;
+                      align-items: center;
+                    }
+                    .barcode-container { 
+                      width: 100%;
+                      text-align: center;
+                      display: flex;
+                      flex-direction: column;
+                      align-items: center;
+                      justify-content: center;
+                    }
+                    .product-name { 
+                      font-weight: bold; 
+                      font-size: 7pt;
+                      line-height: 1;
+                      margin-bottom: 0.5mm;
+                      max-width: 38mm;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
+                    }
+                    .price { 
+                      font-size: 9pt;
+                      font-weight: bold;
+                      color: #000;
+                      margin-bottom: 0.5mm;
+                      line-height: 1;
+                    }
+                    svg { 
+                      max-width: 38mm;
+                      height: auto;
+                      display: block;
+                    }
+                  </style>
+                </head>
+                <body>
+                  <div class="barcode-container">
+                    <div class="product-name">${(product?.name || 'Product').substring(0, 25)}</div>
+                    <div class="price">৳${batch.sellingPrice.toLocaleString('en-BD')}</div>
+                    <svg id="barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}"></svg>
+                  </div>
+                  <script>
+                    JsBarcode("#barcode-${code.replace(/[^a-zA-Z0-9]/g, '')}-${i}", "${code}", {
+                      format: "CODE128",
+                      width: 1.3,
+                      height: 30,
+                      displayValue: true,
+                      fontSize: 9,
+                      margin: 0,
+                      marginTop: 1,
+                      marginBottom: 1,
+                      textMargin: 1
+                    });
+                  </script>
+                </body>
+              </html>
             `,
           });
         }
