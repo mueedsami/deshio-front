@@ -250,7 +250,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
                     * { margin: 0; padding: 0; box-sizing: border-box; }
                     @page { 
                       size: 40mm 28mm;
-                      margin: 0;
+                      margin: 10;
                     }
                     body { 
                       width: 40mm;
