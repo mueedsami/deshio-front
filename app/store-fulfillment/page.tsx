@@ -42,6 +42,10 @@ export default function StoreFulfillmentPage() {
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('assigned_to_store,picking');
+
+  // Lightweight preview of primary products per order card (loaded lazily)
+  const [orderPreviews, setOrderPreviews] = useState<Record<number, string[]>>({});
+  const previewLoadedRef = useRef<Set<number>>(new Set());
   
   // Order details state
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -71,6 +75,60 @@ export default function StoreFulfillmentPage() {
       audioRef.current = new Audio('/sounds/beep.mp3');
     }
   }, [statusFilter]);
+
+  // Lazily fetch a small preview (top items) for visible orders so cards don't look empty.
+  useEffect(() => {
+    if (isLoadingOrders) return;
+
+    const visible = assignedOrders
+      .filter(order => 
+        order.order_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        order.customer?.name?.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+      .slice(0, 12); // only prefetch a small set
+
+    const toFetch = visible
+      .map(o => o.id)
+      .filter(id => !previewLoadedRef.current.has(id));
+
+    if (toFetch.length === 0) return;
+
+    let cancelled = false;
+
+    const run = async () => {
+      const concurrency = 3;
+      let idx = 0;
+
+      const worker = async () => {
+        while (!cancelled && idx < toFetch.length) {
+          const orderId = toFetch[idx++];
+          previewLoadedRef.current.add(orderId);
+          try {
+            const details = await storeFulfillmentService.getOrderDetails(orderId);
+            const items = details?.order?.items || [];
+            const preview = items
+              .slice(0, 3)
+              .map((it: any) => `${it.product_name}${it.quantity ? ` x${it.quantity}` : ''}`)
+              .filter(Boolean);
+
+            if (!cancelled) {
+              setOrderPreviews(prev => ({ ...prev, [orderId]: preview }));
+            }
+          } catch (e) {
+            // Silent fail: preview is optional and shouldn't block the list UI
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(concurrency, toFetch.length) }, () => worker()));
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assignedOrders, searchQuery, isLoadingOrders]);
 
   useEffect(() => {
     if (selectedOrderId) {
@@ -282,6 +340,57 @@ export default function StoreFulfillmentPage() {
     order.customer?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Lazily load a small "primary products" preview for order cards.
+  // The list endpoint may not include items, so we fetch per-order details in the background
+  // with a tight concurrency limit to keep the UI snappy.
+  useEffect(() => {
+    let cancelled = false;
+
+    const candidateIds = filteredOrders
+      .slice(0, 12)
+      .map(o => o.id)
+      .filter(id => !previewLoadedRef.current.has(id));
+
+    if (candidateIds.length === 0) return;
+
+    const concurrency = 3;
+    let cursor = 0;
+
+    const worker = async () => {
+      while (!cancelled) {
+        const orderId = candidateIds[cursor++];
+        if (!orderId) break;
+
+        previewLoadedRef.current.add(orderId);
+        try {
+          const details = await storeFulfillmentService.getOrderDetails(orderId);
+          const items = details?.order?.items || [];
+
+          const preview = items
+            .slice(0, 3)
+            .map((it: any) => {
+              const qty = typeof it.quantity === 'number' ? it.quantity : parseFloat(String(it.quantity || 0));
+              const name = it.product_name || it.product?.name || 'Item';
+              return qty > 1 ? `${name} ×${qty}` : `${name}`;
+            });
+
+          if (!cancelled && preview.length > 0) {
+            setOrderPreviews(prev => ({ ...prev, [orderId]: preview }));
+          }
+        } catch (e) {
+          // Silently ignore preview failures (card still works; full details load on click)
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, candidateIds.length) }, () => worker());
+    Promise.all(workers).catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredOrders]);
+
   // ORDER LIST VIEW
   if (!selectedOrderId) {
     return (
@@ -392,6 +501,12 @@ export default function StoreFulfillmentPage() {
                     {filteredOrders.map(order => {
                       const progress = order.fulfillment_progress;
                       const isNew = order.status === 'assigned_to_store';
+                      const totalItems = (progress?.total_items ?? order.items?.length ?? 0) as number;
+                      const preview = orderPreviews[order.id] || (order.items?.length ? order.items.slice(0, 3).map((it: any) => {
+                        const qty = typeof it.quantity === 'number' ? it.quantity : parseFloat(String(it.quantity || 0));
+                        const name = it.product_name || it.product?.name || 'Item';
+                        return qty > 1 ? `${name} ×${qty}` : `${name}`;
+                      }) : []);
                       
                       return (
                         <div
@@ -414,8 +529,31 @@ export default function StoreFulfillmentPage() {
                                 </span>
                               </div>
                               <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-                                👤 {order.customer?.name} • 📦 {order.items.length} items
+                                👤 {order.customer?.name} • 📦 {totalItems} items
                               </p>
+
+                              {/* Primary products preview */}
+                              {preview.length > 0 ? (
+                                <div className="flex flex-wrap gap-2 mt-2">
+                                  {preview.map((label, idx) => (
+                                    <span
+                                      key={`${order.id}-prev-${idx}`}
+                                      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+                                    >
+                                      {label}
+                                    </span>
+                                  ))}
+                                  {(progress?.total_items ?? order.items?.length ?? 0) > preview.length && (
+                                    <span className="text-xs text-gray-500 dark:text-gray-400 self-center">
+                                      +{(progress?.total_items ?? order.items?.length ?? 0) - preview.length} more
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">
+                                  Tap to view products
+                                </p>
+                              )}
                               
                               {/* Progress Bar */}
                               <div className="mt-3">
