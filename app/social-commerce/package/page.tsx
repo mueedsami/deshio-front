@@ -95,6 +95,17 @@ export default function WarehouseFulfillmentPage() {
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
 
+  // 📦 Card-level meta (list API often doesn't include full items)
+  const [orderCardMeta, setOrderCardMeta] = useState<
+    Record<
+      number,
+      {
+        totalQty: number;
+        lines: string[];
+      }
+    >
+  >({});
+
   // 🖼️ Product thumbnails (shown in packing UI)
   const [productThumbsById, setProductThumbsById] = useState<Record<number, string>>({});
 
@@ -133,6 +144,79 @@ export default function WarehouseFulfillmentPage() {
       barcodeInputRef.current.focus();
     }
   }, [isScanning]);
+
+  const getTotalQty = (items: any[] | undefined | null): number => {
+    if (!Array.isArray(items)) return 0;
+    return items.reduce((sum, it) => sum + Number(it?.quantity ?? it?.qty ?? 0), 0);
+  };
+
+  const getFallbackQtyFromOrderList = (order: any): number => {
+    // Prefer backend-provided counts if present
+    const candidates = [
+      order?.total_items,
+      order?.items_count,
+      order?.total_quantity,
+      order?.total_qty,
+      order?.fulfillment_progress?.total_items,
+      order?.fulfillment_progress?.total_quantity,
+    ];
+    for (const c of candidates) {
+      const n = Number(c);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    // Worst-case: items array (often missing in list response)
+    return getTotalQty(order?.items) || (Array.isArray(order?.items) ? order.items.length : 0);
+  };
+
+  const buildPrimaryLines = (items: any[] | undefined | null): string[] => {
+    if (!Array.isArray(items) || items.length === 0) return [];
+    // Sort by quantity desc so the "main" products appear first
+    const sorted = [...items].sort((a, b) => Number(b?.quantity ?? 0) - Number(a?.quantity ?? 0));
+    return sorted.slice(0, 3).map((it) => {
+      const name = it?.product_name || it?.name || `Product #${it?.product_id ?? ''}`;
+      const qty = Number(it?.quantity ?? it?.qty ?? 0);
+      return qty > 0 ? `${name} ×${qty}` : String(name);
+    });
+  };
+
+  const loadOrderCardMeta = async (orders: any[]) => {
+    const ids = (orders || []).map((o) => Number(o?.id)).filter((n) => Number.isFinite(n) && n > 0);
+    const unique = Array.from(new Set(ids));
+    const missing = unique.filter((id) => !orderCardMeta[id]);
+    if (missing.length === 0) return;
+
+    // Concurrency-limited detail fetch so UI doesn't hang
+    const limit = 6;
+    let idx = 0;
+    const worker = async () => {
+      while (idx < missing.length) {
+        const current = missing[idx++];
+        try {
+          const full: any = await orderService.getById(current);
+          const items = full?.items || [];
+          const totalQty = getTotalQty(items) || (Array.isArray(items) ? items.length : 0);
+          const lines = buildPrimaryLines(items);
+
+          setOrderCardMeta((prev) => ({
+            ...prev,
+            [current]: { totalQty, lines },
+          }));
+        } catch {
+          // If details fetch fails, at least store fallback qty so we don't keep retrying
+          const fallbackOrder = orders.find((o) => Number(o?.id) === current);
+          setOrderCardMeta((prev) => ({
+            ...prev,
+            [current]: {
+              totalQty: getFallbackQtyFromOrderList(fallbackOrder),
+              lines: [],
+            },
+          }));
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(limit, missing.length) }, () => worker()));
+  };
 
   const ensureProductThumbs = async (productIds: Array<number | null | undefined>) => {
     const ids = Array.from(new Set(productIds.filter((x): x is number => typeof x === 'number' && x > 0)));
@@ -198,6 +282,9 @@ export default function WarehouseFulfillmentPage() {
       });
 
       setPendingOrders(filtered);
+      // Load item count + primary product lines for cards (list endpoint often omits items)
+      // Run in background (no need to block UI render)
+      loadOrderCardMeta(filtered);
       console.log('📦 Loaded pending orders:', {
         social_commerce: socialCommerceResponse.data?.length || 0,
         ecommerce: ecommerceResponse.data?.length || 0,
@@ -610,8 +697,18 @@ if (!matchingItem) {
                               {getOrderTypeBadge(order.order_type)}
                             </div>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
-                              {order.customer?.name} • {order.items?.length || 0} item(s)
+                              {(() => {
+                                const meta = orderCardMeta[Number(order.id)];
+                                const count = meta?.totalQty ?? getFallbackQtyFromOrderList(order);
+                                return `${order.customer?.name || 'Customer'} • ${count} item(s)`;
+                              })()}
                             </p>
+
+                            {orderCardMeta[Number(order.id)]?.lines?.length > 0 && (
+                              <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                {orderCardMeta[Number(order.id)].lines.join(' • ')}
+                              </p>
+                            )}
                             <p className="text-xs text-gray-500 mt-1">
                               {new Date(order.order_date).toLocaleDateString()} - {order.store?.name}
                             </p>
