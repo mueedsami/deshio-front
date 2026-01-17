@@ -1,15 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import Lightbox from '@/components/Lightbox';
-import { Copy, Check, Image as ImageIcon, Eye } from 'lucide-react';
+import { Copy, Check, Image as ImageIcon, Eye, Link as LinkIcon } from 'lucide-react';
 import inventoryService, { GlobalInventoryItem } from '@/services/inventoryService';
 import productImageService from '@/services/productImageService';
 import storeService from '@/services/storeService';
-import batchService from '@/services/batchService';
+
+// NOTE: Gallery used to fetch batches per-product to calculate price.
+// That pattern is very slow at scale (N products => N extra requests).
+// We intentionally avoid it here to keep the Gallery page snappy.
 
 interface ProductWithInventory {
   product_id: number;
@@ -48,10 +51,24 @@ export default function GalleryPage() {
   const [maxPrice, setMaxPrice] = useState('');
   const [copiedImage, setCopiedImage] = useState<string | null>(null);
   const [copyType, setCopyType] = useState<'image' | 'link' | null>(null);
+  const [copiedTextKey, setCopiedTextKey] = useState<string | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'online' | 'offline' | 'not-online'>('all');
 
+  // Track background image loading (so we can show a small hint, without blocking first paint)
+  const [imagesPending, setImagesPending] = useState(0);
+
+  const getEcommerceRoute = useMemo(() => {
+    return (productId: number) => `/e-commerce/product/${productId}`;
+  }, []);
+
+  // Prevent state updates after unmount (background image workers)
+  const isMountedRef = useRef(true);
   useEffect(() => {
+    isMountedRef.current = true;
     fetchInventoryData();
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -64,88 +81,75 @@ export default function GalleryPage() {
     return `/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
   };
 
-const fetchInventoryData = async () => {
-  try {
-    setLoading(true);
+  const mapProductImages = (images: any[]): string[] => {
+    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || '';
 
-    const [inventoryResponse, storesResponse] = await Promise.all([
-      inventoryService.getGlobalInventory(),
-      storeService.getStores({ per_page: 1000 })
-    ]);
+    const urls = (images || [])
+      .filter((img) => img?.is_active)
+      .sort((a, b) => {
+        if (a.is_primary && !b.is_primary) return -1;
+        if (!a.is_primary && b.is_primary) return 1;
+        return (a.sort_order || 0) - (b.sort_order || 0);
+      })
+      .map((img) => {
+        const url = img.image_url || img.image_path;
+        if (!url) return null;
+        if (url.startsWith('http')) return url;
+        if (url.startsWith('/storage')) return `${baseUrl}${url}`;
+        return `${baseUrl}/storage/product-images/${url}`;
+      })
+      .filter(Boolean) as string[];
 
-    if (!inventoryResponse.success || !inventoryResponse.data) {
-      setError('Failed to load inventory data');
-      return;
-    }
+    return urls.length ? urls : ['/placeholder-image.jpg'];
+  };
 
-    const inventoryItems = inventoryResponse.data;
+  const fetchInventoryData = async () => {
+    try {
+      setLoading(true);
 
-    // Build store map for online/offline detection
-    const storeMap = new Map<number, { is_online: boolean; is_warehouse: boolean }>();
-    if (storesResponse.success && storesResponse.data) {
-      const stores = Array.isArray(storesResponse.data)
-        ? storesResponse.data
-        : storesResponse.data.data || [];
+      const [inventoryResponse, storesResponse] = await Promise.all([
+        inventoryService.getGlobalInventory(),
+        storeService.getStores({ per_page: 1000 }),
+      ]);
 
-      stores.forEach((store: any) => {
-        storeMap.set(store.id, {
-          is_online: !!store.is_online,
-          is_warehouse: !!store.is_warehouse,
+      if (!inventoryResponse.success || !inventoryResponse.data) {
+        setError('Failed to load inventory data');
+        return;
+      }
+
+      const inventoryItems = inventoryResponse.data;
+
+      // Build store map for online/offline detection
+      const storeMap = new Map<number, { is_online: boolean; is_warehouse: boolean }>();
+      if (storesResponse.success && storesResponse.data) {
+        const stores = Array.isArray(storesResponse.data)
+          ? storesResponse.data
+          : storesResponse.data.data || [];
+
+        stores.forEach((store: any) => {
+          storeMap.set(store.id, {
+            is_online: !!store.is_online,
+            is_warehouse: !!store.is_warehouse,
+          });
         });
-      });
-    }
+      }
 
-    // Filter products with stock > 0 (or remove this filter if you want to show out-of-stock too)
-    const productsWithStock = inventoryItems.filter(item => item.total_quantity > 0);
+      // Filter products with stock > 0 (remove if you want to show out-of-stock too)
+      const productsWithStock = inventoryItems.filter((item) => item.total_quantity > 0);
 
-    if (productsWithStock.length === 0) {
-      setProducts([]);
-      setError(null);
-      return;
-    }
+      if (productsWithStock.length === 0) {
+        setProducts([]);
+        setError(null);
+        return;
+      }
 
-    // Parallel fetch images only for products that have stock
-    const processedProducts = await Promise.all(
-      productsWithStock.map(async (item: GlobalInventoryItem) => {
-        let imageUrls: string[] = [];
-
-        try {
-          const images = await productImageService.getProductImages(item.product_id);
-
-          const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || '';
-
-          imageUrls = images
-            .filter(img => img.is_active)
-            .sort((a, b) => {
-              if (a.is_primary && !b.is_primary) return -1;
-              if (!a.is_primary && b.is_primary) return 1;
-              return (a.sort_order || 0) - (b.sort_order || 0);
-            })
-            .map(img => {
-              const url = img.image_url || img.image_path;
-              if (!url) return null;
-
-              if (url.startsWith('http')) return url;
-              if (url.startsWith('/storage')) return `${baseUrl}${url}`;
-              return `${baseUrl}/storage/product-images/${url}`;
-            })
-            .filter(Boolean) as string[];
-
-          // Fallback: if no active images, use placeholder
-          if (imageUrls.length === 0) {
-            imageUrls = ['/placeholder-image.jpg'];
-          }
-        } catch (err) {
-          console.warn(`Failed to load images for product ${item.product_id} (${item.sku})`, err);
-          imageUrls = ['/placeholder-image.jpg']; // Graceful fallback
-        }
-
-        // Calculate online/offline quantities
+      // 1) FAST FIRST PAINT: build the list immediately with placeholders
+      const baseProducts: ProductWithInventory[] = productsWithStock.map((item: GlobalInventoryItem) => {
         let online_quantity = 0;
         let offline_quantity = 0;
         let is_available_online = false;
 
-        item.stores.forEach(store => {
+        item.stores.forEach((store) => {
           const storeInfo = storeMap.get(store.store_id);
           if (storeInfo?.is_online) {
             online_quantity += store.quantity;
@@ -155,45 +159,75 @@ const fetchInventoryData = async () => {
           }
         });
 
-
-        // Fetch selling price (use the maximum sell_price among batches for this product)
-        let sell_price: number | null = null;
-        try {
-          const productBatches = await batchService.getBatchesArray({ product_id: item.product_id, per_page: 200 });
-          const prices = (productBatches || [])
-            .map((b: any) => Number(String(b?.sell_price ?? b?.selling_price ?? '').replace(/[^0-9.-]/g, '')))
-            .filter((n: number) => Number.isFinite(n) && n > 0);
-          sell_price = prices.length ? Math.max(...prices) : null;
-        } catch (e) {
-          sell_price = null;
-        }
-
         return {
           product_id: item.product_id,
           product_name: item.product_name,
           sku: item.sku,
-          sell_price,
+          sell_price: null,
           total_quantity: item.total_quantity,
           online_quantity,
           offline_quantity,
-          warehouse_quantity: 0, // You can enhance this later if needed
+          warehouse_quantity: 0,
           stores_count: item.stores_count,
           is_available_online,
-          images: imageUrls,
+          images: ['/placeholder-image.jpg'],
           stores: item.stores,
         };
-      })
-    );
+      });
 
-    setProducts(processedProducts);
-    setError(null);
-  } catch (err) {
-    console.error('Error fetching inventory:', err);
-    setError(err instanceof Error ? err.message : 'Failed to load gallery data');
-  } finally {
-    setLoading(false);
-  }
-};
+      setProducts(baseProducts);
+      setError(null);
+      setLoading(false);
+
+      // 2) BACKGROUND: load images with a concurrency cap (avoids UI freeze)
+      const concurrency = 6;
+      const queue = [...baseProducts];
+      setImagesPending(queue.length);
+
+      const worker = async () => {
+        while (queue.length) {
+          if (!isMountedRef.current) break;
+          const next = queue.shift();
+          if (!next) break;
+
+          try {
+            const images = await productImageService.getProductImages(next.product_id);
+            const imageUrls = mapProductImages(images);
+
+            if (isMountedRef.current) {
+              setProducts((prev) =>
+                prev.map((p) => (p.product_id === next.product_id ? { ...p, images: imageUrls } : p))
+              );
+            }
+          } catch (err) {
+            console.warn(`Failed to load images for product ${next.product_id} (${next.sku})`, err);
+          } finally {
+            if (isMountedRef.current) {
+              setImagesPending((n) => Math.max(0, n - 1));
+            }
+          }
+        }
+      };
+
+      await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    } catch (err) {
+      console.error('Error fetching inventory:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load gallery data');
+    } finally {
+      // if we early-returned after setting loading false, this won't hurt
+      setLoading(false);
+    }
+  };
+
+  const copyText = async (text: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTextKey(key);
+      setTimeout(() => setCopiedTextKey(null), 1500);
+    } catch (e) {
+      alert('Failed to copy. Please try again.');
+    }
+  };
 
   const openLightbox = (image: string, productName: string, images: string[], index: number) => {
     setLightboxImage(image);
@@ -344,7 +378,7 @@ const fetchInventoryData = async () => {
     else await copyImageToClipboard(imagePath);
   };
 
-  const filteredProducts = products.filter((p) => {
+  const filteredProducts = useMemo(() => products.filter((p) => {
     const matchesSearch = p.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          p.sku.toLowerCase().includes(searchTerm.toLowerCase());
     
@@ -367,7 +401,12 @@ const fetchInventoryData = async () => {
       default:
         return true;
     }
-  });
+  }), [products, searchTerm, minPrice, maxPrice, filterMode]);
+
+  const totalUnits = useMemo(
+    () => filteredProducts.reduce((sum, p) => sum + p.total_quantity, 0),
+    [filteredProducts]
+  );
 
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900 overflow-hidden">
@@ -386,7 +425,10 @@ const fetchInventoryData = async () => {
                   Product Gallery
                 </h1>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Showing {filteredProducts.length} products • Total: {filteredProducts.reduce((sum, p) => sum + p.total_quantity, 0)} units
+                  Showing {filteredProducts.length} products • Total: {totalUnits} units
+                  {imagesPending > 0 ? (
+                    <span className="ml-2">• Loading images… ({imagesPending})</span>
+                  ) : null}
                 </p>
               </div>
             </div>
@@ -494,6 +536,8 @@ const fetchInventoryData = async () => {
                         src={image}
                         alt={`${product.product_name} - Image ${imageIndex + 1}`}
                         className="w-full h-auto object-contain"
+                        loading="lazy"
+                        decoding="async"
                       />
 
                       {!product.is_available_online && (
@@ -535,9 +579,33 @@ const fetchInventoryData = async () => {
                         {product.product_name}
                       </h3>
                       <div className="flex items-center justify-between gap-2 mb-2">
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          SKU: {product.sku}
-                        </p>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                            SKU: {product.sku}
+                          </p>
+                          <button
+                            onClick={() => copyText(product.sku, `sku-${product.product_id}`)}
+                            className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Copy SKU"
+                          >
+                            {copiedTextKey === `sku-${product.product_id}` ? (
+                              <Check className="w-3 h-3 text-gray-900 dark:text-white" />
+                            ) : (
+                              <Copy className="w-3 h-3 text-gray-600 dark:text-gray-300" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => copyText(`/e-commerce/product/${product.product_id}`, `link-${product.product_id}`)}
+                            className="p-1 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700"
+                            title="Copy E-commerce link"
+                          >
+                            {copiedTextKey === `link-${product.product_id}` ? (
+                              <Check className="w-3 h-3 text-gray-900 dark:text-white" />
+                            ) : (
+                              <LinkIcon className="w-3 h-3 text-gray-600 dark:text-gray-300" />
+                            )}
+                          </button>
+                        </div>
 
                         {/* Product details shortcut (same destination as Product List -> View Details) */}
                         <Link
@@ -547,6 +615,15 @@ const fetchInventoryData = async () => {
                         >
                           <Eye className="w-3 h-3" />
                           Details
+                        </Link>
+
+                        <Link
+                          href={`/e-commerce/product/${product.product_id}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+                          title="Open in E-commerce"
+                        >
+                          <LinkIcon className="w-3 h-3" />
+                          E-commerce
                         </Link>
                       </div>
                       
