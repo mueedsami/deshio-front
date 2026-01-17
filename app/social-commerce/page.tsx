@@ -204,9 +204,24 @@ export default function SocialCommercePage() {
         storesData = (response as any).data;
       }
 
-      setStores(storesData);
-      if (storesData.length > 0) {
-        setSelectedStore(String(storesData[0].id));
+      // Prefer "Main Store" as the default store (falls back to the first store)
+      const normalized = (s: any) => String(s ?? '').toLowerCase().trim();
+      const mainStore = storesData.find(
+        (s) =>
+          s?.is_main === true ||
+          normalized(s?.name) === 'main store' ||
+          normalized(s?.code) === 'main' ||
+          normalized(s?.slug) === 'main'
+      );
+
+      // Put Main Store on top (UI dropdown stays the same, but feels nicer)
+      const sortedStores = mainStore
+        ? [mainStore, ...storesData.filter((s) => s?.id !== mainStore?.id)]
+        : storesData;
+
+      setStores(sortedStores);
+      if (sortedStores.length > 0) {
+        setSelectedStore(String((mainStore ?? sortedStores[0]).id));
       }
     } catch (error) {
       console.error('Error fetching stores:', error);
@@ -731,10 +746,6 @@ export default function SocialCommercePage() {
           }
 
           setSearchResults(results);
-
-          if (results.length === 0) {
-            showToast('No products found in that price range', 'error');
-          }
           return;
         }
 
@@ -753,6 +764,14 @@ export default function SocialCommercePage() {
             response.data.data?.data?.items ||
             response.data.data ||
             [];
+
+          // Some backends return an empty list for very short queries (e.g. 1–2 letters)
+          // In that case, fall back to local search so the UI still works.
+          if (!Array.isArray(products) || products.length === 0) {
+            const localResults = await performLocalSearch(searchQuery);
+            setSearchResults(localResults);
+            return;
+          }
 
           const results: any[] = [];
 
@@ -804,10 +823,6 @@ export default function SocialCommercePage() {
 
           results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
           setSearchResults(results);
-
-          if (results.length === 0 && products.length > 0) {
-            showToast('Products found but not available in selected store', 'error');
-          }
         } else {
           throw new Error('API search unsuccessful');
         }
@@ -815,10 +830,6 @@ export default function SocialCommercePage() {
         console.warn('❌ API search failed, using local search');
         const localResults = await performLocalSearch(searchQuery);
         setSearchResults(localResults);
-
-        if (localResults.length === 0) {
-          showToast('No products found', 'error');
-        }
       }
     }, 300);
 

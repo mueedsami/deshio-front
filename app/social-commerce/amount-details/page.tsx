@@ -47,7 +47,8 @@ export default function AmountDetailsPage() {
   const [transportCost, setTransportCost] = useState('0');
 
   // Advanced payment options
-  const [paymentOption, setPaymentOption] = useState<PaymentOption>('full');
+  // Default to full Cash on Delivery (no advance)
+  const [paymentOption, setPaymentOption] = useState<PaymentOption>('none');
   const [advanceAmount, setAdvanceAmount] = useState('');
 
   // Installment / EMI
@@ -195,10 +196,7 @@ export default function AmountDetailsPage() {
         displayToast('Please select a payment method', 'error');
         return;
       }
-      if (selectedMethod?.requires_reference && !transactionReference.trim()) {
-        displayToast(`Please enter transaction reference for ${selectedMethod.name}`, 'error');
-        return;
-      }
+      // Transaction reference is optional (even if a method normally requires it)
     }
 
     // Installment validation
@@ -273,7 +271,7 @@ export default function AmountDetailsPage() {
           : {}),
         notes:
           (orderData.notes || 'Social Commerce order.') +
-          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid now)` : `Full COD ৳${codAmount.toFixed(2)}`}.`,
+          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid now)` : `Cash on delivery ৳${codAmount.toFixed(2)}`}.`,
       };
 
       console.log('📦 Creating order:', orderPayload);
@@ -317,7 +315,7 @@ export default function AmountDetailsPage() {
           payment_data: {},
         };
 
-        if (selectedMethod?.requires_reference && transactionReference) {
+        if (transactionReference) {
           paymentData.transaction_reference = transactionReference;
           paymentData.external_reference = transactionReference;
         }
@@ -360,7 +358,7 @@ export default function AmountDetailsPage() {
           payment_data: {},
         };
 
-        if (selectedMethod?.requires_reference && transactionReference) {
+        if (transactionReference) {
           advancePaymentData.transaction_reference = transactionReference;
           advancePaymentData.external_reference = transactionReference;
         }
@@ -407,7 +405,7 @@ export default function AmountDetailsPage() {
           payment_data: {},
         };
 
-        if (selectedMethod?.requires_reference && transactionReference) {
+        if (transactionReference) {
           firstPayment.transaction_reference = transactionReference;
           firstPayment.external_reference = transactionReference;
         }
@@ -453,7 +451,7 @@ export default function AmountDetailsPage() {
             ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
               ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid).`
-              : `Order ${createdOrder.order_number} placed. Full COD ৳${codAmount.toFixed(2)}.`;
+              : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -622,6 +620,20 @@ export default function AmountDetailsPage() {
                         <input
                           type="radio"
                           className="h-4 w-4"
+                          checked={paymentOption === 'none'}
+                          onChange={() => setPaymentOption('none')}
+                          disabled={isProcessing}
+                        />
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="w-4 h-4" />
+                          <span>Cash on delivery</span>
+                        </div>
+                      </label>
+
+                      <label className="flex items-center gap-2 text-sm text-gray-800 dark:text-gray-200">
+                        <input
+                          type="radio"
+                          className="h-4 w-4"
                           checked={paymentOption === 'full'}
                           onChange={() => setPaymentOption('full')}
                           disabled={isProcessing}
@@ -662,19 +674,6 @@ export default function AmountDetailsPage() {
                         </div>
                       </label>
 
-                      <label className="flex items-center gap-2 text-sm text-gray-800 dark:text-gray-200">
-                        <input
-                          type="radio"
-                          className="h-4 w-4"
-                          checked={paymentOption === 'none'}
-                          onChange={() => setPaymentOption('none')}
-                          disabled={isProcessing}
-                        />
-                        <div className="flex items-center gap-2">
-                          <DollarSign className="w-4 h-4" />
-                          <span>No advance (Full COD)</span>
-                        </div>
-                      </label>
                     </div>
                   </div>
 
@@ -733,18 +732,18 @@ export default function AmountDetailsPage() {
                           </div>
                         )}
 
-                        {selectedMethod?.requires_reference && (
-                          <div>
-                            <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Transaction Reference</label>
-                            <input
-                              value={transactionReference}
-                              onChange={(e) => setTransactionReference(e.target.value)}
-                              disabled={isProcessing}
-                              className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                              placeholder="e.g. Txn ID"
-                            />
-                          </div>
-                        )}
+                        <div>
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
+                            Transaction Reference <span className="text-gray-500">(optional)</span>
+                          </label>
+                          <input
+                            value={transactionReference}
+                            onChange={(e) => setTransactionReference(e.target.value)}
+                            disabled={isProcessing}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            placeholder="e.g. Txn ID"
+                          />
+                        </div>
                       </>
                     )}
 
