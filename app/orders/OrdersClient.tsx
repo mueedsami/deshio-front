@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -23,9 +23,15 @@ import {
   Settings,
   CheckCircle,
   HandCoins,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
+import pathaoOrderLookupService, {
+  type PathaoBulkLookupItem,
+  type PathaoLookupData,
+} from '@/services/pathaoOrderLookupService';
 import paymentService from '@/services/paymentService';
 import type { PaymentMethod } from '@/services/paymentMethodService';
 import axios from '@/lib/axios';
@@ -216,6 +222,15 @@ const titleCase = (s: string) =>
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
+const sanitizePhone = (phone?: string) => String(phone || '').replace(/[^0-9+]/g, '');
+
+const buildPathaoTrackingUrl = (consignmentId: string, phone?: string) => {
+  const cid = encodeURIComponent(String(consignmentId || '').trim());
+  const ph = encodeURIComponent(sanitizePhone(phone));
+  // Pathao merchant panel tracking page
+  return `https://merchant.pathao.com/tracking?consignment_id=${cid}&phone=${ph}`;
+};
+
 const getApiBaseUrl = () => {
   const raw = process.env.NEXT_PUBLIC_API_URL || '';
   return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
@@ -268,6 +283,12 @@ export default function OrdersDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
 
+  // 🚚 Pathao lookup (order_number -> lookup info)
+  const [pathaoLookupByOrderNumber, setPathaoLookupByOrderNumber] = useState<Record<string, PathaoBulkLookupItem>>({});
+  const [selectedOrderPathao, setSelectedOrderPathao] = useState<PathaoLookupData | null>(null);
+  const [isPathaoLookupLoading, setIsPathaoLookupLoading] = useState(false);
+  const pathaoInFlightRef = useRef<Set<string>>(new Set());
+
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState('');
 
@@ -291,6 +312,33 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   useEffect(() => {
     setViewMode(initialViewMode);
   }, [initialViewMode]);
+
+  // ♻️ Restore cached Pathao lookup results (10 min TTL)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const raw = sessionStorage.getItem('pathao_lookup_cache_v1');
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      const ts = Number(parsed?.ts || 0);
+      const map = parsed?.map || {};
+      if (ts && Date.now() - ts < 10 * 60 * 1000 && map && typeof map === 'object') {
+        setPathaoLookupByOrderNumber(map);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // ♻️ Save Pathao lookup cache
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      sessionStorage.setItem('pathao_lookup_cache_v1', JSON.stringify({ ts: Date.now(), map: pathaoLookupByOrderNumber }));
+    } catch {
+      // ignore
+    }
+  }, [pathaoLookupByOrderNumber]);
 
 
   const [selectedBackendOrder, setSelectedBackendOrder] = useState<any | null>(null);
@@ -919,6 +967,61 @@ const derivePaymentStatus = (order: any) => {
     setFilteredOrders(filtered);
   }, [search, dateFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, orders]);
 
+  // 🧾 Bulk lookup Pathao status for displayed orders
+  const filteredOrderNumbers = useMemo(() => {
+    return (filteredOrders || []).map((o) => o.orderNumber).filter(Boolean);
+  }, [filteredOrders]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      const unique = Array.from(new Set(filteredOrderNumbers));
+      if (unique.length === 0) return;
+
+      // Only fetch missing and not-in-flight order numbers
+      const missing = unique.filter(
+        (n) => !pathaoLookupByOrderNumber[n] && !pathaoInFlightRef.current.has(n)
+      );
+
+      if (missing.length === 0) return;
+
+      // Mark in-flight to avoid duplicate concurrent requests
+      missing.forEach((n) => pathaoInFlightRef.current.add(n));
+      setIsPathaoLookupLoading(true);
+
+      try {
+        for (let i = 0; i < missing.length; i += 100) {
+          if (cancelled) return;
+          const chunk = missing.slice(i, i + 100);
+          const res = await pathaoOrderLookupService.lookupBulk(chunk);
+          if (cancelled) return;
+
+          const next: Record<string, PathaoBulkLookupItem> = {};
+          (res.data || []).forEach((item) => {
+            if (item?.order_number) next[item.order_number] = item;
+          });
+
+          if (Object.keys(next).length > 0) {
+            setPathaoLookupByOrderNumber((prev) => ({ ...prev, ...next }));
+          }
+        }
+      } catch (e) {
+        console.error('Failed to bulk lookup Pathao orders:', e);
+      } finally {
+        // Clear in-flight markers
+        missing.forEach((n) => pathaoInFlightRef.current.delete(n));
+        if (!cancelled) setIsPathaoLookupLoading(false);
+      }
+    };
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [filteredOrderNumbers, pathaoLookupByOrderNumber]);
+
   const handleViewDetails = async (order: Order) => {
     setIsLoadingDetails(true);
     setShowDetailsModal(true);
@@ -931,6 +1034,27 @@ const derivePaymentStatus = (order: any) => {
       setSelectedOrder(transformedOrder);
       // Ensure we always pass an array (never undefined) and keep types narrow for TS
       ensureProductThumbs((fullOrder.items ?? []).map((it: any) => it?.product_id));
+
+      // 🔎 Pathao lookup for this order (for tracking info)
+      try {
+        const odNo = fullOrder?.order_number || transformedOrder.orderNumber;
+        if (odNo) {
+          const lookup = await pathaoOrderLookupService.lookupSingle(odNo);
+          setSelectedOrderPathao(lookup);
+          setPathaoLookupByOrderNumber((prev) => ({
+            ...prev,
+            [lookup.order_number]: {
+              ...lookup,
+              found: true,
+            },
+          }));
+        } else {
+          setSelectedOrderPathao(null);
+        }
+      } catch (e) {
+        console.warn('Pathao lookup failed for order:', e);
+        setSelectedOrderPathao(null);
+      }
     } catch (error: any) {
       console.error('Failed to load order details:', error);
       alert('Failed to load order details: ' + error.message);
@@ -1344,6 +1468,39 @@ const derivePaymentStatus = (order: any) => {
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300">
         <Package className="h-3 w-3" />
         Other
+      </span>
+    );
+  };
+
+  const getDeliveryBadge = (orderNumber: string) => {
+    const info = pathaoLookupByOrderNumber[orderNumber];
+    if (!info) {
+      return isPathaoLookupLoading ? (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+          <Loader className="h-3 w-3 animate-spin" />
+          Checking
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+          <Package className="h-3 w-3" />
+          —
+        </span>
+      );
+    }
+
+    if (info.is_sent_via_pathao) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+          <Truck className="h-3 w-3" />
+          Pathao
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300">
+        <Package className="h-3 w-3" />
+        Regular
       </span>
     );
   };
@@ -2613,6 +2770,7 @@ const derivePaymentStatus = (order: any) => {
 
                                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                   {getOrderTypeBadge(order.orderType)}
+                                  {getDeliveryBadge(order.orderNumber)}
                                   {order.isInstallment && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                                       EMI
@@ -2680,6 +2838,9 @@ const derivePaymentStatus = (order: any) => {
                           Type
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+                          Delivery
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Customer
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
@@ -2722,6 +2883,18 @@ const derivePaymentStatus = (order: any) => {
                                   EMI
                                 </span>
                               )}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-1">
+                              {getDeliveryBadge(order.orderNumber)}
+                              {pathaoLookupByOrderNumber[order.orderNumber]?.is_sent_via_pathao &&
+                                pathaoLookupByOrderNumber[order.orderNumber]?.pathao_consignment_id && (
+                                  <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                                    {pathaoLookupByOrderNumber[order.orderNumber]?.pathao_consignment_id}
+                                  </span>
+                                )}
                             </div>
                           </td>
 
@@ -3120,6 +3293,7 @@ const derivePaymentStatus = (order: any) => {
                   setSelectedOrder(null);
                   setSelectedBackendOrder(null);
                   setImagePreview(null);
+                  setSelectedOrderPathao(null);
                 }}
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
               >
@@ -3158,6 +3332,79 @@ const derivePaymentStatus = (order: any) => {
                   <div>
                     <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-1">Store</p>
                     <p className="text-sm font-medium text-black dark:text-white">{selectedOrder.store}</p>
+                  </div>
+                </div>
+
+                {/* 🚚 Delivery / Pathao Tracking */}
+                <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500 dark:text-gray-500 uppercase mb-2">Delivery</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {getDeliveryBadge(selectedOrder.orderNumber)}
+                        {selectedOrderPathao?.is_sent_via_pathao && selectedOrderPathao?.pathao_consignment_id ? (
+                          <span className="text-xs text-gray-600 dark:text-gray-300">
+                            Consignment: <span className="font-semibold">{selectedOrderPathao.pathao_consignment_id}</span>
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {selectedOrderPathao?.is_sent_via_pathao ? (
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-500 dark:text-gray-400">Pathao Status</span>
+                            <span className="font-medium text-black dark:text-white">
+                              {selectedOrderPathao.pathao_status ? titleCase(selectedOrderPathao.pathao_status) : '—'}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-gray-500 dark:text-gray-400">Shipment Status</span>
+                            <span className="font-medium text-black dark:text-white">
+                              {selectedOrderPathao.shipment_status ? titleCase(selectedOrderPathao.shipment_status) : '—'}
+                            </span>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                          {selectedOrderPathao ? 'This order was not sent via Pathao.' : 'Checking Pathao status...'}
+                        </p>
+                      )}
+                    </div>
+
+                    {selectedOrderPathao?.is_sent_via_pathao && selectedOrderPathao?.pathao_consignment_id ? (
+                      <div className="flex flex-col sm:flex-row items-stretch gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(selectedOrderPathao.pathao_consignment_id || '');
+                              alert('Consignment ID copied');
+                            } catch {
+                              // ignore
+                            }
+                          }}
+                          className="px-3 py-2 text-xs font-semibold border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors flex items-center gap-2"
+                        >
+                          <Copy className="h-4 w-4" />
+                          Copy ID
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = buildPathaoTrackingUrl(
+                              selectedOrderPathao.pathao_consignment_id || '',
+                              selectedOrder.customer?.phone
+                            );
+                            window.open(url, '_blank', 'noopener,noreferrer');
+                          }}
+                          className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded-lg hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors flex items-center gap-2"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                          Track
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
