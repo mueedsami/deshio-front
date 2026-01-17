@@ -115,6 +115,7 @@ export default function VendorPaymentPage() {
 
   // Data states
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [vendorSearch, setVendorSearch] = useState('');
   const [stores, setStores] = useState<Store[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -122,6 +123,18 @@ export default function VendorPaymentPage() {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<OutstandingPurchaseOrder[]>([]);
   const [vendorPayments, setVendorPayments] = useState<any[]>([]);
+
+  const filteredVendors = useMemo(() => {
+    const q = vendorSearch.trim().toLowerCase();
+    if (!q) return vendors;
+    return (Array.isArray(vendors) ? vendors : []).filter((v) => {
+      const name = String(v?.name || '').toLowerCase();
+      const phone = String((v as any)?.phone || '').toLowerCase();
+      const email = String((v as any)?.email || '').toLowerCase();
+      const contact = String((v as any)?.contact_person || '').toLowerCase();
+      return name.includes(q) || phone.includes(q) || email.includes(q) || contact.includes(q);
+    });
+  }, [vendors, vendorSearch]);
 
   // Modal states
   const [showAddVendor, setShowAddVendor] = useState(false);
@@ -1115,8 +1128,25 @@ export default function VendorPaymentPage() {
               <Loader2 className="w-8 h-8 animate-spin text-gray-500" />
             </div>
           ) : (
-            <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded-xl shadow-sm">
-              <table className="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm overflow-hidden">
+              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 dark:text-gray-100">Vendors</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Showing {filteredVendors.length} of {(Array.isArray(vendors) ? vendors.length : 0)}</p>
+                </div>
+                <div className="w-full md:w-80">
+                  <input
+                    type="text"
+                    value={vendorSearch}
+                    onChange={(e) => setVendorSearch(e.target.value)}
+                    placeholder="Search vendors (name/phone/email)"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                  />
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
                 <thead className="bg-gray-100 dark:bg-gray-700">
                   <tr>
                     <th className="px-6 py-3">Vendor</th>
@@ -1128,8 +1158,7 @@ export default function VendorPaymentPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {Array.isArray(vendors) &&
-                    vendors.map((vendor) => (
+                  {filteredVendors.map((vendor) => (
                       <tr
                         key={vendor.id}
                         className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30"
@@ -1235,13 +1264,14 @@ export default function VendorPaymentPage() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                  ))}
                 </tbody>
               </table>
+              </div>
 
-              {vendors.length === 0 && !loading && (
+              {filteredVendors.length === 0 && !loading && (
                 <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-                  No vendors found. Add your first vendor to get started.
+                  {vendorSearch.trim() ? 'No vendors match your search.' : 'No vendors found. Add your first vendor to get started.'}
                 </div>
               )}
             </div>

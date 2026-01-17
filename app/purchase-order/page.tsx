@@ -11,6 +11,45 @@ import purchaseOrderService, {
 } from '@/services/purchase-order.service';
 import { vendorService, Vendor } from '@/services/vendorService';
 
+// --- Image helpers (same approach as Orders page) ---
+const getApiBaseUrl = () => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || '';
+  return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
+};
+
+const toPublicImageUrl = (imagePath?: string | null) => {
+  if (!imagePath) return null;
+  const p = String(imagePath);
+  if (!p) return null;
+  if (p.startsWith('http')) return p;
+  if (p.startsWith('/storage/')) return `${getApiBaseUrl()}${p}`;
+  if (p.startsWith('storage/')) return `${getApiBaseUrl()}/${p}`;
+  return `${getApiBaseUrl()}/storage/${p.replace(/^\//, '')}`;
+};
+
+const pickPOItemImage = (item: any): string | null => {
+  const direct =
+    item?.product_image ||
+    item?.image_url ||
+    item?.image ||
+    item?.thumbnail ||
+    item?.product?.image_url ||
+    item?.product?.image_path ||
+    item?.product?.image ||
+    item?.product?.thumbnail;
+
+  if (direct) return toPublicImageUrl(direct);
+
+  const imgs: any[] = item?.product?.images || item?.images || item?.product_images || item?.product?.product_images || [];
+  if (Array.isArray(imgs) && imgs.length > 0) {
+    const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
+    const path = primary?.image_url || primary?.image_path || primary?.url;
+    return toPublicImageUrl(path);
+  }
+
+  return null;
+};
+
 // Utility function to safely format currency
 const formatCurrency = (value: any): string => {
   if (value === null || value === undefined || value === '') return '0.00';
@@ -112,6 +151,9 @@ export default function PurchaseOrdersPage() {
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  // ✅ Image preview (same UX as Orders page)
+  const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
+
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
@@ -212,15 +254,20 @@ export default function PurchaseOrdersPage() {
   const handleViewPO = async (po: PurchaseOrder) => {
     try {
       setLoading(true);
-      const response = await purchaseOrderService.getById(po.id);
-      setSelectedPO(response.data || po);
+      const res = await purchaseOrderService.getById(po.id);
+
+      // ✅ unwrap ApiResponse
+      const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
+
+      setSelectedPO(fullPO);
       setShowViewModal(true);
-    } catch (error: any) {
+    }  catch (error: any) {
       showAlert('error', 'Failed to load purchase order details');
     } finally {
       setLoading(false);
     }
   };
+
 
   const handleApprovePO = async (id: number) => {
     if (!confirm('Are you sure you want to approve this purchase order?')) return;
@@ -238,75 +285,85 @@ export default function PurchaseOrdersPage() {
   };
 
   const openReceiveModal = async (po: PurchaseOrder) => {
-    try {
-      setLoading(true);
-      const response = await purchaseOrderService.getById(po.id);
-      const fullPO = response.data || po;
-      setSelectedPO(fullPO);
+  try {
+    setLoading(true);
+    const res = await purchaseOrderService.getById(po.id);
 
-      // Initialize receive form with PO items
-      const items = (fullPO.items || []).map(item => ({
+    const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
+    setSelectedPO(fullPO);
+
+    const items = (fullPO.items ?? []).map((item: any) => {
+      const ordered = Number(item.quantity_ordered ?? 0);
+      const received = Number(item.quantity_received ?? 0);
+      const remaining = Math.max(0, ordered - received);
+
+      return {
         item_id: item.id || 0,
-        quantity_received: '0',
+        quantity_received: String(remaining),
         batch_number: '',
         manufactured_date: '',
-        expiry_date: ''
-      }));
+        expiry_date: '',
+      };
+    });
 
-      setReceiveForm({ items });
-      setShowReceiveModal(true);
-    } catch (error: any) {
-      showAlert('error', 'Failed to load purchase order details');
-    } finally {
-      setLoading(false);
-    }
-  };
+    setReceiveForm({ items });
+    setShowReceiveModal(true);
+  } catch (error: any) {
+    showAlert('error', 'Failed to load purchase order details');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const openEditModal = async (po: PurchaseOrder) => {
-    try {
-      setLoading(true);
+  try {
+    setLoading(true);
 
-      const fullPO = await purchaseOrderService.getById(po.id);
+    const res = await purchaseOrderService.getById(po.id);
+    const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
 
-      const items = (fullPO.items || []).map((it) => ({
-        id: it.id,
-        product_label: it.product?.name
-          ? `${it.product.name}${it.product.sku ? ` (${it.product.sku})` : ''}`
-          : `Item #${it.id}`,
-        quantity_ordered: String(it.quantity_ordered ?? 0),
-        unit_cost: String(it.unit_cost ?? 0),
-      }));
+    const items = (fullPO.items ?? []).map((it: any) => ({
+      id: it.id,
+      product_label: it.product?.name
+        ? `${it.product.name}${it.product.sku ? ` (${it.product.sku})` : ''}`
+        : `Item #${it.id}`,
+      quantity_ordered: String(it.quantity_ordered ?? 0),
+      unit_cost: String(it.unit_cost ?? 0),
+    }));
 
-      const originalItems: Record<number, { quantity_ordered: number; unit_cost: number }> = {};
-      (fullPO.items || []).forEach((it) => {
-        originalItems[it.id] = {
-          quantity_ordered: Number(it.quantity_ordered ?? 0),
-          unit_cost: Number(it.unit_cost ?? 0),
-        };
-      });
+    const originalItems: Record<number, { quantity_ordered: number; unit_cost: number }> = {};
+    (fullPO.items ?? []).forEach((it: any) => {
+      originalItems[it.id] = {
+        quantity_ordered: Number(it.quantity_ordered ?? 0),
+        unit_cost: Number(it.unit_cost ?? 0),
+      };
+    });
 
-      setEditPO(fullPO);
-      setEditForm({
-        tax_amount: String(fullPO.tax_amount ?? 0),
-        discount_amount: String(fullPO.discount_amount ?? 0),
-        shipping_cost: String(fullPO.shipping_cost ?? 0),
-        items,
-      });
-      setEditOriginal({
-        tax_amount: Number(fullPO.tax_amount ?? 0),
-        discount_amount: Number(fullPO.discount_amount ?? 0),
-        shipping_cost: Number(fullPO.shipping_cost ?? 0),
-        items: originalItems,
-      });
+    setEditPO(fullPO);
+    setEditForm({
+      tax_amount: String((fullPO as any).tax_amount ?? 0),
+      discount_amount: String((fullPO as any).discount_amount ?? 0),
+      shipping_cost: String((fullPO as any).shipping_cost ?? 0),
+      items,
+    });
 
-      setShowEditModal(true);
-    } catch (error) {
-      console.error('Error loading PO for edit:', error);
-      showAlert('error', 'Failed to load purchase order for editing');
-    } finally {
-      setLoading(false);
-    }
-  };
+    setEditOriginal({
+      tax_amount: Number((fullPO as any).tax_amount ?? 0),
+      discount_amount: Number((fullPO as any).discount_amount ?? 0),
+      shipping_cost: Number((fullPO as any).shipping_cost ?? 0),
+      items: originalItems,
+    });
+
+    setShowEditModal(true);
+  } catch (error) {
+    console.error('Error loading PO for edit:', error);
+    showAlert('error', 'Failed to load purchase order for editing');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const handleSaveEditPO = async () => {
     if (!editPO) return;
@@ -342,7 +399,7 @@ export default function PurchaseOrdersPage() {
       showAlert('success', 'Purchase order updated successfully');
       setShowEditModal(false);
       setEditPO(null);
-      await fetchPurchaseOrders();
+      await loadPurchaseOrders();
     } catch (error: any) {
       console.error('Error updating PO:', error);
       showAlert('error', error?.response?.data?.message || 'Failed to update purchase order');
@@ -414,6 +471,9 @@ export default function PurchaseOrdersPage() {
     }
   };
 
+  const getTotalOrderedQty = (items?: any[]) =>
+    (Array.isArray(items) ? items : []).reduce((sum, it) => sum + Number(it?.quantity_ordered ?? 0), 0);
+
   return (
     <div className={`${darkMode ? 'dark' : ''} flex min-h-screen`}>
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
@@ -425,6 +485,41 @@ export default function PurchaseOrdersPage() {
         />
 
         {alert && <Alert type={alert.type} message={alert.message} />}
+
+        {/* 🖼️ Product image preview (same UX as Orders > View Details) */}
+        {imagePreview && (
+          <div
+            className="fixed inset-0 bg-black/70 flex items-center justify-center z-[999] p-4"
+            onClick={() => setImagePreview(null)}
+          >
+            <div
+              className="bg-white dark:bg-gray-900 rounded-xl w-full max-w-2xl border border-gray-200 dark:border-gray-800 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-black dark:text-white truncate">{imagePreview.name}</p>
+                <button
+                  onClick={() => setImagePreview(null)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+                  aria-label="Close"
+                >
+                  <X className="h-5 w-5 text-gray-600 dark:text-gray-300" />
+                </button>
+              </div>
+
+              <div className="p-3">
+                <img
+                  src={imagePreview.url}
+                  alt={imagePreview.name}
+                  className="w-full max-h-[70vh] object-contain rounded-lg bg-white dark:bg-black"
+                  onError={(e) => {
+                    e.currentTarget.src = '/placeholder-product.png';
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         <main className="p-6">
           <div className="flex items-center justify-between mb-6">
@@ -559,7 +654,7 @@ export default function PurchaseOrdersPage() {
                           <Eye className="w-4 h-4" />
                           View
                         </button>
-                        {(po.status === 'draft' || po.status === 'approved') && (
+                        {po.status === 'draft' && (
                           <button
                             onClick={() => openEditModal(po)}
                             className="flex items-center gap-1 px-3 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors"
@@ -645,6 +740,7 @@ export default function PurchaseOrdersPage() {
                         <table className="min-w-full text-sm">
                           <thead className="bg-gray-50 dark:bg-gray-700">
                             <tr>
+                              <th className="px-4 py-2 text-left text-gray-900 dark:text-gray-100">Image</th>
                               <th className="px-4 py-2 text-left text-gray-900 dark:text-gray-100">Product</th>
                               <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Qty Ordered</th>
                               <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Qty Received</th>
@@ -655,6 +751,29 @@ export default function PurchaseOrdersPage() {
                           <tbody>
                             {Array.isArray(po.items) && po.items.map((item, idx) => (
                               <tr key={idx} className="border-t border-gray-200 dark:border-gray-700">
+                                <td className="px-4 py-2">
+                                  {(() => {
+                                    const img = pickPOItemImage(item);
+                                    if (!img) return <span className="text-xs text-gray-400">—</span>;
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => setImagePreview({ url: img, name: item.product_name || 'Product image' })}
+                                        className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800"
+                                        title="View image"
+                                      >
+                                        <img
+                                          src={img}
+                                          alt={item.product_name || 'Product'}
+                                          className="w-full h-full object-cover"
+                                          onError={(e) => {
+                                            e.currentTarget.src = '/placeholder-product.png';
+                                          }}
+                                        />
+                                      </button>
+                                    );
+                                  })()}
+                                </td>
                                 <td className="px-4 py-2 text-gray-900 dark:text-gray-100">
                                   {item.product_name}
                                   <span className="text-xs text-gray-500 dark:text-gray-400 block">
@@ -723,26 +842,55 @@ export default function PurchaseOrdersPage() {
                   {selectedPO.store?.name || 'N/A'}
                 </p>
               </div>
+              <div>
+                <p className="text-sm text-gray-600 dark:text-gray-400">Total Items (Qty)</p>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                  {getTotalOrderedQty(selectedPO.items)}
+                </p>
+              </div>
             </div>
 
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
               <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Items</h4>
               <div className="space-y-2">
-                {Array.isArray(selectedPO.items) && selectedPO.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                    <div>
-                      <p className="font-medium text-gray-900 dark:text-gray-100">{item.product_name}</p>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        Qty: {item.quantity_ordered} × ৳{formatCurrency(item.unit_cost)}
-                      </p>
+                {Array.isArray(selectedPO.items) && selectedPO.items.map((item, idx) => {
+                  const img = pickPOItemImage(item);
+                  return (
+                    <div key={idx} className="flex justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
+                      <div className="flex items-start gap-3 min-w-0">
+                        {img && (
+                          <button
+                            type="button"
+                            onClick={() => setImagePreview({ url: img, name: item.product_name || 'Product image' })}
+                            className="w-11 h-11 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 flex-shrink-0"
+                            title="View image"
+                          >
+                            <img
+                              src={img}
+                              alt={item.product_name || 'Product'}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = '/placeholder-product.png';
+                              }}
+                            />
+                          </button>
+                        )}
+
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 dark:text-gray-100 truncate">{item.product_name}</p>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                            Qty: {item.quantity_ordered} × ৳{formatCurrency(item.unit_cost)}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="font-semibold text-gray-900 dark:text-gray-100">
+                          ৳{formatCurrency((item.quantity_ordered || 0) * (item.unit_cost || 0))}
+                        </p>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-gray-900 dark:text-gray-100">
-                        ৳{formatCurrency((item.quantity_ordered || 0) * (item.unit_cost || 0))}
-                      </p>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
