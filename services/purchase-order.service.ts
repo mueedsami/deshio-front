@@ -168,7 +168,12 @@ class PurchaseOrderService {
       if (filters.to_date) cleanFilters.to_date = filters.to_date;
       if (filters.sort_by) cleanFilters.sort_by = filters.sort_by;
       if (filters.sort_direction) cleanFilters.sort_direction = filters.sort_direction;
-      if (filters.per_page) cleanFilters.per_page = filters.per_page;
+      if (filters.per_page) {
+        // Different backends use different param names; send a few common ones.
+        cleanFilters.per_page = filters.per_page;
+        cleanFilters.perPage = filters.per_page;
+        cleanFilters.limit = filters.per_page;
+      }
       if (filters.page) cleanFilters.page = filters.page;
     }
 

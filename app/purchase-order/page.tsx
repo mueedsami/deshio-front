@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
 import purchaseOrderService, { 
   PurchaseOrder, 
   ReceiveItemData,
@@ -155,9 +156,63 @@ export default function PurchaseOrdersPage() {
   const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
 
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
+  const [pagination, setPagination] = useState<{
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number;
+    to: number;
+  }>({ current_page: 1, last_page: 1, per_page: 50, total: 0, from: 0, to: 0 });
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [expandedPO, setExpandedPO] = useState<number | null>(null);
+
+  // ✅ Barcode Center (Print ALL unit-level barcodes for a PO)
+  const poBarcodeSources: BatchBarcodeSource[] = useMemo(() => {
+    const items = (selectedPO?.items ?? []) as any[];
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    const toNumber = (v: any) => {
+      if (v === null || v === undefined || v === '') return 0;
+      const n = typeof v === 'string' ? Number(String(v).replace(/,/g, '')) : Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+
+    const out: BatchBarcodeSource[] = [];
+
+    for (const it of items) {
+      // Backend may return different shapes; keep it defensive.
+      const pb = it?.productBatch || it?.product_batch || it?.batch || it?.product_batch_data;
+      const batchId = pb?.id;
+      if (!batchId) continue;
+
+      const productName =
+        it?.product_name ||
+        it?.product?.name ||
+        pb?.product?.name ||
+        it?.product_sku ||
+        'Product';
+
+      // Prefer sell price if provided by PO receive flow; otherwise fallback.
+      const price = toNumber(it?.unit_sell_price ?? pb?.sell_price ?? it?.unit_cost ?? 0);
+
+      const fallbackCode =
+        pb?.barcode?.barcode ||
+        pb?.barcode ||
+        pb?.primary_barcode ||
+        pb?.batch_number;
+
+      out.push({
+        batchId: Number(batchId),
+        productName: String(productName),
+        price,
+        fallbackCode: fallbackCode ? String(fallbackCode) : undefined,
+      });
+    }
+
+    return out;
+  }, [selectedPO]);
 
   // Modals
   const [showViewModal, setShowViewModal] = useState(false);
@@ -168,8 +223,13 @@ export default function PurchaseOrdersPage() {
     vendor_id: undefined,
     status: '',
     payment_status: '',
-    search: ''
+    search: '',
+    // ✅ backend seems to default to a very small page size in some environments
+    // so we force a sane default here.
+    per_page: 50,
+    page: 1,
   });
+
 
   // Receive form
   const [receiveForm, setReceiveForm] = useState<{
@@ -219,19 +279,70 @@ export default function PurchaseOrdersPage() {
 
   useEffect(() => {
     loadPurchaseOrders();
-  }, [filters.vendor_id, filters.status, filters.payment_status]);
+  }, [filters.vendor_id, filters.status, filters.payment_status, filters.page, filters.per_page]);
 
   const showAlert = (type: 'success' | 'error', message: string) => {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 3000);
   };
 
+  const updateFilters = (
+  partial: Partial<PurchaseOrderFilters>,
+  opts?: { resetPage?: boolean }
+) => {
+  const resetPage = opts?.resetPage ?? true;
+
+  setFilters((prev) => ({
+      ...prev,
+      ...partial,
+      // reset to page 1 by default when changing filters,
+      // BUT do not override page if caller explicitly sets it
+      ...(resetPage && !('page' in partial) ? { page: 1 } : {}),
+    }));
+  };
+
+
   const loadPurchaseOrders = async () => {
     try {
       setLoading(true);
       const response = await purchaseOrderService.getAll(filters);
-      const orders = response.data?.data || [];
-      setPurchaseOrders(Array.isArray(orders) ? orders : []);
+
+      // Support both paginated and non-paginated shapes
+      const paginated = (response as any)?.data && !Array.isArray((response as any).data) ? (response as any).data : null;
+      const list = Array.isArray(paginated?.data)
+        ? paginated.data
+        : Array.isArray(paginated?.data?.data)
+          ? paginated.data.data
+          : Array.isArray((response as any)?.data)
+            ? (response as any).data
+            : Array.isArray((response as any)?.data?.data)
+              ? (response as any).data.data
+              : [];
+
+      setPurchaseOrders(Array.isArray(list) ? list : []);
+
+      // Try to keep pagination meta if available
+      const meta = paginated;
+      if (meta && typeof (meta as any).current_page === 'number') {
+        setPagination({
+          current_page: (meta as any).current_page ?? 1,
+          last_page: (meta as any).last_page ?? 1,
+          per_page: (meta as any).per_page ?? (filters.per_page ?? 50),
+          total: (meta as any).total ?? 0,
+          from: (meta as any).from ?? 0,
+          to: (meta as any).to ?? 0,
+        });
+      } else {
+        // If backend doesn't paginate, just derive a simple meta
+        setPagination((prev) => ({
+          ...prev,
+          current_page: 1,
+          last_page: 1,
+          total: Array.isArray(list) ? list.length : 0,
+          from: Array.isArray(list) && list.length ? 1 : 0,
+          to: Array.isArray(list) ? list.length : 0,
+        }));
+      }
     } catch (error: any) {
       console.error('Failed to load purchase orders:', error);
       setPurchaseOrders([]);
@@ -530,20 +641,14 @@ export default function PurchaseOrdersPage() {
 
           {/* Filters */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-4 mb-6">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Vendor
                 </label>
                 <select
                   value={filters.vendor_id || ''}
-                  onChange={(e) => {
-                    const newFilters = {
-                      ...filters,
-                      vendor_id: e.target.value ? parseInt(e.target.value) : undefined
-                    };
-                    setFilters(newFilters);
-                  }}
+                  onChange={(e) => updateFilters({ vendor_id: e.target.value ? parseInt(e.target.value) : undefined })}
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 >
                   <option value="">All Vendors</option>
@@ -559,7 +664,7 @@ export default function PurchaseOrdersPage() {
                 </label>
                 <select
                   value={filters.status}
-                  onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+                  onChange={(e) => updateFilters({ status: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 >
                   <option value="">All Status</option>
@@ -577,7 +682,7 @@ export default function PurchaseOrdersPage() {
                 </label>
                 <select
                   value={filters.payment_status}
-                  onChange={(e) => setFilters({ ...filters, payment_status: e.target.value })}
+                  onChange={(e) => updateFilters({ payment_status: e.target.value })}
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 >
                   <option value="">All Payment Status</option>
@@ -594,11 +699,26 @@ export default function PurchaseOrdersPage() {
                 <input
                   type="text"
                   value={filters.search}
-                  onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                  onChange={(e) => updateFilters({ search: e.target.value }, { resetPage: false })}
                   onKeyPress={(e) => e.key === 'Enter' && loadPurchaseOrders()}
                   placeholder="Search PO number..."
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                  Per Page
+                </label>
+                <select
+                  value={filters.per_page || 50}
+                  onChange={(e) => updateFilters({ per_page: parseInt(e.target.value), page: 1 })}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                >
+                  {[15, 30, 50, 100].map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
               </div>
             </div>
           </div>
@@ -802,6 +922,39 @@ export default function PurchaseOrdersPage() {
                 </div>
               ))}
 
+              {purchaseOrders.length > 0 && (
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 py-3 px-2">
+                  <div className="text-sm text-gray-600 dark:text-gray-400">
+                    Showing <span className="font-medium text-gray-900 dark:text-gray-100">{pagination.from}</span>–<span className="font-medium text-gray-900 dark:text-gray-100">{pagination.to}</span> of{' '}
+                    <span className="font-medium text-gray-900 dark:text-gray-100">{pagination.total}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateFilters({ page: Math.max(1, (filters.page || 1) - 1) }, { resetPage: false })}
+                      disabled={(filters.page || 1) <= 1}
+                      className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Prev
+                    </button>
+
+                    <div className="text-sm text-gray-700 dark:text-gray-300 px-2">
+                      Page <span className="font-semibold">{pagination.current_page}</span> / <span className="font-semibold">{pagination.last_page}</span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => updateFilters({ page: Math.min(pagination.last_page || 1, (filters.page || 1) + 1) }, { resetPage: false })}
+                      disabled={(pagination.last_page || 1) <= (filters.page || 1)}
+                      className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {purchaseOrders.length === 0 && !loading && (
                 <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                   No purchase orders found.
@@ -847,6 +1000,37 @@ export default function PurchaseOrdersPage() {
                 <p className="font-semibold text-gray-900 dark:text-gray-100">
                   {getTotalOrderedQty(selectedPO.items)}
                 </p>
+              </div>
+            </div>
+
+            {/* ✅ PO Barcode Center */}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <h4 className="font-semibold text-gray-900 dark:text-gray-100">Barcode Center</h4>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    One-click print for this Purchase Order. It prints all <b>active unit-level</b> barcodes from the received batches.
+                    If a batch has no individual barcodes, it falls back to its primary barcode.
+                  </p>
+                  {poBarcodeSources.length === 0 ? (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                      No received batches found for this PO yet. Receive the PO first to generate batches/barcodes.
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Found {poBarcodeSources.length} received batch(es) linked to this PO.
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <GroupedAllBarcodesPrinter
+                    sources={poBarcodeSources}
+                    buttonLabel="Print ALL barcodes (PO)"
+                    title={`PO ${selectedPO.po_number} — All barcodes`}
+                    softLimit={1200}
+                  />
+                </div>
               </div>
             </div>
 
