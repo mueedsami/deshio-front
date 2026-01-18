@@ -67,10 +67,6 @@ async function ensureQZConnection() {
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
-// Fine alignment tweak: shift whole label content horizontally.
-// Negative moves left, positive moves right.
-// Positive = shift right, Negative = shift left
-const SHIFT_X_MM = 2; // requested: move right by 2mm
 
 function mmToIn(mm: number) {
   return mm / 25.4;
@@ -101,46 +97,6 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) 
   return t.length ? (t + ellipsis) : '';
 }
 
-function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const clean = (text || '').trim().replace(/\s+/g, ' ');
-  if (!clean) return ['', ''];
-
-  if (ctx.measureText(clean).width <= maxWidth) return [clean, ''];
-
-  const words = clean.split(' ');
-  // If no spaces, fall back to a simple char-based split
-  if (words.length <= 1) {
-    let line1 = clean;
-    while (line1.length > 0 && ctx.measureText(line1).width > maxWidth) {
-      line1 = line1.slice(0, -1);
-    }
-    const rest = clean.slice(line1.length).trim();
-    const line2 = rest ? fitText(ctx, rest, maxWidth) : '';
-    return [line1 || fitText(ctx, clean, maxWidth), line2];
-  }
-
-  // Build the first line word-by-word
-  let line1 = '';
-  let i = 0;
-  for (; i < words.length; i++) {
-    const test = line1 ? `${line1} ${words[i]}` : words[i];
-    if (ctx.measureText(test).width <= maxWidth) {
-      line1 = test;
-    } else {
-      break;
-    }
-  }
-
-  if (!line1) {
-    return [fitText(ctx, clean, maxWidth), ''];
-  }
-
-  const line2Raw = words.slice(i).join(' ').trim();
-  const line2 = line2Raw ? fitText(ctx, line2Raw, maxWidth) : '';
-  return [line1, line2];
-}
-
-
 async function renderLabelBase64(opts: {
   code: string;
   productName: string;
@@ -167,8 +123,7 @@ async function renderLabelBase64(opts: {
   ctx.fillRect(0, 0, wPx, hPx);
 
   const pad = Math.round(wPx * 0.04); // ~4%
-  const shiftPx = Math.round((SHIFT_X_MM / 25.4) * dpi);
-  const centerX = wPx / 2 + shiftPx;
+  const centerX = wPx / 2;
 
   // Brand
   ctx.fillStyle = '#000';
@@ -177,37 +132,18 @@ async function renderLabelBase64(opts: {
   ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`; // ~22px @ 200px
   ctx.fillText('Deshio', centerX, pad);
 
-  // Product name (wrap to 2 lines when long)
+  // Product name
   const nameY = pad + Math.round(hPx * 0.14);
-  const nameMaxW = wPx - pad * 2;
-
-  let nameFont = Math.round(hPx * 0.09);
-  ctx.font = `700 ${nameFont}px Arial`;
-
-  let [name1, name2] = wrapTwoLines(ctx, (opts.productName || 'Product').trim(), nameMaxW);
-  if (name2) {
-    // Slightly smaller font when using 2 lines to keep spacing comfortable
-    nameFont = Math.round(hPx * 0.082);
-    ctx.font = `700 ${nameFont}px Arial`;
-    [name1, name2] = wrapTwoLines(ctx, (opts.productName || 'Product').trim(), nameMaxW);
-  }
-
-  ctx.fillText(name1, centerX, nameY);
-  const lineGap = Math.max(2, Math.round(hPx * 0.01));
-  let afterNameBottom = nameY + nameFont;
-  if (name2) {
-    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
-    afterNameBottom = nameY + (nameFont + lineGap) * 2;
-  }
-
-  const afterNameY = afterNameBottom + Math.round(hPx * 0.03);
+  ctx.font = `600 ${Math.round(hPx * 0.09)}px Arial`; // ~18px
+  const safeName = fitText(ctx, (opts.productName || 'Product').trim(), wPx - pad * 2);
+  ctx.fillText(safeName, centerX, nameY);
 
   // Barcode (pixel-perfect): JsBarcode will override canvas.width/height based on content.
   // So we render, then center it horizontally and scale down ONLY if it would overflow.
   const JsBarcode = (window as any).JsBarcode;
 
   // Slightly larger barcode + number (still safe within 39x25mm)
-  const maxBcW = Math.round((wPx - pad * 2) * 0.98);
+  const maxBcW = Math.round((wPx - pad * 2) * 0.97);
   const maxBcH = Math.round(hPx * 0.56);
   const bcHeight = Math.round(hPx * 0.28);
   const bcFontSize = Math.round(hPx * 0.09);
@@ -240,11 +176,11 @@ async function renderLabelBase64(opts: {
     break;
   }
 
-  const bcY = Math.max(pad + Math.round(hPx * 0.27), Math.round(afterNameY));
+  const bcY = pad + Math.round(hPx * 0.27);
   const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
   const drawW = Math.round(bcCanvas.width * scale);
   const drawH = Math.round(bcCanvas.height * scale);
-  const bcX = Math.round((wPx - drawW) / 2 + shiftPx);
+  const bcX = Math.round((wPx - drawW) / 2);
 
   // Keep it crisp on thermal printers
   ctx.imageSmoothingEnabled = false;
@@ -253,7 +189,7 @@ async function renderLabelBase64(opts: {
   // Price
   const priceText = `Price (VAT Inclusive): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
   ctx.textBaseline = 'bottom';
-  ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
+  ctx.font = `700 ${Math.round(hPx * 0.085)}px Arial`;
   const priceY = hPx - pad;
   ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
 
