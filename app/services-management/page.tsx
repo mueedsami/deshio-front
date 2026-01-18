@@ -6,7 +6,6 @@ import {
   Edit2,
   Trash2,
   Power,
-  PowerOff,
   DollarSign,
   Tag,
   FileText,
@@ -25,6 +24,7 @@ export default function ServiceManagementPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
@@ -47,6 +47,8 @@ export default function ServiceManagementPage() {
   const loadServices = async () => {
     const data = await serviceManagementService.getAllServices();
     setServices(data);
+    // Keep selection in sync with current list
+    setSelectedIds((prev) => prev.filter((id) => data.some((s) => s.id === id)));
   };
 
   const showToast = (message: string, type: 'success' | 'error') => {
@@ -120,6 +122,63 @@ export default function ServiceManagementPage() {
     }
   };
 
+  const handleHardDelete = async (id: number) => {
+    const ok = confirm(
+      'Permanently delete this service? This cannot be undone.\n\nNote: Services with existing orders cannot be force deleted.'
+    );
+    if (!ok) return;
+
+    try {
+      await serviceManagementService.forceDeleteService(id);
+      showToast('Service permanently deleted', 'success');
+      await loadServices();
+    } catch (error: any) {
+      const msg = error?.message || 'Error permanently deleting service';
+      showToast(msg, 'error');
+    }
+  };
+
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((prev) => {
+      if (services.length === 0) return [];
+      if (prev.length === services.length) return [];
+      return services.map((s) => s.id);
+    });
+  };
+
+  const handleBulkDelete = async (force: boolean) => {
+    if (selectedIds.length === 0) return;
+    const label = force ? 'PERMANENTLY delete' : 'delete';
+    const ok = confirm(
+      `Are you sure you want to ${label} ${selectedIds.length} service(s)?` +
+        (force ? '\n\nThis cannot be undone. Services with orders will be skipped.' : '')
+    );
+    if (!ok) return;
+
+    try {
+      const res = await serviceManagementService.bulkDeleteServices(selectedIds, force);
+      const deletedCount = res?.summary?.deleted_count ?? res?.deleted?.length ?? 0;
+      const failedCount = res?.summary?.failed_count ?? res?.failed?.length ?? 0;
+
+      if (failedCount > 0) {
+        const firstFew = (res.failed || []).slice(0, 3).map((f) => `${f.name || f.id}: ${f.reason || 'Failed'}`).join('; ');
+        showToast(`Deleted ${deletedCount}, failed ${failedCount}. ${firstFew}`, failedCount ? 'error' : 'success');
+      } else {
+        showToast(`Deleted ${deletedCount} service(s)`, 'success');
+      }
+
+      setSelectedIds([]);
+      await loadServices();
+    } catch (error: any) {
+      const msg = error?.message || 'Bulk delete failed';
+      showToast(msg, 'error');
+    }
+  };
+
   const handleToggleStatus = async (id: number) => {
     try {
       await serviceManagementService.toggleServiceStatus(id);
@@ -168,13 +227,36 @@ export default function ServiceManagementPage() {
                 Manage add-on services for POS, Social Commerce, and E-commerce
               </p>
             </div>
-            <button
-              onClick={() => handleOpenModal()}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
-            >
-              <Plus size={20} />
-              Add Service
-            </button>
+            <div className="flex items-center gap-2">
+              {selectedIds.length > 0 && (
+                <>
+                  <button
+                    onClick={() => handleBulkDelete(false)}
+                    className="flex items-center gap-2 bg-gray-800 hover:bg-gray-900 text-white px-4 py-2 rounded-lg transition-colors"
+                    title="Bulk delete (soft delete)"
+                  >
+                    <Trash2 size={18} />
+                    Delete Selected ({selectedIds.length})
+                  </button>
+                  <button
+                    onClick={() => handleBulkDelete(true)}
+                    className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition-colors"
+                    title="Bulk hard delete (permanent)"
+                  >
+                    <Trash2 size={18} />
+                    Hard Delete ({selectedIds.length})
+                  </button>
+                </>
+              )}
+
+              <button
+                onClick={() => handleOpenModal()}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors"
+              >
+                <Plus size={20} />
+                Add Service
+              </button>
+            </div>
           </div>
 
           {/* Stats Cards */}
@@ -237,6 +319,15 @@ export default function ServiceManagementPage() {
                 <thead className="bg-gray-50 dark:bg-gray-700">
                   <tr>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
+                      <input
+                        type="checkbox"
+                        checked={services.length > 0 && selectedIds.length === services.length}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4"
+                        aria-label="Select all"
+                      />
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                       Service Name
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
@@ -262,7 +353,7 @@ export default function ServiceManagementPage() {
                 <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                   {services.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+                      <td colSpan={8} className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
                         <FileText className="mx-auto mb-2" size={48} />
                         <p>No services found. Click "Add Service" to create one.</p>
                       </td>
@@ -270,6 +361,15 @@ export default function ServiceManagementPage() {
                   ) : (
                     services.map((service) => (
                       <tr key={service.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(service.id)}
+                            onChange={() => toggleSelect(service.id)}
+                            className="h-4 w-4"
+                            aria-label={`Select ${service.name}`}
+                          />
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900 dark:text-white">
                             {service.name}
@@ -326,6 +426,13 @@ export default function ServiceManagementPage() {
                               title="Delete"
                             >
                               <Trash2 size={18} />
+                            </button>
+                            <button
+                              onClick={() => handleHardDelete(service.id)}
+                              className="px-2 py-1 rounded border border-red-200 text-red-700 hover:bg-red-50 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-900/20"
+                              title="Hard delete (permanent)"
+                            >
+                              Hard
                             </button>
                           </div>
                         </td>

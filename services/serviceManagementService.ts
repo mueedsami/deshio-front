@@ -18,6 +18,12 @@ export interface Service {
   updatedAt: string;
 }
 
+export interface BulkDeleteResult {
+  deleted: Array<{ id: number; name?: string; code?: string; type?: string }>;
+  failed: Array<{ id: number; name?: string; code?: string; reason?: string }>;
+  summary?: { total_requested?: number; deleted_count?: number; failed_count?: number };
+}
+
 type ApiService = any;
 
 class ServiceManagementService {
@@ -376,6 +382,61 @@ class ServiceManagementService {
       this.writeServicesToStorage(filtered);
       console.warn('API deleteService failed; removed from local cache as fallback:', e);
       return services.length !== filtered.length;
+    }
+  }
+
+  /**
+   * Force delete (hard delete) a service.
+   * DELETE /api/services/{id}/force
+   */
+  async forceDeleteService(id: number): Promise<boolean> {
+    try {
+      await axiosInstance.delete(`/services/${id}/force`);
+      await this.getAllServices();
+      return true;
+    } catch (e) {
+      const status = this.getAxiosStatus(e);
+      // Hard delete is expected to return 400 for "has orders".
+      if (status && status >= 400 && status < 500) {
+        const msg = this.extractApiErrorMessage(e);
+        console.error('API forceDeleteService failed:', msg, e);
+        throw new Error(msg);
+      }
+      // fallback: do not delete locally (hard delete must be authoritative)
+      const msg = this.extractApiErrorMessage(e);
+      throw new Error(msg || 'Force delete failed');
+    }
+  }
+
+  /**
+   * Bulk delete services.
+   * POST /api/services/bulk-delete { service_ids: number[], force?: boolean }
+   */
+  async bulkDeleteServices(serviceIds: number[], force = false): Promise<BulkDeleteResult> {
+    try {
+      const res = await axiosInstance.post('/services/bulk-delete', {
+        service_ids: serviceIds,
+        force,
+      });
+
+      const data = res?.data?.data ?? res?.data?.payload ?? res?.data ?? {};
+      // Refresh list afterwards
+      await this.getAllServices();
+
+      return {
+        deleted: Array.isArray(data?.deleted) ? data.deleted : [],
+        failed: Array.isArray(data?.failed) ? data.failed : [],
+        summary: data?.summary,
+      };
+    } catch (e) {
+      const status = this.getAxiosStatus(e);
+      if (status && status >= 400 && status < 500) {
+        const msg = this.extractApiErrorMessage(e);
+        console.error('API bulkDeleteServices failed:', msg, e);
+        throw new Error(msg);
+      }
+      const msg = this.extractApiErrorMessage(e);
+      throw new Error(msg || 'Bulk delete failed');
     }
   }
 
