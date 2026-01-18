@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import BatchForm from '@/components/BatchForm';
 import BatchCard from '@/components/BatchCard';
+import GroupedBatchCard, { buildSkuGroups, BatchSkuGroup } from '@/components/GroupedBatchCard';
 import batchService, { Batch, CreateBatchData, UpdateBatchData } from '@/services/batchService';
 import storeService, { Store } from '@/services/storeService';
 
@@ -37,6 +38,7 @@ export default function BatchPage() {
 
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
+
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductName, setSelectedProductName] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
@@ -50,6 +52,9 @@ export default function BatchPage() {
   const [bulkMode, setBulkMode] = useState(false);
   const [queuedBatches, setQueuedBatches] = useState<QueuedBatch[]>([]);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // ✅ View mode: grouped by SKU (easy for variations) vs flat batches
+  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
 
   // Read URL parameters when redirected back from product selection
   useEffect(() => {
@@ -78,6 +83,11 @@ export default function BatchPage() {
       return productName.includes(q) || productSku.includes(q) || batchNo.includes(q);
     });
   }, [batches, batchSearchQuery]);
+
+  const skuGroups: BatchSkuGroup[] = useMemo(() => {
+    // Group from the filtered list so search applies naturally.
+    return buildSkuGroups(filteredBatches);
+  }, [filteredBatches]);
 
   const loadInitialData = async () => {
     try {
@@ -488,11 +498,39 @@ export default function BatchPage() {
 
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-end gap-3">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Batches</h2>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  {viewMode === 'grouped' ? 'Products (Grouped by SKU)' : 'Recent Batches'}
+                </h2>
                 <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {filteredBatches.length} batch{filteredBatches.length !== 1 ? 'es' : ''}
+                  {viewMode === 'grouped'
+                    ? `${skuGroups.length} product group${skuGroups.length !== 1 ? 's' : ''}`
+                    : `${filteredBatches.length} batch${filteredBatches.length !== 1 ? 'es' : ''}`}
                   {batchSearchQuery.trim() ? <span className="ml-1">(filtered)</span> : null}
                 </span>
+              </div>
+
+              {/* View toggle */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setViewMode('grouped')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition ${
+                    viewMode === 'grouped'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  Grouped
+                </button>
+                <button
+                  onClick={() => setViewMode('flat')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition ${
+                    viewMode === 'flat'
+                      ? 'bg-blue-600 text-white border-blue-600'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  Flat
+                </button>
               </div>
 
               {/* Search (Product-wise / Batch-wise) */}
@@ -510,14 +548,20 @@ export default function BatchPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredBatches.length === 0 && !loading ? (
-                <div className="col-span-3 text-center py-12 bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
+            <div className={
+              viewMode === 'grouped'
+                ? 'grid grid-cols-1 lg:grid-cols-2 gap-6'
+                : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6'
+            }>
+              {(viewMode === 'grouped' ? skuGroups.length === 0 : filteredBatches.length === 0) && !loading ? (
+                <div className="col-span-full text-center py-12 bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
                   <svg className="w-16 h-16 mx-auto text-gray-400 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
                   <p className="text-gray-500 dark:text-gray-400 font-medium">
-                    {batchSearchQuery.trim() ? 'No batches match your search' : 'No batches created yet'}
+                    {batchSearchQuery.trim()
+                      ? (viewMode === 'grouped' ? 'No products match your search' : 'No batches match your search')
+                      : (viewMode === 'grouped' ? 'No stock entries yet' : 'No batches created yet')}
                   </p>
                   <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
                     {batchSearchQuery.trim()
@@ -525,6 +569,8 @@ export default function BatchPage() {
                       : 'Create your first batch to get started'}
                   </p>
                 </div>
+              ) : viewMode === 'grouped' ? (
+                skuGroups.map((g) => <GroupedBatchCard key={g.sku || String(g.variants?.[0]?.productId || Math.random())} group={g} />)
               ) : (
                 filteredBatches.map((batch) => (
                   <BatchCard key={batch.id} batch={batch} onDelete={handleDeleteBatch} onEdit={handleEditBatch} />
