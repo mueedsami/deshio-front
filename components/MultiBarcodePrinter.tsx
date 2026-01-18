@@ -220,10 +220,15 @@ export default function MultiBarcodePrinter({
   items,
   buttonLabel = "Print All Barcodes",
   title = "Print Barcodes",
+  hideButton = false,
+  autoOpenToken,
 }: {
   items: MultiBarcodePrintItem[];
   buttonLabel?: string;
   title?: string;
+  hideButton?: boolean;
+  // If provided, the modal will auto-open once per token change (useful for async loading flows)
+  autoOpenToken?: number;
 }) {
   const [isQzLoaded, setIsQzLoaded] = useState(false);
   const [defaultPrinter, setDefaultPrinter] = useState<string | null>(null);
@@ -231,6 +236,8 @@ export default function MultiBarcodePrinter({
   const [isOpen, setIsOpen] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [qtyByCode, setQtyByCode] = useState<Record<string, number>>({});
+
+  const lastAutoOpenTokenRef = React.useRef<number | undefined>(undefined);
 
   useEffect(() => {
     let attempts = 0;
@@ -295,6 +302,18 @@ export default function MultiBarcodePrinter({
     setIsOpen(true);
     if (!defaultPrinter && isQzLoaded) await loadDefaultPrinter();
   };
+
+  // Allow a parent to trigger opening once per token change.
+  useEffect(() => {
+    if (autoOpenToken === undefined || autoOpenToken === null) return;
+    if (lastAutoOpenTokenRef.current === autoOpenToken) return;
+    lastAutoOpenTokenRef.current = autoOpenToken;
+    // Defer to next tick so state updates (items) settle.
+    setTimeout(() => {
+      open();
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenToken]);
 
   const print = async () => {
     const qz = (window as any).qz;
@@ -377,14 +396,16 @@ export default function MultiBarcodePrinter({
 
   return (
     <>
-      <button
-        onClick={open}
-        disabled={!canPrint}
-        className="px-3 py-2 rounded-lg text-sm font-semibold bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
-        title={!isQzLoaded ? "QZ Tray not detected" : items.length ? "Print all" : "No barcodes"}
-      >
-        {buttonLabel}
-      </button>
+      {!hideButton && (
+        <button
+          onClick={open}
+          disabled={!canPrint}
+          className="px-3 py-2 rounded-lg text-sm font-semibold bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+          title={!isQzLoaded ? "QZ Tray not detected" : items.length ? "Print all" : "No barcodes"}
+        >
+          {buttonLabel}
+        </button>
+      )}
 
       {isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">

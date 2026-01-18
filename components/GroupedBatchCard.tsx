@@ -4,6 +4,7 @@ import React, { useMemo, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Batch } from "@/services/batchService";
 import MultiBarcodePrinter, { MultiBarcodePrintItem } from "./MultiBarcodePrinter";
+import GroupedAllBarcodesPrinter from "./GroupedAllBarcodesPrinter";
 
 type VariantRow = {
   productId: number;
@@ -113,6 +114,19 @@ export default function GroupedBatchCard({ group }: { group: BatchSkuGroup }) {
       .filter((x) => !!x.code);
   }, [group.variants]);
 
+  const printableAllBarcodeSources = useMemo(() => {
+    // Print ALL active unit barcodes from the latest batch of each variation.
+    return group.variants.map((v) => {
+      const latest = v.latestBatch;
+      return {
+        batchId: latest.id,
+        productName: v.name,
+        price: parseMoney((latest as any)?.sell_price),
+        fallbackCode: pickPrimaryCode(latest),
+      };
+    });
+  }, [group.variants]);
+
   const colors = useMemo(() => {
     const set = new Set<string>();
     group.variants.forEach((v) => v.color && set.add(v.color));
@@ -158,6 +172,12 @@ export default function GroupedBatchCard({ group }: { group: BatchSkuGroup }) {
         </div>
 
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          <GroupedAllBarcodesPrinter
+            sources={printableAllBarcodeSources}
+            buttonLabel="Print ALL (unit barcodes)"
+            title={`Print all unit barcodes — ${group.baseName || group.sku}`}
+          />
+
           <MultiBarcodePrinter
             items={printablePrimaryItems}
             buttonLabel="Print primary (all variants)"
