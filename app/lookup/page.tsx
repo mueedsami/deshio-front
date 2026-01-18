@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -160,9 +160,84 @@ export default function LookupPage() {
   const [barcodeLoading, setBarcodeLoading] = useState(false);
   const [barcodeData, setBarcodeData] = useState<BarcodeHistoryData | null>(null);
 
+  // ✅ Barcode scan UX (same behavior as POS): supports physical scanners (rapid key bursts)
+  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  const scannerBufferRef = useRef<string>('');
+  const scannerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   // Purchase info (best effort): which PO this barcode/batch came from
   const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId: number; poNumber?: string; vendorName?: string } | null>(null);
   const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
+
+  // Physical scanner detection for the Barcode tab
+  useEffect(() => {
+    if (activeTab !== 'barcode') return;
+
+    const cleanupTimer = () => {
+      if (scannerTimeoutRef.current) {
+        clearTimeout(scannerTimeoutRef.current);
+        scannerTimeoutRef.current = null;
+      }
+    };
+
+    const processScanned = (raw: string) => {
+      const code = String(raw || '').trim();
+      if (!code) return;
+
+      // Reflect scanned code in the input box immediately
+      setBarcodeInput(code);
+      setBarcodeData(null);
+      setBarcodePurchaseInfo(null);
+      setError('');
+
+      // Use override so we don't depend on state timing
+      handleSearchBarcode(code);
+    };
+
+    const handleKeyPress = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+
+      // Ignore keypresses in other input fields
+      if (target.tagName === 'TEXTAREA') return;
+      if (target.tagName === 'SELECT') return;
+      if (target.tagName === 'INPUT' && target !== barcodeInputRef.current) return;
+
+      cleanupTimer();
+
+      // Enter = end-of-scan
+      if (e.key === 'Enter' && scannerBufferRef.current.length > 0) {
+        e.preventDefault();
+        const scanned = scannerBufferRef.current;
+        scannerBufferRef.current = '';
+        processScanned(scanned);
+        return;
+      }
+
+      // Accumulate characters
+      if (e.key.length === 1) {
+        scannerBufferRef.current += e.key;
+
+        // Auto-submit after brief silence (barcode scanners type in a rapid burst)
+        scannerTimeoutRef.current = setTimeout(() => {
+          if (scannerBufferRef.current.length > 3) {
+            const scanned = scannerBufferRef.current;
+            scannerBufferRef.current = '';
+            processScanned(scanned);
+          } else {
+            scannerBufferRef.current = '';
+          }
+        }, 100);
+      }
+    };
+
+    window.addEventListener('keypress', handleKeyPress);
+    return () => {
+      window.removeEventListener('keypress', handleKeyPress);
+      cleanupTimer();
+      scannerBufferRef.current = '';
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
 
   // Cache to resolve order/customer for barcode history + current_location
@@ -1290,8 +1365,8 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
     }
   };
 
-  const handleSearchBarcode = async () => {
-    const code = barcodeInput.trim();
+  const handleSearchBarcode = async (codeOverride?: string) => {
+    const code = (codeOverride ?? barcodeInput).trim();
     if (!code) {
       setError('Please enter a barcode');
       return;
@@ -2017,6 +2092,7 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
                     <div className="relative max-w-xl mx-auto">
                       <div className="relative">
                         <input
+                          ref={barcodeInputRef}
                           type="text"
                           value={barcodeInput}
                           onChange={(e) => setBarcodeInput(e.target.value)}
@@ -2025,15 +2101,19 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
                           }}
                           placeholder="Type barcode..."
                           className="w-full pl-3 pr-24 py-2.5 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-900 text-black dark:text-white text-sm placeholder-gray-400 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
+                          autoFocus
                         />
                         <button
-                          onClick={handleSearchBarcode}
+                          onClick={() => handleSearchBarcode()}
                           disabled={barcodeLoading}
                           className="absolute right-1.5 top-1/2 transform -translate-y-1/2 px-4 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium text-xs"
                         >
                           {barcodeLoading ? 'Loading...' : 'Search'}
                         </button>
                       </div>
+                      <p className="mt-2 text-[10px] text-gray-500 dark:text-gray-400 text-center">
+                        Tip: You can scan a barcode here using the same scanner behavior as POS (no need to type).
+                      </p>
                     </div>
                   </div>
 
