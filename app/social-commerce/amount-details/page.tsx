@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { Globe, DollarSign, CreditCard, Wallet } from 'lucide-react';
+import { Globe, DollarSign, CreditCard, Wallet, Truck } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import axios from '@/lib/axios';
@@ -59,6 +59,22 @@ export default function AmountDetailsPage() {
   const [codPaymentMethod, setCodPaymentMethod] = useState('');
   const [transactionReference, setTransactionReference] = useState('');
   const [paymentNotes, setPaymentNotes] = useState('');
+
+  // Intended courier marker (saved after order creation)
+  const [intendedCourier, setIntendedCourier] = useState('');
+
+  const courierOptions = useMemo(() => {
+    // Keep a sane default list, but you can add more later.
+    return [
+      'pathao',
+      'sundarban',
+      'steadfast',
+      'redx',
+      'paperfly',
+      'eCourier',
+      'manual',
+    ];
+  }, []);
 
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -286,7 +302,20 @@ export default function AmountDetailsPage() {
       }
       console.log('✅ Order created:', createdOrder.order_number);
 
-      // 2) Defective items
+      // 2) Set intended courier marker (optional)
+      if (intendedCourier && intendedCourier.trim()) {
+        try {
+          await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
+            intended_courier: intendedCourier.trim(),
+          });
+        } catch (e) {
+          console.warn('Failed to set intended courier marker:', e);
+          // Don't fail order placement if marker update fails
+          displayToast('Order placed, but failed to set courier marker.', 'warning');
+        }
+      }
+
+      // 3) Defective items
       const defectiveItems = orderData.defectiveItems || [];
       if (defectiveItems.length > 0) {
         console.log('🏷️ Processing defective items:', defectiveItems.length);
@@ -304,7 +333,7 @@ export default function AmountDetailsPage() {
         }
       }
 
-      // 3) Payments
+      // 4) Payments
       if (paymentOption === 'full') {
         const paymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
@@ -609,6 +638,32 @@ export default function AmountDetailsPage() {
                       onChange={(e) => setTransportCost(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                     />
+                  </div>
+
+                  {/* Intended Courier Marker */}
+                  <div className="mb-4">
+                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
+                      Intended Courier (Marker)
+                    </label>
+                    <div className="relative">
+                      <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <select
+                        value={intendedCourier}
+                        onChange={(e) => setIntendedCourier(e.target.value)}
+                        disabled={isProcessing}
+                        className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      >
+                        <option value="">Select courier (optional)</option>
+                        {courierOptions.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                      This will be saved as a courier marker and you can edit it later from the Orders page.
+                    </p>
                   </div>
 
                   {/* Payment Option */}

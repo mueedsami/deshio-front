@@ -77,6 +77,8 @@ export interface Order {
   order_type_label: string;
   status: string;
   payment_status: string;
+  // Intended courier marker (nullable)
+  intended_courier?: string | null;
   is_preorder?: boolean;
   fulfillment_status?: string | null;
   customer: {
@@ -130,6 +132,11 @@ export interface Order {
   payments?: OrderPayment[];
   notes?: string;
   shipping_address?: any;
+}
+
+export interface AvailableCourier {
+  courier_name: string;
+  order_count: number;
 }
 
 export interface OrderFilters {
@@ -454,6 +461,54 @@ const orderService = {
     } catch (error: any) {
       console.error('Get pending fulfillment orders error:', error);
       throw new Error(error.response?.data?.message || 'Failed to fetch orders');
+    }
+  },
+
+  /**
+   * Set / update intended courier marker for an order
+   * PATCH /api/orders/{id}/set-courier
+   */
+  async setIntendedCourier(orderId: number, intended_courier: string | null): Promise<{
+    order_id: number;
+    order_number: string;
+    intended_courier: string | null;
+    status?: string;
+    updated_at?: string;
+  }> {
+    try {
+      const response = await axiosInstance.patch(`/orders/${orderId}/set-courier`, {
+        intended_courier,
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to set courier');
+      }
+
+      return result.data;
+    } catch (error: any) {
+      console.error('Set intended courier error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to set courier');
+    }
+  },
+
+  /**
+   * Get list of available couriers with order counts
+   * GET /api/orders/available-couriers
+   */
+  async getAvailableCouriers(): Promise<AvailableCourier[]> {
+    try {
+      const response = await axiosInstance.get('/orders/available-couriers');
+      const result = response.data;
+
+      if (!result.success) {
+        return [];
+      }
+
+      return Array.isArray(result.data) ? result.data : [];
+    } catch (error: any) {
+      console.error('Get available couriers error:', error);
+      return [];
     }
   },
 

@@ -86,6 +86,9 @@ interface Order {
   paymentStatus: string;
   paymentStatusLabel: string;
 
+  // Intended courier marker
+  intendedCourier?: string | null;
+
   // Installments / EMI
   isInstallment?: boolean;
   installmentInfo?: {
@@ -300,6 +303,14 @@ export default function OrdersDashboard() {
   
 const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
 
+  // Courier marker filters / edit
+  const [courierFilter, setCourierFilter] = useState('All Couriers');
+  const [availableCouriers, setAvailableCouriers] = useState<string[]>([]);
+  const [showCourierModal, setShowCourierModal] = useState(false);
+  const [courierModalOrder, setCourierModalOrder] = useState<Order | null>(null);
+  const [courierModalValue, setCourierModalValue] = useState<string>('');
+  const [isSavingCourier, setIsSavingCourier] = useState(false);
+
   const searchParams = useSearchParams();
   const initialViewMode = useMemo(() => {
     const v = (searchParams.get('view') || searchParams.get('tab') || '').toLowerCase();
@@ -500,6 +511,10 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     const name = localStorage.getItem('userName') || '';
     setUserName(name);
     loadOrders();
+    if (viewMode === 'online') {
+      // Courier dropdown options (safe if endpoint is missing)
+      loadAvailableCouriers();
+    }
     checkPrinterStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode]);
@@ -799,6 +814,8 @@ const derivePaymentStatus = (order: any) => {
       paymentStatus: normalize(pStatusRaw) || 'pending',
       paymentStatusLabel: statusLabel(pStatusRaw || 'pending'),
 
+      intendedCourier: order.intended_courier ?? order.intendedCourier ?? null,
+
       isInstallment: Boolean(order.is_installment || order.is_installment_payment || order.installment_info || order.installment_plan),
       installmentInfo: (order.installment_info ?? order.installment_plan ?? null),
 
@@ -830,6 +847,75 @@ const derivePaymentStatus = (order: any) => {
         due,
       },
     };
+  };
+
+  const normalizeCourier = (v: any) => normalize(v);
+
+  const courierLabel = (raw: any): string => {
+    const n = normalizeCourier(raw);
+    if (!n) return 'Unassigned';
+    const map: Record<string, string> = {
+      pathao: 'Pathao',
+      steadfast: 'Steadfast',
+      sundarban: 'Sundarban',
+      redx: 'RedX',
+      paperfly: 'Paperfly',
+      ecourier: 'eCourier',
+      'e-courier': 'eCourier',
+      manual: 'Manual',
+    };
+    return map[n] || String(raw);
+  };
+
+  const getCourierBadge = (raw: any) => {
+    const n = normalizeCourier(raw);
+    const cls =
+      n === 'pathao'
+        ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
+        : n === 'steadfast'
+        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+        : n === 'sundarban'
+        ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300'
+        : n === 'redx'
+        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+        : n
+        ? 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
+        : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400';
+
+    return (
+      <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${cls}`}>
+        {courierLabel(raw)}
+      </span>
+    );
+  };
+
+  const DEFAULT_COURIERS = useMemo(
+    () => ['pathao', 'sundarban', 'steadfast', 'redx', 'paperfly', 'eCourier', 'manual'],
+    []
+  );
+
+  const courierFilterOptions = useMemo(() => {
+    const set = new Set<string>();
+    DEFAULT_COURIERS.forEach((c) => set.add(String(c)));
+    (availableCouriers || []).forEach((c) => c && set.add(String(c)));
+    // also include whatever already exists in loaded orders (so it always shows)
+    (orders || []).forEach((o) => {
+      if (o?.intendedCourier) set.add(String(o.intendedCourier));
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [DEFAULT_COURIERS, availableCouriers, orders]);
+
+  const loadAvailableCouriers = async () => {
+    try {
+      const list = await orderService.getAvailableCouriers();
+      const names = Array.from(
+        new Set((list || []).map((x) => x?.courier_name).filter(Boolean).map((x) => String(x)))
+      );
+      setAvailableCouriers(names);
+    } catch (e) {
+      console.warn('Failed to load available couriers:', e);
+      setAvailableCouriers([]);
+    }
   };
 
   // ✅ Social Commerce + E-Commerce orders
@@ -964,8 +1050,14 @@ const derivePaymentStatus = (order: any) => {
       filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
     }
 
+    // ✅ Courier marker filter
+    if (courierFilter !== 'All Couriers') {
+      const target = normalizeCourier(courierFilter);
+      filtered = filtered.filter((o) => normalizeCourier(o.intendedCourier) === target);
+    }
+
     setFilteredOrders(filtered);
-  }, [search, dateFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, orders]);
+  }, [search, dateFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
 
   // 🧾 Bulk lookup Pathao status for displayed orders
   const filteredOrderNumbers = useMemo(() => {
@@ -1061,6 +1153,40 @@ const derivePaymentStatus = (order: any) => {
       setShowDetailsModal(false);
     } finally {
       setIsLoadingDetails(false);
+    }
+  };
+
+  const openCourierEditor = (order: Order) => {
+    setActiveMenu(null);
+    setCourierModalOrder(order);
+    setCourierModalValue(order.intendedCourier ? String(order.intendedCourier) : '');
+    setShowCourierModal(true);
+  };
+
+  const saveCourierMarker = async () => {
+    if (!courierModalOrder) return;
+    const nextVal = courierModalValue?.trim() ? courierModalValue.trim() : null;
+
+    setIsSavingCourier(true);
+    try {
+      const res = await orderService.setIntendedCourier(courierModalOrder.id, nextVal);
+      const applied = res?.intended_courier ?? nextVal;
+
+      setOrders((prev) =>
+        prev.map((o) => (o.id === courierModalOrder.id ? { ...o, intendedCourier: applied } : o))
+      );
+
+      if (applied) {
+        setAvailableCouriers((prev) => Array.from(new Set([...(prev || []), String(applied)])));
+      }
+
+      setShowCourierModal(false);
+      setCourierModalOrder(null);
+      alert('Courier marker updated successfully');
+    } catch (e: any) {
+      alert(e?.message || 'Failed to update courier marker');
+    } finally {
+      setIsSavingCourier(false);
     }
   };
 
@@ -2497,6 +2623,7 @@ const derivePaymentStatus = (order: any) => {
                     setOrderTypeFilter('All Types');
                     setOrderStatusFilter('All Order Status');
                     setPaymentStatusFilter('All Payment Status');
+                    setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
                     setSelectedOrders(new Set());
@@ -2516,6 +2643,7 @@ const derivePaymentStatus = (order: any) => {
                     setOrderTypeFilter('All Types');
                     setOrderStatusFilter('All Order Status');
                     setPaymentStatusFilter('All Payment Status');
+                    setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
                     setSelectedOrders(new Set());
@@ -2599,6 +2727,22 @@ const derivePaymentStatus = (order: any) => {
                     </option>
                   ))}
                 </select>
+
+                {viewMode === 'online' && (
+                  <select
+                    value={courierFilter}
+                    onChange={(e) => setCourierFilter(e.target.value)}
+                    className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                    title="Filter by intended courier marker"
+                  >
+                    <option value="All Couriers">All Couriers</option>
+                    {courierFilterOptions.map((c) => (
+                      <option key={c} value={c}>
+                        {courierLabel(c)}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               <p className="text-xs text-gray-500 dark:text-gray-500">
@@ -2771,6 +2915,7 @@ const derivePaymentStatus = (order: any) => {
                                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                   {getOrderTypeBadge(order.orderType)}
                                   {getDeliveryBadge(order.orderNumber)}
+                                  {viewMode === 'online' && getCourierBadge(order.intendedCourier)}
                                   {order.isInstallment && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                                       EMI
@@ -2840,6 +2985,11 @@ const derivePaymentStatus = (order: any) => {
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Delivery
                         </th>
+                        {viewMode === 'online' && (
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+                            Courier
+                          </th>
+                        )}
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Customer
                         </th>
@@ -2897,6 +3047,24 @@ const derivePaymentStatus = (order: any) => {
                                 )}
                             </div>
                           </td>
+
+                          {viewMode === 'online' && (
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                {getCourierBadge(order.intendedCourier)}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openCourierEditor(order);
+                                  }}
+                                  className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
+                                  title="Edit courier marker"
+                                >
+                                  <Edit className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
+                                </button>
+                              </div>
+                            </td>
+                          )}
 
                           <td className="px-4 py-3">
                             <div className="flex items-center gap-2">
@@ -3066,6 +3234,71 @@ const derivePaymentStatus = (order: any) => {
         </div>
       )}
 
+      {/* Courier Marker Modal */}
+      {showCourierModal && courierModalOrder && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full border border-gray-200 dark:border-gray-800">
+            <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-black dark:text-white">Set Courier Marker</h3>
+                <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                  {courierModalOrder.orderNumber} • #{courierModalOrder.id}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowCourierModal(false);
+                  setCourierModalOrder(null);
+                }}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              >
+                <XCircle className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-2">
+              <label className="block text-[11px] text-gray-700 dark:text-gray-300">Courier</label>
+              <select
+                value={courierModalValue}
+                onChange={(e) => setCourierModalValue(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+              >
+                <option value="">Unassigned</option>
+                {courierFilterOptions.map((c) => (
+                  <option key={c} value={c}>
+                    {courierLabel(c)}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                This is just an intended courier marker for tracking & filtering. You can change it anytime.
+              </p>
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-800 flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setShowCourierModal(false);
+                  setCourierModalOrder(null);
+                }}
+                className="px-3 py-2 text-xs font-semibold border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={saveCourierMarker}
+                disabled={isSavingCourier}
+                className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <Truck className="h-4 w-4" />
+                {isSavingCourier ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Fixed Position Dropdown Menu */}
       {activeMenu !== null && menuPosition && (
         <div
@@ -3095,6 +3328,20 @@ const derivePaymentStatus = (order: any) => {
             <Edit className="h-5 w-5 flex-shrink-0" />
             <span>Edit Order</span>
           </button>
+
+          {viewMode === 'online' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const order = filteredOrders.find((o) => o.id === activeMenu);
+                if (order) openCourierEditor(order);
+              }}
+              className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+            >
+              <Truck className="h-5 w-5 flex-shrink-0" />
+              <span>Set Courier Marker</span>
+            </button>
+          )}
 
           {(() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
