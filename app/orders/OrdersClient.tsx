@@ -4087,7 +4087,7 @@ const derivePaymentStatus = (order: any) => {
                       </div>
                     </div>
                   </div>
-                ))}
+                )}
 
 
                 <div>
