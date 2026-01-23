@@ -977,6 +977,67 @@ const derivePaymentStatus = (order: any) => {
     );
   };
 
+  // ✅ If a courier marker was set during Social Commerce checkout, store it in sessionStorage
+  // so the Orders page can render it immediately even if the orders list endpoint is cached/lagging.
+  const applyPendingCourierMarkers = (list: Order[]): Order[] => {
+    try {
+      const KEY = 'pendingCourierMarkers';
+      const raw = sessionStorage.getItem(KEY);
+      if (!raw) return list;
+
+      const now = Date.now();
+      const TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+      const parsed = JSON.parse(raw);
+      const markers: any[] = Array.isArray(parsed) ? parsed : [];
+
+      const valid = markers
+        .filter((m) => m && (now - Number(m.ts || 0) < TTL))
+        .map((m) => ({
+          order_id: Number(m.order_id ?? m.orderId ?? 0) || 0,
+          order_number: String(m.order_number ?? m.orderNumber ?? '').trim(),
+          intended_courier: String(m.intended_courier ?? m.intendedCourier ?? '').trim(),
+          ts: Number(m.ts || 0),
+        }))
+        .filter((m) => (m.order_id || m.order_number) && m.intended_courier);
+
+      if (valid.length === 0) {
+        sessionStorage.removeItem(KEY);
+        return list;
+      }
+
+      const byId = new Map<number, string>();
+      const byNo = new Map<string, string>();
+      valid.forEach((m) => {
+        if (m.order_id) byId.set(m.order_id, m.intended_courier);
+        if (m.order_number) byNo.set(m.order_number, m.intended_courier);
+      });
+
+      const nextList = list.map((o) => {
+        if (o.intendedCourier) return o; // backend already has it
+        const val = byId.get(o.id) || byNo.get(o.orderNumber);
+        return val ? { ...o, intendedCourier: val } : o;
+      });
+
+      // Keep markers only if backend still doesn't include intended courier for that order.
+      const remaining = valid
+        .filter((m) => {
+          const match = list.find(
+            (o) => (m.order_id && o.id === m.order_id) || (m.order_number && o.orderNumber === m.order_number)
+          );
+          if (!match) return true;
+          return !match.intendedCourier;
+        })
+        .slice(0, 50);
+
+      if (remaining.length > 0) sessionStorage.setItem(KEY, JSON.stringify(remaining));
+      else sessionStorage.removeItem(KEY);
+
+      return nextList;
+    } catch {
+      return list;
+    }
+  };
+
   const DEFAULT_COURIERS = useMemo(
     () => ['pathao', 'sundarban', 'steadfast', 'redx', 'paperfly', 'eCourier', 'manual'],
     []
@@ -1044,9 +1105,10 @@ const derivePaymentStatus = (order: any) => {
       allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       const transformedOrders = allOrders.map((o: any) => transformOrder(o));
+      const hydrated = applyPendingCourierMarkers(transformedOrders);
 
-      setOrders(transformedOrders);
-      setFilteredOrders(transformedOrders);
+      setOrders(hydrated);
+      setFilteredOrders(hydrated);
     } catch (error: any) {
       console.error('Get orders error:', error);
       alert('Failed to fetch orders: ' + (error?.message || 'Unknown error'));
@@ -1862,6 +1924,28 @@ const derivePaymentStatus = (order: any) => {
 
       alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
       setSelectedOrders(new Set());
+
+      // Set courier marker to Pathao for the selected orders (UI consistency + filtering)
+      try {
+        const KEY = 'pendingCourierMarkers';
+        const raw = sessionStorage.getItem(KEY);
+        const prev = raw ? JSON.parse(raw) : [];
+        const list: any[] = Array.isArray(prev) ? prev : [];
+        const now = Date.now();
+        selectedOrdersList.forEach((o) => {
+          if (!o?.id || !o?.orderNumber) return;
+          list.unshift({
+            order_id: o.id,
+            order_number: o.orderNumber,
+            intended_courier: 'pathao',
+            ts: now,
+          });
+        });
+        sessionStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
+      } catch {
+        // ignore
+      }
+
       await loadOrders();
     } catch (error: any) {
       console.error('Bulk send to Pathao error:', error);
@@ -2113,6 +2197,24 @@ const derivePaymentStatus = (order: any) => {
         alert(`❌ Failed to send to Pathao.\n\nReason: ${item.reason ?? 'Unknown error'}`);
       } else {
         alert('Pathao response received, but could not determine success/failure.');
+      }
+
+      // Set courier marker to Pathao for UI consistency + filtering
+      try {
+        await orderService.setIntendedCourier(order.id, 'pathao');
+        setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, intendedCourier: 'pathao' } : o)));
+      } catch {
+        // fallback: store a pending marker so UI still shows it
+        try {
+          const KEY = 'pendingCourierMarkers';
+          const raw = sessionStorage.getItem(KEY);
+          const prev = raw ? JSON.parse(raw) : [];
+          const list: any[] = Array.isArray(prev) ? prev : [];
+          list.unshift({ order_id: order.id, order_number: order.orderNumber, intended_courier: 'pathao', ts: Date.now() });
+          sessionStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
+        } catch {
+          // ignore
+        }
       }
 
       await loadOrders();

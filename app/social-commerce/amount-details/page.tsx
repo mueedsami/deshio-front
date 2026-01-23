@@ -86,6 +86,32 @@ export default function AmountDetailsPage() {
     setShowToast(true);
   };
 
+  // Persist the courier marker locally so the Orders page can show it immediately
+  // even if the orders list API response is cached/lagging.
+  const savePendingCourierMarker = (payload: {
+    order_id: number;
+    order_number: string;
+    intended_courier: string;
+  }) => {
+    try {
+      const KEY = 'pendingCourierMarkers';
+      const raw = sessionStorage.getItem(KEY);
+      const list: any[] = raw ? JSON.parse(raw) : [];
+      const now = Date.now();
+      const next = Array.isArray(list) ? list : [];
+      next.unshift({
+        order_id: payload.order_id,
+        order_number: payload.order_number,
+        intended_courier: payload.intended_courier,
+        ts: now,
+      });
+      // cap to 50 entries
+      sessionStorage.setItem(KEY, JSON.stringify(next.slice(0, 50)));
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     const storedOrder = sessionStorage.getItem('pendingOrder');
     if (!storedOrder) {
@@ -304,6 +330,12 @@ export default function AmountDetailsPage() {
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
+        // Save locally for immediate UI consistency on Orders page
+        savePendingCourierMarker({
+          order_id: createdOrder.id,
+          order_number: createdOrder.order_number,
+          intended_courier: intendedCourier.trim(),
+        });
         try {
           await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
             intended_courier: intendedCourier.trim(),
