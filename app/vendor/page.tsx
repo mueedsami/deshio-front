@@ -1884,8 +1884,34 @@ export default function VendorPaymentPage() {
                   {variantOptions.map((v) => (
                     <tr key={v.id}>
                       <td className="px-4 py-3 text-sm text-gray-800 dark:text-gray-100">
-                        <div className="font-medium">{v.name}</div>
-                        {(v as any).sku && <div className="text-xs text-gray-500 dark:text-gray-400">{(v as any).sku}</div>}
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setImagePreview({ url: getProductPrimaryImage(v), name: v.name })}
+                            className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex-shrink-0 cursor-zoom-in"
+                            title="View image"
+                          >
+                            <img
+                              src={getProductPrimaryImage(v)}
+                              alt={v.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
+                              }}
+                            />
+                          </button>
+
+                          <div className="min-w-0">
+                            <div
+                              className="font-medium truncate cursor-zoom-in"
+                              title="Click to view image"
+                              onClick={() => setImagePreview({ url: getProductPrimaryImage(v), name: v.name })}
+                            >
+                              {v.name}
+                            </div>
+                            {(v as any).sku && <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{(v as any).sku}</div>}
+                          </div>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <input

@@ -11,6 +11,7 @@ import purchaseOrderService, {
   PurchaseOrderFilters 
 } from '@/services/purchase-order.service';
 import { vendorService, Vendor } from '@/services/vendorService';
+import { productService, Product } from '@/services/productService';
 
 // --- Image helpers (same approach as Orders page) ---
 const getApiBaseUrl = () => {
@@ -45,6 +46,21 @@ const pickPOItemImage = (item: any): string | null => {
   if (Array.isArray(imgs) && imgs.length > 0) {
     const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
     const path = primary?.image_url || primary?.image_path || primary?.url;
+    return toPublicImageUrl(path);
+  }
+
+  return null;
+};
+
+const pickProductImage = (p: any): string | null => {
+  if (!p) return null;
+  const direct = p?.image_url || p?.image_path || p?.image || p?.thumbnail;
+  if (direct) return toPublicImageUrl(direct);
+
+  const imgs: any[] = p?.images || p?.product_images || [];
+  if (Array.isArray(imgs) && imgs.length > 0) {
+    const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
+    const path = primary?.image_url || primary?.image_path || primary?.url || primary?.image;
     return toPublicImageUrl(path);
   }
 
@@ -251,24 +267,43 @@ export default function PurchaseOrdersPage() {
     tax_amount: string;
     discount_amount: string;
     shipping_cost: string;
+    notes: string;
     items: Array<{
       id: number;
       product_label: string;
       quantity_ordered: string;
       unit_cost: string;
+      unit_sell_price: string;
+    }>;
+    new_items: Array<{
+      temp_id: number;
+      product_id: number;
+      product_label: string;
+      quantity_ordered: string;
+      unit_cost: string;
+      unit_sell_price: string;
+      product?: Product;
     }>;
   }>({
     tax_amount: '0',
     discount_amount: '0',
     shipping_cost: '0',
+    notes: '',
     items: [],
+    new_items: [],
   });
+
+  // Add more products in PO Edit
+  const [editProductSearch, setEditProductSearch] = useState('');
+  const [editProductResults, setEditProductResults] = useState<Product[]>([]);
+  const [editProductSearching, setEditProductSearching] = useState(false);
 
   const [editOriginal, setEditOriginal] = useState<{
     tax_amount: number;
     discount_amount: number;
     shipping_cost: number;
-    items: Record<number, { quantity_ordered: number; unit_cost: number }>;
+    notes: string;
+    items: Record<number, { quantity_ordered: number; unit_cost: number; unit_sell_price: number }>;
   } | null>(null);
 
 
@@ -280,6 +315,40 @@ export default function PurchaseOrdersPage() {
   useEffect(() => {
     loadPurchaseOrders();
   }, [filters.vendor_id, filters.status, filters.payment_status, filters.page, filters.per_page]);
+
+  // 🔎 Live product search inside PO edit (debounced)
+  useEffect(() => {
+    if (!showEditModal || !editPO) return;
+
+    const q = editProductSearch.trim();
+    if (!q) {
+      setEditProductResults([]);
+      return;
+    }
+
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        setEditProductSearching(true);
+        const res = await productService.getAll({
+          per_page: 15,
+          search: q,
+          vendor_id: editPO.vendor_id,
+          is_archived: false,
+        });
+        if (!cancelled) setEditProductResults(Array.isArray(res?.data) ? res.data : []);
+      } catch {
+        if (!cancelled) setEditProductResults([]);
+      } finally {
+        if (!cancelled) setEditProductSearching(false);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [editProductSearch, showEditModal, editPO]);
 
   const showAlert = (type: 'success' | 'error', message: string) => {
     setAlert({ type, message });
@@ -441,13 +510,15 @@ export default function PurchaseOrdersPage() {
         : `Item #${it.id}`,
       quantity_ordered: String(it.quantity_ordered ?? 0),
       unit_cost: String(it.unit_cost ?? 0),
+      unit_sell_price: String(it.unit_sell_price ?? 0),
     }));
 
-    const originalItems: Record<number, { quantity_ordered: number; unit_cost: number }> = {};
+    const originalItems: Record<number, { quantity_ordered: number; unit_cost: number; unit_sell_price: number }> = {};
     (fullPO.items ?? []).forEach((it: any) => {
       originalItems[it.id] = {
         quantity_ordered: Number(it.quantity_ordered ?? 0),
         unit_cost: Number(it.unit_cost ?? 0),
+        unit_sell_price: Number(it.unit_sell_price ?? 0),
       };
     });
 
@@ -456,15 +527,21 @@ export default function PurchaseOrdersPage() {
       tax_amount: String((fullPO as any).tax_amount ?? 0),
       discount_amount: String((fullPO as any).discount_amount ?? 0),
       shipping_cost: String((fullPO as any).shipping_cost ?? 0),
+      notes: String((fullPO as any).notes ?? ''),
       items,
+      new_items: [],
     });
 
     setEditOriginal({
       tax_amount: Number((fullPO as any).tax_amount ?? 0),
       discount_amount: Number((fullPO as any).discount_amount ?? 0),
       shipping_cost: Number((fullPO as any).shipping_cost ?? 0),
+      notes: String((fullPO as any).notes ?? ''),
       items: originalItems,
     });
+
+    setEditProductSearch('');
+    setEditProductResults([]);
 
     setShowEditModal(true);
   } catch (error) {
@@ -485,25 +562,50 @@ export default function PurchaseOrdersPage() {
       const tax = parseFloat(editForm.tax_amount || '0') || 0;
       const discount = parseFloat(editForm.discount_amount || '0') || 0;
       const shipping = parseFloat(editForm.shipping_cost || '0') || 0;
+      const notes = String(editForm.notes || '');
 
       await purchaseOrderService.update(editPO.id, {
         tax_amount: tax,
         discount_amount: discount,
         shipping_cost: shipping,
+        notes,
       });
 
       if (editOriginal) {
         for (const it of editForm.items) {
           const qty = parseInt(it.quantity_ordered || '0', 10) || 0;
           const cost = parseFloat(it.unit_cost || '0') || 0;
+          const sell = parseFloat(it.unit_sell_price || '0') || 0;
           const orig = editOriginal.items[it.id];
 
-          if (!orig || orig.quantity_ordered !== qty || Number(orig.unit_cost) !== cost) {
+          if (!orig || orig.quantity_ordered !== qty || Number(orig.unit_cost) !== cost || Number(orig.unit_sell_price) !== sell) {
             await purchaseOrderService.updateItem(editPO.id, it.id, {
               quantity_ordered: qty,
               unit_cost: cost,
+              unit_sell_price: sell,
             });
           }
+        }
+      }
+
+      // Add any newly appended products
+      if (Array.isArray(editForm.new_items) && editForm.new_items.length > 0) {
+        for (const ni of editForm.new_items) {
+          const pid = Number(ni.product_id);
+          if (!pid) continue;
+
+          const qty = parseInt(ni.quantity_ordered || '0', 10) || 0;
+          if (qty <= 0) continue;
+
+          const cost = parseFloat(ni.unit_cost || '0') || 0;
+          const sell = parseFloat(ni.unit_sell_price || '0') || 0;
+
+          await purchaseOrderService.addItem(editPO.id, {
+            product_id: pid,
+            quantity_ordered: qty,
+            unit_cost: cost,
+            unit_sell_price: sell,
+          });
         }
       }
 
@@ -517,6 +619,55 @@ export default function PurchaseOrdersPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const appendProductToEdit = (p: Product) => {
+    if (!p || !p.id) return;
+
+    // Prevent adding duplicates (already in PO items)
+    const existing = (editPO?.items ?? []).some((it: any) => Number(it?.product_id) === Number(p.id));
+    if (existing) {
+      showAlert('error', 'This product is already in the PO');
+      return;
+    }
+
+    const foundIdx = editForm.new_items.findIndex((x) => Number(x.product_id) === Number(p.id));
+    if (foundIdx >= 0) {
+      // If already in new-items, just increment qty
+      setEditForm((prev) => ({
+        ...prev,
+        new_items: prev.new_items.map((x, i) => {
+          if (i !== foundIdx) return x;
+          const q = parseInt(x.quantity_ordered || '0', 10) || 0;
+          return { ...x, quantity_ordered: String(q + 1) };
+        }),
+      }));
+      return;
+    }
+
+    const label = `${p.name}${p.sku ? ` (${p.sku})` : ''}`;
+    setEditForm((prev) => ({
+      ...prev,
+      new_items: [
+        ...prev.new_items,
+        {
+          temp_id: Date.now() + Math.floor(Math.random() * 100000),
+          product_id: p.id,
+          product_label: label,
+          quantity_ordered: '1',
+          unit_cost: '0',
+          unit_sell_price: '0',
+          product: p,
+        },
+      ],
+    }));
+  };
+
+  const removeEditNewItem = (tempId: number) => {
+    setEditForm((prev) => ({
+      ...prev,
+      new_items: prev.new_items.filter((x) => x.temp_id !== tempId),
+    }));
   };
 
 
@@ -1003,6 +1154,22 @@ export default function PurchaseOrdersPage() {
               </div>
             </div>
 
+            {/* 📝 Notes / Terms */}
+            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
+              <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Notes</h4>
+              <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                {selectedPO.notes ? String(selectedPO.notes) : '—'}
+              </p>
+              {selectedPO.terms_and_conditions && (
+                <div className="mt-3">
+                  <h5 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">Terms &amp; Conditions</h5>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                    {String(selectedPO.terms_and_conditions)}
+                  </p>
+                </div>
+              )}
+            </div>
+
             {/* ✅ PO Barcode Center */}
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -1171,9 +1338,94 @@ export default function PurchaseOrdersPage() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
+                <textarea
+                  value={editForm.notes}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  rows={2}
+                  className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white resize-none"
+                  placeholder="Add a note for this purchase order"
+                />
+              </div>
+
+              {/* ➕ Add more products in this PO */}
+              <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Add More Products</h3>
+                    <p className="text-xs text-gray-600 dark:text-gray-400">Search vendor products and add them to this PO before saving.</p>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <input
+                    type="text"
+                    value={editProductSearch}
+                    onChange={(e) => setEditProductSearch(e.target.value)}
+                    placeholder="Search products by name / SKU"
+                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  />
+                  {editProductSearching && (
+                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Searching…</p>
+                  )}
+                </div>
+
+                {editProductSearch.trim() && (
+                  <div className="mt-3 max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-200 dark:divide-gray-700">
+                    {editProductResults.map((p) => {
+                      const img = pickProductImage(p);
+                      return (
+                        <div key={p.id} className="flex items-center justify-between gap-3 p-3 bg-white dark:bg-gray-800">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {img ? (
+                              <button
+                                type="button"
+                                onClick={() => setImagePreview({ url: img, name: p.name })}
+                                className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 flex-shrink-0"
+                                title="View image"
+                              >
+                                <img
+                                  src={img}
+                                  alt={p.name}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.src = '/placeholder-product.png';
+                                  }}
+                                />
+                              </button>
+                            ) : (
+                              <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600" />
+                            )}
+
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{(p as any).sku || ''}</div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => appendProductToEdit(p)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded-md"
+                          >
+                            <Plus className="w-3 h-3" />
+                            Add
+                          </button>
+                        </div>
+                      );
+                    })}
+
+                    {!editProductSearching && editProductResults.length === 0 && (
+                      <div className="p-4 text-sm text-gray-500 dark:text-gray-400">No products found.</div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                 <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
-                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Items (Quantity &amp; Unit Cost)</h3>
+                  <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Items (Quantity &amp; Prices)</h3>
                 </div>
 
                 <div className="overflow-x-auto">
@@ -1183,6 +1435,8 @@ export default function PurchaseOrdersPage() {
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Product</th>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Qty Ordered</th>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Sell</th>
+                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -1217,6 +1471,86 @@ export default function PurchaseOrdersPage() {
                               }}
                               className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                             />
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={it.unit_sell_price}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  items: prev.items.map((x, i) => (i === idx ? { ...x, unit_sell_price: v } : x)),
+                                }));
+                              }}
+                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">—</td>
+                        </tr>
+                      ))}
+
+                      {editForm.new_items.map((it, idx) => (
+                        <tr key={`new-${it.temp_id}`} className="bg-emerald-50/60 dark:bg-emerald-900/10">
+                          <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-600 text-white">NEW</span>
+                              <span>{it.product_label}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              value={it.quantity_ordered}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  new_items: prev.new_items.map((x, i) => (i === idx ? { ...x, quantity_ordered: v } : x)),
+                                }));
+                              }}
+                              className="w-28 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={it.unit_cost}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  new_items: prev.new_items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
+                                }));
+                              }}
+                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-4 py-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={it.unit_sell_price}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  new_items: prev.new_items.map((x, i) => (i === idx ? { ...x, unit_sell_price: v } : x)),
+                                }));
+                              }}
+                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                            />
+                          </td>
+                          <td className="px-4 py-2">
+                            <button
+                              type="button"
+                              onClick={() => removeEditNewItem(it.temp_id)}
+                              className="text-xs text-red-600 hover:text-red-700"
+                            >
+                              Remove
+                            </button>
                           </td>
                         </tr>
                       ))}
