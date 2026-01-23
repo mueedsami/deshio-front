@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Search, Package, ChevronDown, ChevronUp } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertCircle, ChevronDown, ChevronUp, Package, Search } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import inventoryService, { GlobalInventoryItem, Store as StoreBreakdown } from '@/services/inventoryService';
@@ -19,27 +19,29 @@ interface Category {
 }
 
 interface ProductVariation {
-  color?: string;
-  size?: string;
-  image?: string;
+  productId: number;
   quantity: number;
   stores: StoreBreakdown[];
 }
 
 interface GroupedProduct {
-  sku: string;
+  groupKey: string; // stable unique key (SKU, or NO-SKU-{product_id})
+  sku: string; // display SKU (may be 'NO-SKU')
   productName: string;
-  category: string;
   totalStock: number;
   variations: ProductVariation[];
   expanded: boolean;
+  productIds: number[];
 
   // Extra panel counts (defective/used) merged client-side
   extraTotal: number;
   extraDefective: number;
   extraUsed: number;
-  productIds: number[];
 }
+
+type ExtraCounts = { total: number; used: number; defective: number };
+
+type RateLimitState = { active: boolean; lastAt?: number; message?: string };
 
 export default function ViewInventoryPage() {
   const [darkMode, setDarkMode] = useState(false);
@@ -48,9 +50,38 @@ export default function ViewInventoryPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [groupedProducts, setGroupedProducts] = useState<GroupedProduct[]>([]);
   const [loading, setLoading] = useState(true);
+  const [visibleCount, setVisibleCount] = useState(50);
+
+  // product meta + image caches (loaded lazily for visible items)
+  const [productMetaById, setProductMetaById] = useState<Record<number, any>>({});
+  const [productImageById, setProductImageById] = useState<Record<number, string>>({});
+
+  // extra stock counts (defective/used)
+  const [extraMap, setExtraMap] = useState<Map<number, ExtraCounts>>(new Map());
+
+  // rate limit banner
+  const [rateLimit, setRateLimit] = useState<RateLimitState>({ active: false });
+
+  const metaCacheRef = useRef<Record<number, any>>({});
+  const imageCacheRef = useRef<Record<number, string>>({});
+  const inFlightRef = useRef<Set<number>>(new Set());
 
   useEffect(() => {
-    fetchData();
+    metaCacheRef.current = productMetaById;
+  }, [productMetaById]);
+
+  useEffect(() => {
+    imageCacheRef.current = productImageById;
+  }, [productImageById]);
+
+  // Reset pagination when searching
+  useEffect(() => {
+    setVisibleCount(50);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    fetchInitialData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // --- Same approach as GalleryPage: normalize image paths to absolute URLs ---
@@ -91,53 +122,13 @@ export default function ViewInventoryPage() {
     return category.title;
   };
 
-  // Fetch primary image per product_id using the same logic as GalleryPage
-  const fetchPrimaryImagesMap = async (productIds: number[]) => {
-    const baseUrl = getBaseUrl();
-    const unique = Array.from(new Set(productIds.filter(Boolean)));
-
-    const pairs = await Promise.all(
-      unique.map(async (pid) => {
-        try {
-          const imgs = await productImageService.getProductImages(pid);
-
-          const urls = (imgs || [])
-            .filter((img: any) => img?.is_active)
-            .sort((a: any, b: any) => {
-              if (a.is_primary && !b.is_primary) return -1;
-              if (!a.is_primary && b.is_primary) return 1;
-              return (a.sort_order || 0) - (b.sort_order || 0);
-            })
-            .map((img: any) => {
-              const u = img.image_url || img.image_path;
-              if (!u) return null;
-
-              if (u.startsWith('http')) return u;
-              if (u.startsWith('/storage')) return `${baseUrl}${u}`;
-              return `${baseUrl}/storage/product-images/${u}`;
-            })
-            .filter(Boolean) as string[];
-
-          return [pid, urls[0] || '/placeholder-image.jpg'] as const;
-        } catch (e) {
-          console.warn(`Failed to load images for product ${pid}`, e);
-          return [pid, '/placeholder-image.jpg'] as const;
-        }
-      })
-    );
-
-    return new Map<number, string>(pairs);
-  };
-
-  type ExtraCounts = { total: number; used: number; defective: number };
-
+  // -------------------- Extra panel (defective/used) --------------------
   const ACTIVE_EXTRA_STATUSES: Array<DefectiveProduct['status']> = [
     'identified',
     'inspected',
     'available_for_sale',
   ];
 
-  // Make USED_ITEM detection resilient to casing/extra text
   const isUsedItem = (desc?: string) => (desc || '').toUpperCase().includes('USED_ITEM');
 
   const fetchAllActiveExtraItems = async (): Promise<DefectiveProduct[]> => {
@@ -147,11 +138,8 @@ export default function ViewInventoryPage() {
     for (const status of ACTIVE_EXTRA_STATUSES) {
       let page = 1;
       while (true) {
-        // defectiveProductService.getAll() returns **response.data** (already unwrapped)
-        // Expected shape: { success: true, data: paginator }
         const res: any = await defectiveProductService.getAll({ status, per_page, page });
 
-        // Support both paginated and non-paginated responses
         const paginator = res?.data;
         const rows: DefectiveProduct[] = Array.isArray(paginator)
           ? paginator
@@ -159,7 +147,6 @@ export default function ViewInventoryPage() {
 
         all.push(...rows);
 
-        // If it's not a paginator, we're done
         if (Array.isArray(paginator)) break;
 
         const current = paginator?.current_page ?? page;
@@ -191,106 +178,269 @@ export default function ViewInventoryPage() {
     return map;
   };
 
-  const groupInventoryBySKU = (
-    inventoryItems: GlobalInventoryItem[],
-    products: any[],
-    cats: Category[],
-    primaryImageMap: Map<number, string>,
-    extraMap: Map<number, ExtraCounts>
-  ): GroupedProduct[] => {
-    const skuGroups: { [sku: string]: GroupedProduct } = {};
+  // -------------------- Helpers for product meta + images --------------------
+  const getCustomFieldValue = (product: any, titles: string[]): string | undefined => {
+    const list = product?.custom_fields || [];
+    const lower = titles.map(t => t.toLowerCase());
+    const found = list.find((f: any) => lower.includes(String(f?.field_title || '').toLowerCase()));
+    const v = found?.value;
+    if (v === null || v === undefined) return undefined;
+    return String(v);
+  };
 
-    inventoryItems.forEach((item) => {
-      const product = products.find(p => p.id === item.product_id);
-      if (!product) return;
+  const pickImageFromProductMeta = (product: any): string | undefined => {
+    if (!product) return undefined;
 
-      const sku = product.sku || item.sku || 'NO-SKU';
+    // 1) custom field image
+    const cfImage = getCustomFieldValue(product, ['image']);
+    if (cfImage) return cfImage;
 
-      const colorField = product.custom_fields?.find((f: any) =>
-        f.field_title?.toLowerCase() === 'color' || f.field_title?.toLowerCase() === 'colour'
-      );
-      const sizeField = product.custom_fields?.find((f: any) =>
-        f.field_title?.toLowerCase() === 'size'
-      );
-      const imageField = product.custom_fields?.find((f: any) =>
-        f.field_title?.toLowerCase() === 'image'
-      );
+    // 2) product.images (if present)
+    const imgs = Array.isArray(product?.images) ? product.images : [];
+    if (imgs.length > 0) {
+      const active = imgs.filter((img: any) => img?.is_active !== false);
+      active.sort((a: any, b: any) => {
+        if (a.is_primary && !b.is_primary) return -1;
+        if (!a.is_primary && b.is_primary) return 1;
+        return (a.sort_order || 0) - (b.sort_order || 0);
+      });
+      const u = active[0]?.image_url || active[0]?.image_path;
+      if (u) return String(u);
+    }
 
-      const color = colorField?.value || 'Default';
-      const size = sizeField?.value || 'One Size';
+    return undefined;
+  };
 
-      // Priority:
-      // 1) custom field image (if it exists)
-      // 2) productImageService primary image
-      // 3) product.images[0].image_path (normalized)
-      // 4) placeholder
-      const cfImage = imageField?.value ? normalizeImageUrl(imageField.value) : '';
-      const apiPrimary = primaryImageMap.get(item.product_id) || '';
-      const productImagesFallback = product.images?.[0]?.image_path
-        ? normalizeImageUrl(product.images?.[0]?.image_path)
-        : '';
+  const getColorSizeForProductId = (productId: number) => {
+    const meta = metaCacheRef.current[productId];
+    const color = getCustomFieldValue(meta, ['color', 'colour']);
+    const size = getCustomFieldValue(meta, ['size']);
+    return {
+      color: color && color !== 'Default' ? color : undefined,
+      size: size && size !== 'One Size' ? size : undefined,
+    };
+  };
 
-      const image = cfImage || apiPrimary || productImagesFallback || '/placeholder-image.jpg';
+  const getImageForProductId = (productId: number) => {
+    const meta = metaCacheRef.current[productId];
 
-      if (!skuGroups[sku]) {
-        const categoryName = getCategoryName(product.category_id, cats);
+    const cfOrMeta = pickImageFromProductMeta(meta);
+    if (cfOrMeta) return normalizeImageUrl(cfOrMeta);
 
-        skuGroups[sku] = {
-          sku,
-          productName: product.name,
-          category: categoryName,
+    const cached = imageCacheRef.current[productId];
+    if (cached) return normalizeImageUrl(cached);
+
+    return '/placeholder-image.jpg';
+  };
+
+  const getCategoryForGroup = (g: GroupedProduct) => {
+    for (const pid of g.productIds) {
+      const meta = metaCacheRef.current[pid];
+      if (meta?.category_id) return getCategoryName(meta.category_id, categories);
+    }
+    return 'Uncategorized';
+  };
+
+  const getHeroImageForGroup = (g: GroupedProduct) => {
+    for (const pid of g.productIds) {
+      const img = getImageForProductId(pid);
+      if (img && img !== '/placeholder-image.jpg') return img;
+    }
+    // fallback: first pid
+    return getImageForProductId(g.productIds[0]);
+  };
+
+  // -------------------- Retry + rate limiting --------------------
+  const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+  const getHttpStatus = (err: any): number | undefined => {
+    return err?.response?.status ?? err?.status;
+  };
+
+  const withRetry = async <T,>(fn: () => Promise<T>, opts?: { attempts?: number; baseDelayMs?: number }): Promise<T> => {
+    const attempts = opts?.attempts ?? 3;
+    const baseDelayMs = opts?.baseDelayMs ?? 400;
+
+    let lastErr: any;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fn();
+
+        // clear banner after successful call (soft)
+        if (rateLimit.active) {
+          setRateLimit(prev => ({ ...prev, active: false }));
+        }
+
+        return res;
+      } catch (err: any) {
+        lastErr = err;
+        const status = getHttpStatus(err);
+
+        // Only retry for rate limit & transient
+        const retryable = status === 429 || (status && status >= 500);
+        if (!retryable || i === attempts - 1) break;
+
+        const is429 = status === 429;
+        if (is429) {
+          setRateLimit({
+            active: true,
+            lastAt: Date.now(),
+            message: 'HTTP 429 (Too Many Requests). Slowing down image/product loading…'
+          });
+        }
+
+        const jitter = Math.floor(Math.random() * 200);
+        const delay = (is429 ? 800 : baseDelayMs) * Math.pow(2, i) + jitter;
+        await sleep(delay);
+      }
+    }
+
+    throw lastErr;
+  };
+
+  const enrichProduct = async (productId: number) => {
+    // Meta already cached
+    if (metaCacheRef.current[productId]) return;
+
+    // Avoid duplicate in-flight
+    if (inFlightRef.current.has(productId)) return;
+    inFlightRef.current.add(productId);
+
+    try {
+      const meta = await withRetry(() => productService.getById(productId), { attempts: 3, baseDelayMs: 350 });
+      setProductMetaById(prev => ({ ...prev, [productId]: meta }));
+
+      // Try to pick image from meta first
+      let img = pickImageFromProductMeta(meta);
+
+      // If still missing, hit the dedicated primary-image endpoint (only then)
+      if (!img) {
+        try {
+          const primary = await withRetry(() => productImageService.getPrimaryImage(productId), { attempts: 2, baseDelayMs: 500 });
+          const u = (primary as any)?.image_url || (primary as any)?.image_path;
+          if (u) img = String(u);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (img) {
+        setProductImageById(prev => ({ ...prev, [productId]: normalizeImageUrl(img) }));
+      }
+    } catch (e) {
+      // Keep placeholder; we'll try again later when item is visible again
+      console.warn('Failed to enrich product', productId, e);
+    } finally {
+      inFlightRef.current.delete(productId);
+    }
+  };
+
+  // -------------------- Grouping --------------------
+  const buildGroupsFromInventory = (inventoryItems: GlobalInventoryItem[]): GroupedProduct[] => {
+    const groups: Record<string, GroupedProduct> = {};
+
+    for (const item of inventoryItems) {
+      const displaySku = item.sku || 'NO-SKU';
+      const groupKey = item.sku ? item.sku : `NO-SKU-${item.product_id}`;
+
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          groupKey,
+          sku: displaySku,
+          productName: item.product_name || 'Unnamed Product',
           totalStock: 0,
           variations: [],
           expanded: false,
+          productIds: [],
           extraTotal: 0,
           extraDefective: 0,
           extraUsed: 0,
-          productIds: []
         };
       }
 
-      if (!skuGroups[sku].productIds.includes(item.product_id)) {
-        skuGroups[sku].productIds.push(item.product_id);
+      const g = groups[groupKey];
+      const qty = Number(item.total_quantity || 0);
+      g.totalStock += qty;
+
+      if (item.product_id && !g.productIds.includes(item.product_id)) {
+        g.productIds.push(item.product_id);
       }
 
-      // group by color (your original behavior)
-      let variation = skuGroups[sku].variations.find(v => v.color === color);
-
-      if (!variation) {
-        variation = {
-          color,
-          size,
-          image,
-          quantity: 0,
-          stores: []
-        };
-        skuGroups[sku].variations.push(variation);
+      const existing = g.variations.find(v => v.productId === item.product_id);
+      if (!existing) {
+        g.variations.push({
+          productId: item.product_id,
+          quantity: qty,
+          stores: Array.isArray(item.stores) ? [...item.stores] : [],
+        });
       } else {
-        // if same color but different size, append size
-        if (size !== 'One Size' && !variation.size?.includes(size)) {
-          variation.size = variation.size === 'One Size'
-            ? size
-            : `${variation.size}, ${size}`;
-        }
-        // keep a valid image if it was missing earlier
-        if (!variation.image || variation.image === '/placeholder-image.jpg') {
-          variation.image = image;
+        existing.quantity += qty;
+
+        // merge store breakdowns
+        for (const s of item.stores || []) {
+          const hit = existing.stores.find(x => x.store_id === s.store_id);
+          if (hit) {
+            hit.quantity += s.quantity;
+            hit.batches_count = (hit.batches_count || 0) + (s.batches_count || 0);
+          } else {
+            existing.stores.push({ ...s });
+          }
         }
       }
+    }
 
-      variation.quantity += item.total_quantity;
-
-      item.stores.forEach(store => {
-        const existingStore = variation!.stores.find(s => s.store_id === store.store_id);
-        if (existingStore) existingStore.quantity += store.quantity;
-        else variation!.stores.push({ ...store });
-      });
-
-      skuGroups[sku].totalStock += item.total_quantity;
+    return Object.values(groups).sort((a, b) => {
+      return (a.productName || '').localeCompare(b.productName || '');
     });
+  };
 
-    // Merge extra (defective/used) counts into SKU groups
-    Object.values(skuGroups).forEach((g) => {
+  const fetchInitialData = async () => {
+    try {
+      setLoading(true);
+
+      const [categoriesResponse, inventoryResponse] = await Promise.all([
+        categoryService.getCategories(),
+        inventoryService.getGlobalInventory(),
+      ]);
+
+      const categoriesData = (categoriesResponse as any)?.data?.data || (categoriesResponse as any)?.data || [];
+      setCategories(categoriesData);
+
+      const inventoryData = (inventoryResponse as any)?.data || [];
+
+      // ✅ Build groups ONLY from inventory endpoint (no product list fetch)
+      const grouped = buildGroupsFromInventory(inventoryData);
+      setGroupedProducts(grouped);
+
+      // ✅ Show UI fast
+      setLoading(false);
+
+      // ✅ Load extra counts in background (won't block inventory list)
+      (async () => {
+        try {
+          const extraItems = await fetchAllActiveExtraItems();
+          setExtraMap(buildExtraMapByProduct(extraItems));
+        } catch (e) {
+          console.warn('Failed to load extra (defective/used) counts', e);
+        }
+      })();
+    } catch (error) {
+      console.error('Error fetching inventory data:', error);
+      setLoading(false);
+    }
+  };
+
+  const toggleExpand = (groupKey: string) => {
+    setGroupedProducts(prev => prev.map(item => (
+      item.groupKey === groupKey ? { ...item, expanded: !item.expanded } : item
+    )));
+  };
+
+  // -------------------- Derived lists --------------------
+  const groupsWithExtras = useMemo(() => {
+    if (!extraMap || extraMap.size === 0) return groupedProducts;
+
+    return groupedProducts.map(g => {
       let total = 0;
       let used = 0;
       let defective = 0;
@@ -303,120 +453,71 @@ export default function ViewInventoryPage() {
         defective += ex.defective;
       }
 
-      g.extraTotal = total;
-      g.extraUsed = used;
-      g.extraDefective = defective;
+      return { ...g, extraTotal: total, extraUsed: used, extraDefective: defective };
     });
+  }, [groupedProducts, extraMap]);
 
-    // Include products that have NO normal stock but exist in Extra panel
-    for (const [pid, ex] of extraMap.entries()) {
-      const alreadyIncluded = Object.values(skuGroups).some((g) => g.productIds.includes(pid));
-      if (alreadyIncluded) continue;
+  const filteredProducts = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return groupsWithExtras;
 
-      const product = products.find((p) => p.id === pid);
-      if (!product) continue;
+    return groupsWithExtras.filter(item => {
+      const nameHit = (item.productName || '').toLowerCase().includes(q);
+      const skuHit = (item.sku || '').toLowerCase().includes(q);
+      const categoryHit = getCategoryForGroup(item).toLowerCase().includes(q);
+      return nameHit || skuHit || categoryHit;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupsWithExtras, searchTerm, categories, productMetaById]);
 
-      const sku = product.sku || 'NO-SKU';
-      const categoryName = getCategoryName(product.category_id, cats);
+  const visibleProducts = useMemo(() => {
+    return filteredProducts.slice(0, visibleCount);
+  }, [filteredProducts, visibleCount]);
 
-      const colorField = product.custom_fields?.find((f: any) =>
-        f.field_title?.toLowerCase() === 'color' || f.field_title?.toLowerCase() === 'colour'
-      );
-      const sizeField = product.custom_fields?.find((f: any) => f.field_title?.toLowerCase() === 'size');
-      const imageField = product.custom_fields?.find((f: any) => f.field_title?.toLowerCase() === 'image');
-
-      const color = colorField?.value || 'Default';
-      const size = sizeField?.value || 'One Size';
-
-      const cfImage = imageField?.value ? normalizeImageUrl(imageField.value) : '';
-      const apiPrimary = primaryImageMap.get(pid) || '';
-      const productImagesFallback = product.images?.[0]?.image_path
-        ? normalizeImageUrl(product.images?.[0]?.image_path)
-        : '';
-      const image = cfImage || apiPrimary || productImagesFallback || '/placeholder-image.jpg';
-
-      if (!skuGroups[sku]) {
-        skuGroups[sku] = {
-          sku,
-          productName: product.name,
-          category: categoryName,
-          totalStock: 0,
-          variations: [],
-          expanded: false,
-          extraTotal: 0,
-          extraDefective: 0,
-          extraUsed: 0,
-          productIds: [],
-        };
-      }
-
-      if (!skuGroups[sku].productIds.includes(pid)) {
-        skuGroups[sku].productIds.push(pid);
-      }
-
-      skuGroups[sku].extraTotal += ex.total;
-      skuGroups[sku].extraUsed += ex.used;
-      skuGroups[sku].extraDefective += ex.defective;
-
-      skuGroups[sku].variations.push({
-        color,
-        size,
-        image,
-        quantity: 0,
-        stores: [],
-      });
+  const visibleProductIds = useMemo(() => {
+    const ids: number[] = [];
+    for (const g of visibleProducts) {
+      for (const pid of g.productIds) ids.push(pid);
     }
+    return Array.from(new Set(ids.filter(Boolean)));
+  }, [visibleProducts]);
 
-    return Object.values(skuGroups);
-  };
+  // Lazy-load product meta/images for visible items (with concurrency cap)
+  useEffect(() => {
+    let cancelled = false;
 
-  const fetchData = async () => {
-    try {
-      setLoading(true);
+    const run = async () => {
+      const targets = visibleProductIds.filter(pid => !metaCacheRef.current[pid]);
+      if (targets.length === 0) return;
 
-      const categoriesResponse = await categoryService.getCategories();
-      const categoriesData = categoriesResponse.data.data || categoriesResponse.data || [];
-      setCategories(categoriesData);
+      const CONCURRENCY = 3;
+      let idx = 0;
 
-      const inventoryResponse = await inventoryService.getGlobalInventory();
-      const inventoryData = inventoryResponse.data || [];
+      const worker = async () => {
+        while (!cancelled) {
+          const pid = targets[idx++];
+          if (!pid) break;
+          try {
+            await enrichProduct(pid);
+          } catch {
+            // ignore
+          }
+        }
+      };
 
-      const productsResponse = await productService.getAll({ per_page: 1000 });
-      const productsData = productsResponse.data || [];
+      const workers = Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker());
+      await Promise.all(workers);
+    };
 
-      // Fetch active Extra-panel items (defective/used) and build counts map
-      const extraItems = await fetchAllActiveExtraItems();
-      const extraMap = buildExtraMapByProduct(extraItems);
+    run().catch(() => void 0);
 
-      // Build images map from productImageService (like GalleryPage)
-      const invProductIds = inventoryData.map((x: any) => x.product_id).filter(Boolean);
-      const extraProductIds = Array.from(extraMap.keys());
-      const productIds = [...invProductIds, ...extraProductIds];
-      const primaryImageMap = await fetchPrimaryImagesMap(productIds);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleProductIds]);
 
-      const grouped = groupInventoryBySKU(inventoryData, productsData, categoriesData, primaryImageMap, extraMap);
-      setGroupedProducts(grouped);
-    } catch (error) {
-      console.error('Error fetching data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const toggleExpand = (sku: string) => {
-    setGroupedProducts(prev =>
-      prev.map(item =>
-        item.sku === sku ? { ...item, expanded: !item.expanded } : item
-      )
-    );
-  };
-
-  const filteredProducts = groupedProducts.filter(item =>
-    item.productName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    item.category.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
+  // -------------------- UI --------------------
   if (loading) {
     return (
       <div className={darkMode ? 'dark' : ''}>
@@ -462,7 +563,7 @@ export default function ViewInventoryPage() {
               </p>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-6">
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-4">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                 <input
@@ -475,189 +576,230 @@ export default function ViewInventoryPage() {
               </div>
             </div>
 
+            {rateLimit.active && (
+              <div className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-700 dark:text-amber-300 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Rate limit detected</p>
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      {rateLimit.message || 'HTTP 429 (Too Many Requests). Slowing down requests and retrying automatically…'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-4">
               {filteredProducts.length === 0 ? (
                 <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-12 text-center">
                   <Package className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
-                  <p className="text-gray-600 dark:text-gray-400">
-                    No inventory items found
-                  </p>
+                  <p className="text-gray-600 dark:text-gray-400">No inventory items found</p>
                 </div>
               ) : (
-                filteredProducts.map((item) => (
-                  <div
-                    key={item.sku}
-                    className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
-                  >
-                    <div className="p-4">
-                      <div className="flex items-start gap-4">
-                        <div className="w-20 h-20 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
-                          <img
-                            src={normalizeImageUrl(item.variations[0]?.image)}
-                            alt={item.productName}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              const img = e.currentTarget;
-                              if (img.dataset.fallbackApplied) return;
-                              img.dataset.fallbackApplied = '1';
-                              img.src = '/placeholder-image.jpg';
-                            }}
-                          />
-                        </div>
+                <>
+                  {visibleProducts.map((item) => {
+                    const categoryLabel = getCategoryForGroup(item);
+                    const heroImg = getHeroImageForGroup(item);
 
-                        <div className="flex-1 min-w-0">
-                          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
-                            {item.productName}
-                          </h3>
-                          <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
-                            <span className="flex items-center gap-1">
-                              <span className="font-medium">SKU:</span>
-                              <span className="font-mono">{item.sku}</span>
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <span className="font-medium">Category:</span>
-                              <span>{item.category}</span>
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <span className="font-medium">Variations:</span>
-                              <span>{item.variations.length}</span>
-                            </span>
-                          </div>
-                        </div>
+                    return (
+                      <div
+                        key={item.groupKey}
+                        className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
+                      >
+                        <div className="p-4">
+                          <div className="flex items-start gap-4">
+                            <div className="w-20 h-20 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
+                              <img
+                                src={heroImg}
+                                alt={item.productName}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  const img = e.currentTarget;
+                                  if ((img as any).dataset.fallbackApplied) return;
+                                  (img as any).dataset.fallbackApplied = '1';
+                                  img.src = '/placeholder-image.jpg';
+                                }}
+                              />
+                            </div>
 
-                        <div className="flex items-center gap-6">
-                          <div className="text-right">
-                            <p className="text-sm text-gray-600 dark:text-gray-400">Total Stock</p>
-                            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
-                              {item.totalStock}
-                            </p>
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+                                {item.productName}
+                              </h3>
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">SKU:</span>
+                                  <span className="font-mono">{item.sku}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">Category:</span>
+                                  <span>{categoryLabel}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">Items:</span>
+                                  <span>{item.variations.length}</span>
+                                </span>
+                              </div>
+                            </div>
 
-                            {(item.extraDefective > 0 || item.extraUsed > 0) && (
-                              <div className="mt-2 flex flex-col items-end gap-1">
-                                {item.extraDefective > 0 && (
-                                  <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
-                                    Def: {item.extraDefective}
-                                  </span>
-                                )}
-                                {item.extraUsed > 0 && (
-                                  <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
-                                    Used: {item.extraUsed}
-                                  </span>
+                            <div className="flex items-center gap-6">
+                              <div className="text-right">
+                                <p className="text-sm text-gray-600 dark:text-gray-400">Total Stock</p>
+                                <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+                                  {item.totalStock}
+                                </p>
+
+                                {(item.extraDefective > 0 || item.extraUsed > 0) && (
+                                  <div className="mt-2 flex flex-col items-end gap-1">
+                                    {item.extraDefective > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
+                                        Def: {item.extraDefective}
+                                      </span>
+                                    )}
+                                    {item.extraUsed > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
+                                        Used: {item.extraUsed}
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
-                            )}
-                          </div>
 
-                          <button
-                            onClick={() => toggleExpand(item.sku)}
-                            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
-                          >
-                            {item.expanded ? (
-                              <ChevronUp className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                            ) : (
-                              <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                            )}
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {item.expanded && (
-                      <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                        <div className="p-4">
-                          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
-                            Variations & Stock Distribution
-                          </h4>
-                          <div className="space-y-4">
-                            {item.variations.map((variation, idx) => (
-                              <div
-                                key={idx}
-                                className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4"
+                              <button
+                                onClick={() => toggleExpand(item.groupKey)}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
                               >
-                                <div className="flex items-center gap-4 mb-3">
-                                  <div className="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded overflow-hidden">
-                                    <img
-                                      src={normalizeImageUrl(variation.image)}
-                                      alt={`${variation.color || 'Variation'}`}
-                                      className="w-full h-full object-cover"
-                                      onError={(e) => {
-                                        const img = e.currentTarget;
-                                        if (img.dataset.fallbackApplied) return;
-                                        img.dataset.fallbackApplied = '1';
-                                        img.src = '/placeholder-image.jpg';
-                                      }}
-                                    />
-                                  </div>
-                                  <div className="flex-1">
-                                    <div className="flex items-center gap-3 mb-1">
-                                      {variation.color && variation.color !== 'Default' && (
-                                        <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs font-medium rounded-full">
-                                          Color: {variation.color}
-                                        </span>
-                                      )}
-                                      {variation.size && variation.size !== 'One Size' && (
-                                        <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 text-xs font-medium rounded-full">
-                                          Size: {variation.size}
-                                        </span>
+                                {item.expanded ? (
+                                  <ChevronUp className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                                ) : (
+                                  <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {item.expanded && (
+                          <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                            <div className="p-4">
+                              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                                Items & Stock Distribution
+                              </h4>
+                              <div className="space-y-4">
+                                {item.variations.map((variation) => {
+                                  const pid = variation.productId;
+                                  const img = getImageForProductId(pid);
+                                  const { color, size } = getColorSizeForProductId(pid);
+
+                                  return (
+                                    <div
+                                      key={pid}
+                                      className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4"
+                                    >
+                                      <div className="flex items-center gap-4 mb-3">
+                                        <div className="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded overflow-hidden">
+                                          <img
+                                            src={img}
+                                            alt={color ? `Color ${color}` : `Product ${pid}`}
+                                            className="w-full h-full object-cover"
+                                            onError={(e) => {
+                                              const imgEl = e.currentTarget;
+                                              if ((imgEl as any).dataset.fallbackApplied) return;
+                                              (imgEl as any).dataset.fallbackApplied = '1';
+                                              imgEl.src = '/placeholder-image.jpg';
+                                            }}
+                                          />
+                                        </div>
+                                        <div className="flex-1">
+                                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                                            {color ? (
+                                              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs font-medium rounded-full">
+                                                Color: {color}
+                                              </span>
+                                            ) : null}
+                                            {size ? (
+                                              <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 text-xs font-medium rounded-full">
+                                                Size: {size}
+                                              </span>
+                                            ) : null}
+                                            {!color && !size ? (
+                                              <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-xs font-medium rounded-full">
+                                                Product ID: {pid}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                                            Total:{' '}
+                                            <span className="font-semibold text-gray-900 dark:text-white">
+                                              {variation.quantity}
+                                            </span>{' '}
+                                            units
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {variation.stores.length > 0 && (
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full">
+                                            <thead>
+                                              <tr className="border-b border-gray-200 dark:border-gray-700">
+                                                <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Store
+                                                </th>
+                                                <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Quantity
+                                                </th>
+                                                <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Batches
+                                                </th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {variation.stores.map((store, storeIdx) => (
+                                                <tr
+                                                  key={storeIdx}
+                                                  className="border-b border-gray-200 dark:border-gray-700 last:border-0"
+                                                >
+                                                  <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">
+                                                    {store.store_name}
+                                                  </td>
+                                                  <td className="py-2 px-3 text-center">
+                                                    <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded">
+                                                      {store.quantity}
+                                                    </span>
+                                                  </td>
+                                                  <td className="py-2 px-3 text-center text-sm text-gray-600 dark:text-gray-400">
+                                                    {store.batches_count}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
                                       )}
                                     </div>
-                                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                                      Total:{' '}
-                                      <span className="font-semibold text-gray-900 dark:text-white">
-                                        {variation.quantity}
-                                      </span>{' '}
-                                      units
-                                    </p>
-                                  </div>
-                                </div>
-
-                                {variation.stores.length > 0 && (
-                                  <div className="overflow-x-auto">
-                                    <table className="w-full">
-                                      <thead>
-                                        <tr className="border-b border-gray-200 dark:border-gray-700">
-                                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
-                                            Store
-                                          </th>
-                                          <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
-                                            Quantity
-                                          </th>
-                                          <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
-                                            Batches
-                                          </th>
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {variation.stores.map((store, storeIdx) => (
-                                          <tr
-                                            key={storeIdx}
-                                            className="border-b border-gray-200 dark:border-gray-700 last:border-0"
-                                          >
-                                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">
-                                              {store.store_name}
-                                            </td>
-                                            <td className="py-2 px-3 text-center">
-                                              <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded">
-                                                {store.quantity}
-                                              </span>
-                                            </td>
-                                            <td className="py-2 px-3 text-center text-sm text-gray-600 dark:text-gray-400">
-                                              {store.batches_count}
-                                            </td>
-                                          </tr>
-                                        ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                )}
+                                  );
+                                })}
                               </div>
-                            ))}
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                ))
+                    );
+                  })}
+
+                  {filteredProducts.length > visibleCount && (
+                    <div className="flex justify-center pt-2">
+                      <button
+                        onClick={() => setVisibleCount(v => v + 50)}
+                        className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                      >
+                        Load more ({Math.min(50, filteredProducts.length - visibleCount)} more)
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </main>
