@@ -977,63 +977,38 @@ const derivePaymentStatus = (order: any) => {
     );
   };
 
-  // ✅ If a courier marker was set during Social Commerce checkout, store it in sessionStorage
-  // so the Orders page can render it immediately even if the orders list endpoint is cached/lagging.
-  const applyPendingCourierMarkers = (list: Order[]): Order[] => {
+  // ✅ Hydrate intended courier from DB using the official lookup API
+  // This avoids relying on localStorage/sessionStorage and guarantees correctness after reload.
+  const hydrateCouriersFromDB = async (list: Order[]): Promise<Order[]> => {
     try {
-      const KEY = 'pendingCourierMarkers';
-      const raw = sessionStorage.getItem(KEY);
-      if (!raw) return list;
+      const missingIds = list
+        .filter((o) => !normalizeCourier(o.intendedCourier))
+        .map((o) => o.id)
+        .filter((id) => Number.isFinite(id) && id > 0);
 
-      const now = Date.now();
-      const TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
-      const parsed = JSON.parse(raw);
-      const markers: any[] = Array.isArray(parsed) ? parsed : [];
+      if (missingIds.length === 0) return list;
 
-      const valid = markers
-        .filter((m) => m && (now - Number(m.ts || 0) < TTL))
-        .map((m) => ({
-          order_id: Number(m.order_id ?? m.orderId ?? 0) || 0,
-          order_number: String(m.order_number ?? m.orderNumber ?? '').trim(),
-          intended_courier: String(m.intended_courier ?? m.intendedCourier ?? '').trim(),
-          ts: Number(m.ts || 0),
-        }))
-        .filter((m) => (m.order_id || m.order_number) && m.intended_courier);
+      const chunks: number[][] = [];
+      for (let i = 0; i < missingIds.length; i += 100) chunks.push(missingIds.slice(i, i + 100));
 
-      if (valid.length === 0) {
-        sessionStorage.removeItem(KEY);
-        return list;
+      const map = new Map<number, string | null>();
+      for (const chunk of chunks) {
+        const res = await orderService.bulkLookupCouriers(chunk);
+        (res?.orders || []).forEach((row: any) => {
+          const id = Number(row?.order_id);
+          if (!Number.isFinite(id) || id <= 0) return;
+          const v = row?.intended_courier;
+          map.set(id, v === undefined ? null : (v as any));
+        });
       }
 
-      const byId = new Map<number, string>();
-      const byNo = new Map<string, string>();
-      valid.forEach((m) => {
-        if (m.order_id) byId.set(m.order_id, m.intended_courier);
-        if (m.order_number) byNo.set(m.order_number, m.intended_courier);
+      return list.map((o) => {
+        if (normalizeCourier(o.intendedCourier)) return o;
+        if (!map.has(o.id)) return o;
+        return { ...o, intendedCourier: map.get(o.id) ?? null };
       });
-
-      const nextList = list.map((o) => {
-        if (o.intendedCourier) return o; // backend already has it
-        const val = byId.get(o.id) || byNo.get(o.orderNumber);
-        return val ? { ...o, intendedCourier: val } : o;
-      });
-
-      // Keep markers only if backend still doesn't include intended courier for that order.
-      const remaining = valid
-        .filter((m) => {
-          const match = list.find(
-            (o) => (m.order_id && o.id === m.order_id) || (m.order_number && o.orderNumber === m.order_number)
-          );
-          if (!match) return true;
-          return !match.intendedCourier;
-        })
-        .slice(0, 50);
-
-      if (remaining.length > 0) sessionStorage.setItem(KEY, JSON.stringify(remaining));
-      else sessionStorage.removeItem(KEY);
-
-      return nextList;
-    } catch {
+    } catch (e) {
+      console.warn('Failed to hydrate courier markers from DB:', e);
       return list;
     }
   };
@@ -1105,7 +1080,7 @@ const derivePaymentStatus = (order: any) => {
       allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       const transformedOrders = allOrders.map((o: any) => transformOrder(o));
-      const hydrated = applyPendingCourierMarkers(transformedOrders);
+      const hydrated = await hydrateCouriersFromDB(transformedOrders);
 
       setOrders(hydrated);
       setFilteredOrders(hydrated);
@@ -1924,26 +1899,35 @@ const derivePaymentStatus = (order: any) => {
 
       alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
       setSelectedOrders(new Set());
-
-      // Set courier marker to Pathao for the selected orders (UI consistency + filtering)
+      // Set courier marker to Pathao in DB (persists after reload + can be filtered)
       try {
-        const KEY = 'pendingCourierMarkers';
-        const raw = sessionStorage.getItem(KEY);
-        const prev = raw ? JSON.parse(raw) : [];
-        const list: any[] = Array.isArray(prev) ? prev : [];
-        const now = Date.now();
-        selectedOrdersList.forEach((o) => {
-          if (!o?.id || !o?.orderNumber) return;
-          list.unshift({
-            order_id: o.id,
-            order_number: o.orderNumber,
-            intended_courier: 'pathao',
-            ts: now,
-          });
-        });
-        sessionStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
-      } catch {
-        // ignore
+        const ids = selectedOrdersList
+          .map((o) => Number(o?.id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+
+        if (ids.length > 0) {
+          const idSet = new Set<number>(ids);
+          const concurrency = Math.min(5, ids.length);
+          let idx = 0;
+
+          const worker = async () => {
+            while (idx < ids.length) {
+              const current = ids[idx++];
+              try {
+                await orderService.setIntendedCourier(current, 'pathao');
+              } catch {
+                // ignore per-order failures
+              }
+            }
+          };
+
+          await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+          // optimistic UI update
+          setOrders((prev) => prev.map((o) => (idSet.has(o.id) ? { ...o, intendedCourier: 'pathao' } : o)));
+        }
+      } catch (e) {
+        console.warn('Failed to set intended courier for bulk Pathao send:', e);
       }
 
       await loadOrders();
@@ -2199,22 +2183,12 @@ const derivePaymentStatus = (order: any) => {
         alert('Pathao response received, but could not determine success/failure.');
       }
 
-      // Set courier marker to Pathao for UI consistency + filtering
+      // Set courier marker to Pathao in DB (persists after reload)
       try {
         await orderService.setIntendedCourier(order.id, 'pathao');
         setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, intendedCourier: 'pathao' } : o)));
-      } catch {
-        // fallback: store a pending marker so UI still shows it
-        try {
-          const KEY = 'pendingCourierMarkers';
-          const raw = sessionStorage.getItem(KEY);
-          const prev = raw ? JSON.parse(raw) : [];
-          const list: any[] = Array.isArray(prev) ? prev : [];
-          list.unshift({ order_id: order.id, order_number: order.orderNumber, intended_courier: 'pathao', ts: Date.now() });
-          sessionStorage.setItem(KEY, JSON.stringify(list.slice(0, 50)));
-        } catch {
-          // ignore
-        }
+      } catch (e) {
+        console.warn('Failed to set intended courier for this order:', e);
       }
 
       await loadOrders();

@@ -493,6 +493,85 @@ const orderService = {
   },
 
   /**
+   * Lookup courier marker for a single order
+   * GET /api/orders/lookup-courier/{orderId}
+   */
+  async lookupOrderCourier(orderId: number): Promise<{
+    order_id: number;
+    order_number: string;
+    intended_courier: string | null;
+    status?: string;
+    customer_name?: string;
+    customer_phone?: string;
+    store_name?: string;
+    total_amount?: string;
+    order_date?: string;
+  }> {
+    try {
+      const response = await axiosInstance.get(`/orders/lookup-courier/${orderId}`);
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to lookup courier');
+      }
+
+      return result.data;
+    } catch (error: any) {
+      console.error('Lookup order courier error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to lookup courier');
+    }
+  },
+
+  /**
+   * Bulk lookup courier markers for multiple orders (max 100)
+   * POST /api/orders/bulk-lookup-courier
+   */
+  async bulkLookupCouriers(order_ids: number[]): Promise<{
+    total_found: number;
+    total_requested: number;
+    orders: Array<{
+      order_id: number;
+      order_number?: string;
+      intended_courier: string | null;
+      status?: string;
+      customer_name?: string;
+      customer_phone?: string;
+      store_name?: string;
+      total_amount?: string;
+    }>;
+  }> {
+    try {
+      const ids = (Array.isArray(order_ids) ? order_ids : [])
+        .map((x) => Number(x))
+        .filter((x) => Number.isFinite(x) && x > 0);
+
+      if (ids.length === 0) {
+        return { total_found: 0, total_requested: 0, orders: [] };
+      }
+
+      const limited = ids.slice(0, 100);
+      const response = await axiosInstance.post('/orders/bulk-lookup-courier', {
+        order_ids: limited,
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to bulk lookup couriers');
+      }
+
+      const data = result.data || {};
+      return {
+        total_found: Number(data.total_found || 0),
+        total_requested: Number(data.total_requested || limited.length),
+        orders: Array.isArray(data.orders) ? data.orders : [],
+      };
+    } catch (error: any) {
+      console.error('Bulk lookup couriers error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to bulk lookup couriers');
+    }
+  },
+
+  /**
    * Get list of available couriers with order counts
    * GET /api/orders/available-couriers
    */
