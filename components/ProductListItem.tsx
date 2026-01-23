@@ -129,12 +129,6 @@ export default function ProductListItem({
               </div>
             
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
-                {productGroup.vendorName ? (
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                    Vendor: {productGroup.vendorName}
-                  </span>
-                ) : null}
-
                 <span
                   className={`inline-flex items-center px-2.5 py-1 rounded-md font-medium ${
                     productGroup.inStock === false || productGroup.stockQuantity === 0

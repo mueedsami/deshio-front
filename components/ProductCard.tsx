@@ -64,11 +64,6 @@ export default function ProductCard({
           <p className="text-xs text-gray-600 dark:text-gray-400">
             <span className="font-medium">Category:</span> {categoryPath}
           </p>
-          {product.vendor && (
-            <p className="text-xs text-gray-600 dark:text-gray-400">
-              <span className="font-medium">Vendor:</span> {product.vendor.name}
-            </p>
-          )}
         </div>
 
         {/* Actions */}
