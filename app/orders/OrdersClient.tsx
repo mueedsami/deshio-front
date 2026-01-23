@@ -11,6 +11,7 @@ import {
   MoreVertical,
   Eye,
   Package,
+  Wrench,
   XCircle,
   Loader,
   Globe,
@@ -37,6 +38,7 @@ import type { PaymentMethod } from '@/services/paymentMethodService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
 import productService from '@/services/productService';
+import serviceManagementService from '@/services/serviceManagementService';
 
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
@@ -65,6 +67,15 @@ interface Order {
     imageUrl?: string | null;
     name: string;
     sku: string;
+    quantity: number;
+    price: number;
+    discount: number;
+  }>;
+  services: Array<{
+    id: number;
+    serviceId?: number;
+    name: string;
+    category?: string;
     quantity: number;
     price: number;
     discount: number;
@@ -393,6 +404,14 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   const [isProductLoading, setIsProductLoading] = useState(false);
   const [pickerBatches, setPickerBatches] = useState<any[]>([]);
   const [pickerStoreId, setPickerStoreId] = useState<number | null>(null);
+
+  // 🛠️ Service picker (for Edit Order)
+  const [showServicePicker, setShowServicePicker] = useState(false);
+  const [serviceSearch, setServiceSearch] = useState('');
+  const [availableServices, setAvailableServices] = useState<any[]>([]);
+  const [serviceResults, setServiceResults] = useState<any[]>([]);
+  const [isServiceLoading, setIsServiceLoading] = useState(false);
+  const [servicesTouched, setServicesTouched] = useState(false);
 
   // 🖼️ Product thumbnails (used in View Details / Edit Order / Packing-like tables)
   const [productThumbsById, setProductThumbsById] = useState<Record<number, string>>({});
@@ -772,6 +791,85 @@ const derivePaymentStatus = (order: any) => {
     const oStatusRaw = order.status ?? '';
     const pStatusRaw = derivePaymentStatus(order);
 
+
+    // 🧩 Products vs Services (POS can create orders with services)
+    const rawItems = Array.isArray(order.items) ? order.items : [];
+    const looksLikeService = (it: any) =>
+      Boolean(
+        it?.service_id ||
+          it?.serviceId ||
+          it?.is_service ||
+          it?.isService ||
+          normalize(it?.item_type) === 'service' ||
+          normalize(it?.type) === 'service'
+      );
+
+    const productItems = rawItems
+      .filter((it: any) => !looksLikeService(it))
+      .map((item: any) => {
+        const unitPrice = parseMoney(item.unit_price);
+        const discountAmount = parseMoney(item.discount_amount);
+        return {
+          id: item.id,
+          productId: item.product_id,
+          imageUrl: pickOrderItemImage(item),
+          name: item.product_name,
+          sku: item.product_sku,
+          quantity: item.quantity,
+          price: unitPrice,
+          discount: discountAmount,
+        };
+      });
+
+    const servicesFromItems = rawItems
+      .filter((it: any) => looksLikeService(it))
+      .map((it: any, i: number) => {
+        const unitPrice = parseMoney(it.unit_price ?? it.price ?? 0);
+        const discountAmount = parseMoney(it.discount_amount ?? it.discount ?? 0);
+        const id = Number(it?.id) || -(Number(order.id || 0) * 10000 + (i + 1));
+        const serviceId = Number(it?.service_id ?? it?.serviceId ?? 0) || undefined;
+
+        return {
+          id,
+          serviceId,
+          name: it?.service_name || it?.product_name || it?.name || '',
+          category: it?.category || it?.service_category || it?.service?.category || undefined,
+          quantity: Number(it?.quantity ?? 1) || 1,
+          price: unitPrice,
+          discount: discountAmount,
+        };
+      });
+
+    const rawServices: any[] =
+      (order.services ??
+        order.service_items ??
+        order.order_services ??
+        order.orderServices ??
+        order.serviceItems ??
+        []) as any[];
+
+    const services =
+      Array.isArray(rawServices) && rawServices.length > 0
+        ? rawServices.map((s: any, i: number) => {
+            const unitPrice = parseMoney(s?.unit_price ?? s?.price ?? s?.base_price ?? 0);
+            const discountAmount = parseMoney(s?.discount_amount ?? s?.discount ?? 0);
+
+            const id =
+              Number(s?.id ?? s?.order_service_id ?? s?.orderServiceId ?? s?.pivot?.id) ||
+              -(Number(order.id || 0) * 10000 + (i + 1));
+            const serviceId = Number(s?.service_id ?? s?.serviceId ?? s?.service?.id ?? 0) || undefined;
+
+            return {
+              id,
+              serviceId,
+              name: s?.service_name || s?.name || s?.service?.name || '',
+              category: s?.category || s?.service_category || s?.service?.category || undefined,
+              quantity: Number(s?.quantity ?? 1) || 1,
+              price: unitPrice,
+              discount: discountAmount,
+            };
+          })
+        : servicesFromItems;
     return {
       id: order.id,
       orderNumber: order.order_number,
@@ -784,21 +882,9 @@ const derivePaymentStatus = (order: any) => {
         email: order.customer_email ?? order.customer?.email ?? '',
         address: order.customer_address != null ? order.customer_address : formatShippingAddress(order.shipping_address),
       },
-      items:
-        order.items?.map((item: any) => {
-          const unitPrice = parseMoney(item.unit_price);
-          const discountAmount = parseMoney(item.discount_amount);
-          return {
-            id: item.id,
-            productId: item.product_id,
-            imageUrl: pickOrderItemImage(item),
-            name: item.product_name,
-            sku: item.product_sku,
-            quantity: item.quantity,
-            price: unitPrice,
-            discount: discountAmount,
-          };
-        }) || [],
+      items: productItems,
+      services,
+
       subtotal: parseMoney(order.subtotal),
       discount: parseMoney(order.discount_amount),
       shipping: parseMoney(order.shipping_amount),
@@ -831,7 +917,9 @@ const derivePaymentStatus = (order: any) => {
   };
 
   const recalcOrderTotals = (order: Order): Order => {
-    const subtotal = order.items.reduce((sum, item) => sum + (item.price - item.discount) * item.quantity, 0);
+    const productsSubtotal = order.items.reduce((sum, item) => sum + (item.price - item.discount) * item.quantity, 0);
+    const servicesSubtotal = (order.services || []).reduce((sum, s) => sum + (s.price - s.discount) * s.quantity, 0);
+    const subtotal = productsSubtotal + servicesSubtotal;
     const discount = order.discount ?? 0;
     const shipping = order.shipping ?? 0;
     const total = subtotal - discount + shipping;
@@ -1291,6 +1379,7 @@ const derivePaymentStatus = (order: any) => {
 
       setSelectedOrder(transformedOrder);
       setEditableOrder(transformedOrder);
+      setServicesTouched(false);
       ensureProductThumbs((fullOrder.items ?? []).map((it: any) => it?.product_id));
       if (fullOrder.store?.id) {
         setPickerStoreId(fullOrder.store.id);
@@ -2311,6 +2400,87 @@ const derivePaymentStatus = (order: any) => {
     setProductResults([]);
   };
 
+
+  // 🛠️ Services in orders (created from POS as separate service lines)
+  const loadServicesOnce = useCallback(async () => {
+    if (availableServices.length > 0) return;
+    setIsServiceLoading(true);
+    try {
+      const list = await serviceManagementService.getActiveServices();
+      setAvailableServices(Array.isArray(list) ? list : []);
+    } catch (e) {
+      console.error('Failed to load services:', e);
+      setAvailableServices([]);
+    } finally {
+      setIsServiceLoading(false);
+    }
+  }, [availableServices.length]);
+
+  useEffect(() => {
+    if (!showServicePicker) return;
+    loadServicesOnce();
+  }, [showServicePicker, loadServicesOnce]);
+
+  useEffect(() => {
+    if (!showServicePicker) return;
+
+    const q = serviceSearch.trim().toLowerCase();
+    const base = Array.isArray(availableServices) ? availableServices : [];
+    const filtered = q
+      ? base.filter((s: any) => String(s?.name || '').toLowerCase().includes(q))
+      : base;
+
+    // Keep list short in UI for performance
+    setServiceResults(filtered.slice(0, 60));
+  }, [serviceSearch, availableServices, showServicePicker]);
+
+  const handleSelectServiceForOrder = (svc: any) => {
+    if (!editableOrder) return;
+
+    const serviceId = Number(svc?.id) || undefined;
+    const name = String(svc?.name || '').trim();
+    const category = svc?.category ? String(svc.category) : undefined;
+    const basePrice = Number(svc?.basePrice ?? svc?.base_price ?? 0) || 0;
+
+    setEditableOrder((prev) => {
+      if (!prev) return prev;
+
+      // If the same service already exists, just increase qty
+      const idx = prev.services.findIndex((x) => x.serviceId && serviceId && Number(x.serviceId) === Number(serviceId));
+      const nextServices = [...prev.services];
+
+      if (idx >= 0) {
+        nextServices[idx] = { ...nextServices[idx], quantity: (nextServices[idx].quantity || 0) + 1 };
+      } else {
+        const fallbackId = -(Number(prev.id || 0) * 10000 + (nextServices.length + 1));
+        nextServices.push({
+          id: fallbackId,
+          serviceId,
+          name,
+          category,
+          quantity: 1,
+          price: basePrice,
+          discount: 0,
+        });
+      }
+
+      return recalcOrderTotals({ ...prev, services: nextServices });
+    });
+
+    setServicesTouched(true);
+    setShowServicePicker(false);
+    setServiceSearch('');
+  };
+
+  const handleRemoveServiceLine = (serviceLineId: number) => {
+    setEditableOrder((prev) => {
+      if (!prev) return prev;
+      const nextServices = prev.services.filter((s) => s.id !== serviceLineId);
+      return recalcOrderTotals({ ...prev, services: nextServices });
+    });
+    setServicesTouched(true);
+  };
+
   const handleRemoveItem = async (itemId: number) => {
     if (!editableOrder) return;
     if (!confirm('Remove this item from the order?')) return;
@@ -2461,6 +2631,20 @@ const derivePaymentStatus = (order: any) => {
         discount_amount: editableOrder.discount ?? 0,
         shipping_amount: editableOrder.shipping ?? 0,
         notes: editableOrder.notes ?? '',
+        ...(servicesTouched
+          ? {
+              services: (editableOrder.services || []).map((s) => ({
+                // Some backends require line id for updates; safe to omit if it's a client-only temp id
+                ...(s.id > 0 ? { id: s.id } : {}),
+                service_id: s.serviceId ?? undefined,
+                service_name: s.name,
+                category: s.category ?? undefined,
+                quantity: s.quantity,
+                unit_price: s.price,
+                discount_amount: s.discount ?? 0,
+              })),
+            }
+          : {}),
       };
 
       const payloadWithShipping =
@@ -3843,6 +4027,69 @@ const derivePaymentStatus = (order: any) => {
                   )}
                 </div>
 
+
+                {selectedOrder.services && selectedOrder.services.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Services</h3>
+                    <div className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[520px]">
+                          <thead className="bg-gray-50 dark:bg-gray-800">
+                            <tr>
+                              <th className="px-4 py-2 text-left text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                Service
+                              </th>
+                              <th className="px-4 py-2 text-center text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                Qty
+                              </th>
+                              <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                Price
+                              </th>
+                              <th className="px-4 py-2 text-right text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                Total
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+                            {selectedOrder.services.map((svc) => (
+                              <tr key={svc.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                                <td className="px-4 py-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-md overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex items-center justify-center flex-shrink-0">
+                                      <Wrench className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                                    </div>
+                                    <div>
+                                      <p className="text-sm font-medium text-black dark:text-white">{svc.name}</p>
+                                      {svc.category && (
+                                        <p className="text-xs text-gray-500 dark:text-gray-500">Category: {titleCase(String(svc.category))}</p>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3 text-center">
+                                  <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-gray-100 dark:bg-gray-800 text-sm font-medium text-black dark:text-white">
+                                    {svc.quantity}
+                                  </span>
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <p className="text-sm text-black dark:text-white">৳{svc.price.toFixed(2)}</p>
+                                  {svc.discount > 0 && <p className="text-xs text-red-500">-৳{svc.discount.toFixed(2)}</p>}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                  <p className="text-sm font-medium text-black dark:text-white">
+                                    ৳{((svc.price - svc.discount) * svc.quantity).toFixed(2)}
+                                  </p>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+
                 <div>
                   <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Summary</h3>
                   <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
@@ -4369,6 +4616,119 @@ const derivePaymentStatus = (order: any) => {
                   </button>
                 </div>
 
+
+                {/* Order Services */}
+                <div>
+                  <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Services</h3>
+
+                  {editableOrder.services && editableOrder.services.length > 0 ? (
+                    <div className="space-y-3">
+                      {editableOrder.services.map((svc, index) => (
+                        <div
+                          key={svc.id}
+                          className="flex items-center gap-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700"
+                        >
+                          <div className="w-12 h-12 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex items-center justify-center">
+                            <Wrench className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                          </div>
+
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-black dark:text-white">{svc.name}</p>
+                            {svc.category ? (
+                              <p className="text-xs text-gray-500 dark:text-gray-500">Category: {titleCase(String(svc.category))}</p>
+                            ) : (
+                              <p className="text-xs text-gray-500 dark:text-gray-500">Service</p>
+                            )}
+                          </div>
+
+                          <div className="w-24">
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Qty</label>
+                            <input
+                              type="number"
+                              value={svc.quantity}
+                              min={1}
+                              onChange={(e) => {
+                                const val = Math.max(1, Number(e.target.value || 1));
+                                setEditableOrder((prev) => {
+                                  if (!prev) return prev;
+                                  const next = [...prev.services];
+                                  next[index] = { ...next[index], quantity: val };
+                                  return recalcOrderTotals({ ...prev, services: next });
+                                });
+                                setServicesTouched(true);
+                              }}
+                              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
+                            />
+                          </div>
+
+                          <div className="w-32">
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Price</label>
+                            <input
+                              type="number"
+                              value={svc.price}
+                              step="0.01"
+                              onChange={(e) => {
+                                const val = Number(e.target.value || 0);
+                                setEditableOrder((prev) => {
+                                  if (!prev) return prev;
+                                  const next = [...prev.services];
+                                  next[index] = { ...next[index], price: val };
+                                  return recalcOrderTotals({ ...prev, services: next });
+                                });
+                                setServicesTouched(true);
+                              }}
+                              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
+                            />
+                          </div>
+
+                          <div className="w-28">
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Discount</label>
+                            <input
+                              type="number"
+                              value={svc.discount}
+                              step="0.01"
+                              onChange={(e) => {
+                                const val = Math.max(0, Number(e.target.value || 0));
+                                setEditableOrder((prev) => {
+                                  if (!prev) return prev;
+                                  const next = [...prev.services];
+                                  next[index] = { ...next[index], discount: val };
+                                  return recalcOrderTotals({ ...prev, services: next });
+                                });
+                                setServicesTouched(true);
+                              }}
+                              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-1 items-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveServiceLine(svc.id)}
+                              className="text-xs text-red-600 hover:text-red-700 font-medium"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No services in this order</p>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowServicePicker(true);
+                      setServiceSearch('');
+                    }}
+                    className="mt-3 inline-flex items-center px-3 py-2 text-xs font-medium rounded-lg border border-dashed border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    + Add Service
+                  </button>
+                </div>
+
                 {/* Totals */}
                 <div>
                   <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Details</h3>
@@ -4513,6 +4873,78 @@ const derivePaymentStatus = (order: any) => {
                             )}
                             <p className="text-[11px] text-gray-600 dark:text-gray-400">Price: {product.price} Tk</p>
                             <p className="text-[11px] text-green-600 dark:text-green-400">Available: {product.available}</p>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
+      {/* Service Picker Modal */}
+      {showServicePicker && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[75] p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden border border-gray-200 dark:border-gray-800">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+              <h3 className="text-sm font-semibold text-black dark:text-white">Add Service to Order</h3>
+              <button
+                onClick={() => {
+                  setShowServicePicker(false);
+                  setServiceSearch('');
+                }}
+                className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                <X className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <input
+                  type="text"
+                  value={serviceSearch}
+                  onChange={(e) => setServiceSearch(e.target.value)}
+                  placeholder="Search services..."
+                  className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-800 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                />
+              </div>
+
+              <div className="border border-gray-200 dark:border-gray-800 rounded-lg max-h-72 overflow-auto p-2">
+                {isServiceLoading ? (
+                  <div className="p-6 text-center">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">Loading services...</p>
+                  </div>
+                ) : serviceResults.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-gray-500 dark:text-gray-400">
+                    {availableServices.length === 0 ? 'No services found' : 'No matching services'}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {serviceResults.map((svc: any) => (
+                      <button
+                        type="button"
+                        key={String(svc?.id)}
+                        onClick={() => handleSelectServiceForOrder(svc)}
+                        className="border border-gray-200 dark:border-gray-600 rounded p-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="w-10 h-10 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex items-center justify-center flex-shrink-0">
+                            <Wrench className="w-4 h-4 text-gray-600 dark:text-gray-300" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-semibold text-black dark:text-white truncate">{svc?.name}</p>
+                            <p className="text-[11px] text-gray-600 dark:text-gray-400 truncate">
+                              {svc?.category ? `Category: ${titleCase(String(svc.category))}` : 'Service'}
+                            </p>
+                            <p className="text-[11px] text-gray-700 dark:text-gray-300">
+                              Base price: ৳{Number(svc?.basePrice ?? svc?.base_price ?? 0) || 0}
+                            </p>
                           </div>
                         </div>
                       </button>
