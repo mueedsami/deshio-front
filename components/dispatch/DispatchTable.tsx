@@ -12,7 +12,6 @@ interface DispatchTableProps {
   onCancel: (id: number) => void;
   onScanBarcodes?: (dispatch: ProductDispatch, mode: 'send' | 'receive') => void;
   currentStoreId?: number;
-  getDraftScanCount?: (dispatchId: number) => number;
 }
 
 const DispatchTable: React.FC<DispatchTableProps> = ({
@@ -25,7 +24,6 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
   onCancel,
   onScanBarcodes,
   currentStoreId,
-  getDraftScanCount,
 }) => {
   const getStatusBadge = (status: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
@@ -153,7 +151,6 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
               dispatches.map((dispatch) => {
                 const atDestination = isDestinationStore(dispatch);
                 const atSource = isSourceStore(dispatch);
-                const draftScanCount = getDraftScanCount ? getDraftScanCount(dispatch.id) : 0;
                 
                 return (
                   <tr
@@ -167,11 +164,6 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                       {dispatch.tracking_number && (
                         <div className="text-xs text-gray-500 dark:text-gray-400">
                           Track: {dispatch.tracking_number}
-                        </div>
-                      )}
-                      {draftScanCount > 0 && dispatch.status !== 'delivered' && dispatch.status !== 'cancelled' && (
-                        <div className="text-xs text-indigo-600 dark:text-indigo-400 font-medium mt-1">
-                          🧾 Draft scans: {draftScanCount}
                         </div>
                       )}
                       {dispatch.status === 'in_transit' && currentStoreId && atDestination && (
@@ -267,12 +259,12 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                           </>
                         )}
 
-                        {/* BARCODE SCANNING IN TRANSIT */}
-                        {dispatch.status === 'in_transit' && onScanBarcodes && atSource && (
+                        {/* BARCODE SCANNING (SOURCE STORE) */}
+                        {onScanBarcodes && atSource && ['pending', 'pending_approval', 'approved'].includes(dispatch.status) && (
                           <button
                             onClick={() => onScanBarcodes(dispatch, 'send')}
                             className="px-3 py-1 bg-indigo-100 dark:bg-indigo-900/30 hover:bg-indigo-200 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 rounded text-xs font-medium flex items-center gap-1 transition-colors"
-                            title="Scan barcodes at source (sending)"
+                            title="Scan barcodes at source before sending"
                           >
                             <Scan className="w-3 h-3" />
                             Scan to Send
