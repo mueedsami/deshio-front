@@ -806,9 +806,6 @@ export default function SocialCommercePage() {
 
           results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
           setSearchResults(results);
-        } else {
-          throw new Error('API search unsuccessful');
-        }
       } catch (error: any) {
         console.warn('❌ API search failed, using local search');
         const localResults = await performLocalSearch(searchQuery);
