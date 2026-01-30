@@ -1230,19 +1230,12 @@ export default function POSPage() {
 
       console.log('✅ Batches grouped for', batchesByProduct.size, 'products');
 
-      // ✅ Fetch all products
-      const result = await productService.getAll({
-        is_archived: false,
-        per_page: 1000,
-      });
+      // ✅ Fetch all products (page through backend caps)
+      const productsList: Product[] = await productService.getAllAll(
+        { is_archived: false },
+        { max_items: 200000 }
+      );
 
-      let productsList: Product[] = [];
-
-      if (Array.isArray(result)) {
-        productsList = result;
-      } else if (result?.data) {
-        productsList = Array.isArray(result.data) ? result.data : result.data.data || [];
-      }
 
       console.log('✅ Fetched', productsList.length, 'products');
 

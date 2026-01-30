@@ -330,13 +330,16 @@ export default function PurchaseOrdersPage() {
     const t = setTimeout(async () => {
       try {
         setEditProductSearching(true);
-        const res = await productService.getAll({
-          per_page: 15,
-          search: q,
+        const res = await productService.advancedSearch({
+          query: q,
           vendor_id: editPO.vendor_id,
           is_archived: false,
+          enable_fuzzy: true,
+          fuzzy_threshold: 60,
+          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+          per_page: 15,
         });
-        if (!cancelled) setEditProductResults(Array.isArray(res?.data) ? res.data : []);
+        if (!cancelled) setEditProductResults(Array.isArray(res?.items) ? res.items : []);
       } catch {
         if (!cancelled) setEditProductResults([]);
       } finally {

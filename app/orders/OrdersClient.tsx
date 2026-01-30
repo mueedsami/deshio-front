@@ -2344,57 +2344,54 @@ const derivePaymentStatus = (order: any) => {
 
     setIsProductLoading(true);
     try {
-      const response = await axios.post('/products/advanced-search', {
-        query,
-        is_archived: false,
-        enable_fuzzy: true,
-        fuzzy_threshold: 60,
-        search_fields: ['name', 'sku', 'description', 'category'],
-        per_page: 50,
-      });
+      const products = await productService.advancedSearchAll(
+        {
+          query,
+          is_archived: false,
+          enable_fuzzy: true,
+          fuzzy_threshold: 60,
+          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+          per_page: 50,
+        },
+        { max_items: 5000 }
+      );
 
       const results: any[] = [];
 
-      if (response.data?.success) {
-        const products = response.data.data?.items || response.data.data?.data?.items || response.data.data || [];
+      for (const prod of products) {
+        const imgPath =
+          prod?.images?.[0]?.image_url ||
+          prod?.images?.[0]?.image_path ||
+          (prod as any)?.image_url ||
+          (prod as any)?.image_path ||
+          (prod as any)?.thumbnail;
+        const imageUrl = toPublicImageUrl(imgPath);
 
-        for (const prod of products) {
-          const imgPath =
-            prod?.images?.[0]?.image_url ||
-            prod?.images?.[0]?.image_path ||
-            prod?.image_url ||
-            prod?.image_path ||
-            prod?.thumbnail;
-          const imageUrl = toPublicImageUrl(imgPath);
+        const productBatches = pickerBatches.filter((batch: any) => {
+          const batchProductId = batch.product?.id || batch.product_id;
+          return batchProductId === prod.id && batch.quantity > 0;
+        });
 
-          const productBatches = pickerBatches.filter((batch: any) => {
-            const batchProductId = batch.product?.id || batch.product_id;
-            return batchProductId === prod.id && batch.quantity > 0;
-          });
-
-          if (productBatches.length > 0) {
-            for (const batch of productBatches) {
-              results.push({
-                id: prod.id,
-                name: prod.name,
-                sku: prod.sku,
-                imageUrl,
-                batchId: batch.id,
-                batchNumber: batch.batch_number,
-                price: parseMoney(batch.sell_price),
-                available: batch.quantity,
-                relevance_score: prod.relevance_score || 0,
-                search_stage: prod.search_stage || 'api',
-              });
-            }
+        if (productBatches.length > 0) {
+          for (const batch of productBatches) {
+            results.push({
+              id: prod.id,
+              name: prod.name,
+              sku: prod.sku,
+              imageUrl,
+              batchId: batch.id,
+              batchNumber: batch.batch_number,
+              price: parseMoney(batch.sell_price),
+              available: batch.quantity,
+              relevance_score: (prod as any).relevance_score || 0,
+              search_stage: (prod as any).search_stage || 'api',
+            });
           }
         }
-
-        results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-        setProductResults(results);
-      } else {
-        setProductResults([]);
       }
+
+      results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+      setProductResults(results);
     } catch (err) {
       console.error('Product search failed', err);
       setProductResults([]);

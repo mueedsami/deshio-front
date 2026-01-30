@@ -71,13 +71,20 @@ export default function BatchPriceUpdatePage() {
       try {
         setIsSearching(true);
 
-        const res = await productService.getAll({
-          search: q,
-          per_page: 10,
-        });
+        // ✅ Fast autocomplete first
+        const quick = await productService.quickSearch(q, 10);
 
-        // productService already normalizes to array
-        const list = (res?.data || []) as FullProduct[];
+        // Fallback to advanced search (better multi-language + fuzzy) if quick is empty
+        const list = (Array.isArray(quick) && quick.length > 0)
+          ? (quick as FullProduct[])
+          : ((await productService.advancedSearch({
+              query: q,
+              is_archived: false,
+              enable_fuzzy: true,
+              fuzzy_threshold: 60,
+              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+              per_page: 10,
+            })).items as FullProduct[]);
         const mapped: ProductPick[] = list.map((p) => ({
           id: p.id,
           name: p.name,
@@ -149,9 +156,19 @@ export default function BatchPriceUpdatePage() {
       }
 
       try {
-        const res = await productService.getAll({ search: sku, per_page: 200 });
-        const list = (res?.data || []) as FullProduct[];
-        const exact = list
+        const list = await productService.advancedSearchAll(
+        {
+          query: sku,
+          is_archived: false,
+          enable_fuzzy: false,
+          fuzzy_threshold: 100,
+          search_fields: ['sku'],
+          per_page: 200,
+        },
+        { max_items: 2000 }
+      );
+        const list2 = (list || []) as FullProduct[];
+        const exact = list2
           .filter((p) => String(p.sku || '').trim() === sku)
           .map((p) => ({ id: p.id, name: p.name, sku: p.sku } as ProductPick));
 

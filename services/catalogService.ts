@@ -221,6 +221,47 @@ class CatalogService {
     }
   }
 
+
+  /**
+   * ✅ GET ALL PRODUCTS (pages through /catalog/products)
+   * Fixes environments where backend caps per_page and clients complain “not all products are shown”.
+   */
+  async getProductsAll(
+    params: GetProductsParams = {},
+    opts?: { max_items?: number; max_pages?: number }
+  ): Promise<Product[]> {
+    const per_page = Math.min(Math.max(Number(params.per_page ?? 200), 1), 200);
+    const max_items = Number(opts?.max_items ?? 50000);
+    const max_pages = Number(opts?.max_pages ?? 500);
+
+    const out: Product[] = [];
+    let page = 1;
+
+    while (page <= max_pages && out.length < max_items) {
+      const data = await this.getProducts({ ...params, page, per_page });
+
+      const list = Array.isArray(data.products) ? data.products : [];
+      out.push(...list);
+
+      const last = Number(data.pagination?.last_page ?? 1);
+      const total = Number(data.pagination?.total ?? out.length);
+
+      if (page >= last) break;
+      if (out.length >= total) break;
+
+      page += 1;
+    }
+
+    // de-dup by id
+    const seen = new Set<number>();
+    return out.filter((p) => {
+      if (!p?.id) return false;
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  }
+
   /**
    * GET SINGLE PRODUCT (by ID)
    */

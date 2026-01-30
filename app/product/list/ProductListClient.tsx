@@ -35,6 +35,8 @@ export default function ProductPage() {
   const [vendorsById, setVendorsById] = useState<Record<number, string>>({});
   const [catalogMetaById, setCatalogMetaById] = useState<Record<number, { selling_price: number | null; in_stock: boolean; stock_quantity: number }>>({});
   const [searchQuery, setSearchQuery] = useState('');
+  const [serverSearchIds, setServerSearchIds] = useState<number[] | null>(null);
+  const [serverSearchLoading, setServerSearchLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -100,17 +102,57 @@ const goToPage = useCallback(
     fetchData();
   }, []);
 
+  // ✅ Backend-powered multi-language search (Bangla/Roman/English + fuzzy)
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || q.length < 2) {
+      setServerSearchIds(null);
+      return;
+    }
+
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        setServerSearchLoading(true);
+        const hits = await productService.advancedSearchAll(
+          {
+            query: q,
+            is_archived: false,
+            enable_fuzzy: true,
+            fuzzy_threshold: 60,
+            search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+            per_page: 50,
+          },
+          { max_items: 12000 }
+        );
+        if (!cancelled) {
+          setServerSearchIds(Array.isArray(hits) && hits.length > 0 ? hits.map((h: any) => h.id) : null);
+        }
+      } catch (e) {
+        console.warn('Server search failed, falling back to local filter', e);
+        if (!cancelled) setServerSearchIds(null);
+      } finally {
+        if (!cancelled) setServerSearchLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [searchQuery]);
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
       const [productsData, categoriesData, vendorsData] = await Promise.all([
-        productService.getAll({ per_page: 10000 }),
+        productService.getAllAll({ is_archived: false }, { max_items: 200000 }),
         // Only count/show active categories in product list stats & filters
         categoryService.getTree(true),
         vendorService.getAll(),
       ]);
 
-      setProducts(Array.isArray(productsData.data) ? productsData.data : []);
+      setProducts(Array.isArray(productsData) ? productsData : []);
       setCategories(Array.isArray(categoriesData) ? categoriesData : []);
       const vendorsArr: Vendor[] = Array.isArray(vendorsData) ? vendorsData : [];
       const vmap: Record<number, string> = {};
@@ -375,20 +417,27 @@ const goToPage = useCallback(
     // Search filter
     const q = searchQuery.toLowerCase().trim();
     if (q) {
-      filtered = filtered.filter((group) => {
-        const nameMatch = group.baseName.toLowerCase().includes(q);
-        const skuMatch = group.sku.toLowerCase().includes(q);
-        const categoryMatch = group.categoryPath.toLowerCase().includes(q);
-        const vendorMatch = (group.vendorName || '').toLowerCase().includes(q);
-        const colorMatch = group.variants.some((v) => v.color?.toLowerCase().includes(q));
-        const sizeMatch = group.variants.some((v) => v.size?.toLowerCase().includes(q));
+      // If backend search has returned IDs, prefer it (fixes roman->Bangla mismatch).
+      if (Array.isArray(serverSearchIds)) {
+        const idSet = new Set(serverSearchIds);
+        filtered = filtered.filter((group) => group.variants.some((v) => idSet.has(v.id)));
+      } else {
+        // Fallback: local string filter
+        filtered = filtered.filter((group) => {
+          const nameMatch = group.baseName.toLowerCase().includes(q);
+          const skuMatch = group.sku.toLowerCase().includes(q);
+          const categoryMatch = group.categoryPath.toLowerCase().includes(q);
+          const vendorMatch = (group.vendorName || '').toLowerCase().includes(q);
+          const colorMatch = group.variants.some((v) => v.color?.toLowerCase().includes(q));
+          const sizeMatch = group.variants.some((v) => v.size?.toLowerCase().includes(q));
 
-        return nameMatch || skuMatch || categoryMatch || vendorMatch || colorMatch || sizeMatch;
-      });
+          return nameMatch || skuMatch || categoryMatch || vendorMatch || colorMatch || sizeMatch;
+        });
+      }
     }
 
     return filtered;
-  }, [productGroups, searchQuery, selectedCategory, selectedVendor]);
+  }, [productGroups, searchQuery, selectedCategory, selectedVendor, serverSearchIds]);
 
   const priceFilterActive = Boolean(minPrice || maxPrice);
 

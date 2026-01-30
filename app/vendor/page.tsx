@@ -662,10 +662,8 @@ export default function VendorPaymentPage() {
   // Load products
   const loadProducts = async () => {
     try {
-      const response = await productService.getAll({
-        per_page: 1000,
-      });
-      setProducts(Array.isArray((response as any).data) ? (response as any).data : []);
+      const productsData = await productService.getAllAll({ is_archived: false }, { max_items: 200000 });
+      setProducts(Array.isArray(productsData) ? productsData : []);
     } catch (error: any) {
       console.error('Failed to load products:', error);
       setProducts([]);

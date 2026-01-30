@@ -250,7 +250,8 @@ export default function AddEditProductPage({
         .map(cf => ({
           fieldId: cf.field_id,
           fieldName: cf.field_title,
-          fieldType: cf.field_type,
+          // Backend can omit field_type in some cases; keep our FieldValue strict by falling back.
+          fieldType: (cf.field_type as any) || 'text',
           value: cf.value,
           instanceId: `field-${cf.field_id}-${Date.now()}`,
         }));
@@ -268,7 +269,7 @@ export default function AddEditProductPage({
           enhancedFields.unshift({
             fieldId: sizeDef.id,
             fieldName: sizeDef.title,
-            fieldType: sizeDef.type,
+            fieldType: (sizeDef.type as any) || 'text',
             value: '',
             instanceId: `field-${sizeDef.id}-${Date.now()}-auto`,
           });
@@ -283,7 +284,7 @@ export default function AddEditProductPage({
           enhancedFields.unshift({
             fieldId: colorDef.id,
             fieldName: colorDef.title,
-            fieldType: colorDef.type,
+            fieldType: (colorDef.type as any) || 'text',
             value: '',
             instanceId: `field-${colorDef.id}-${Date.now()}-auto`,
           });
@@ -378,8 +379,18 @@ export default function AddEditProductPage({
     try {
       setSkuGroupLoading(true);
       // Backend doesn't have a dedicated "sku" filter in this front; we use search then exact-filter client-side.
-      const result = await productService.getAll({ per_page: 10000, search: cleanedSku });
-      const exact = (result.data || []).filter(p => String(p.sku || '').trim() === cleanedSku);
+      const result = await productService.advancedSearchAll(
+        {
+          query: cleanedSku,
+          is_archived: false,
+          enable_fuzzy: false,
+          fuzzy_threshold: 100,
+          search_fields: ['sku'],
+          per_page: 200,
+        },
+        { max_items: 5000 }
+      );
+      const exact = (result || []).filter(p => String(p.sku || '').trim() === cleanedSku);
 
       // Sort by color then size (for nicer display)
       exact.sort((a, b) => {
@@ -586,11 +597,12 @@ export default function AddEditProductPage({
 
   const addField = (field: Field) => {
     const instanceId = `field-${field.id}-${Date.now()}-${Math.random()}`;
+    const safeType = (field.type as any) || 'text';
     const newFieldValue: FieldValue = {
       fieldId: field.id,
       fieldName: field.title,
-      fieldType: field.type,
-      value: field.type === 'file' ? [] : '',
+      fieldType: safeType,
+      value: safeType === 'file' ? [] : '',
       instanceId,
     };
     setSelectedFields([...selectedFields, newFieldValue]);

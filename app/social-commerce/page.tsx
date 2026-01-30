@@ -12,6 +12,7 @@ import storeService from '@/services/storeService';
 import productImageService from '@/services/productImageService';
 import batchService from '@/services/batchService';
 import defectIntegrationService from '@/services/defectIntegrationService';
+import productService from '@/services/productService';
 
 interface DefectItem {
   id: string;
@@ -231,20 +232,9 @@ export default function SocialCommercePage() {
 
   const fetchProducts = async () => {
     try {
-      const response = await axios.get('/products', { params: { per_page: 1000 } });
-      let productsData: any[] = [];
-
-      if (response.data?.success && response.data?.data) {
-        productsData = Array.isArray(response.data.data)
-          ? response.data.data
-          : Array.isArray(response.data.data.data)
-          ? response.data.data.data
-          : [];
-      } else if (Array.isArray(response.data)) {
-        productsData = response.data;
-      }
-
-      setAllProducts(productsData);
+      // ✅ Load ALL products by paging (backend often caps per_page)
+      const productsData = await productService.getAllAll({ is_archived: false }, { max_items: 200000 });
+      setAllProducts(Array.isArray(productsData) ? productsData : []);
     } catch (error) {
       console.error('Error fetching products:', error);
       setAllProducts([]);
@@ -749,31 +739,24 @@ export default function SocialCommercePage() {
           return;
         }
 
-        const response = await axios.post('/products/advanced-search', {
+        const products = await productService.advancedSearchAll({
           query: searchQuery,
           is_archived: false,
           enable_fuzzy: true,
           fuzzy_threshold: 60,
-          search_fields: ['name', 'sku', 'description', 'category'],
+          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
           per_page: 50,
-        });
+        }, { max_items: 8000 });
 
-        if (response.data?.success) {
-          const products =
-            response.data.data?.items ||
-            response.data.data?.data?.items ||
-            response.data.data ||
-            [];
+        // Some backends return an empty list for very short queries (e.g. 1–2 letters)
+        // In that case, fall back to local search so the UI still works.
+        if (!Array.isArray(products) || products.length === 0) {
+          const localResults = await performLocalSearch(searchQuery);
+          setSearchResults(localResults);
+          return;
+        }
 
-          // Some backends return an empty list for very short queries (e.g. 1–2 letters)
-          // In that case, fall back to local search so the UI still works.
-          if (!Array.isArray(products) || products.length === 0) {
-            const localResults = await performLocalSearch(searchQuery);
-            setSearchResults(localResults);
-            return;
-          }
-
-          const results: any[] = [];
+        const results: any[] = [];
 
           // ✅ OPTIMIZED: Get unique product IDs first to avoid duplicate image fetches
           const uniqueProductIds = [...new Set(products.map((p: any) => p.id))];

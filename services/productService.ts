@@ -27,18 +27,21 @@ export interface Product {
 export interface CustomField {
   field_id: number;
   field_title: string;
-  field_type: string;
+  field_type?: string;
   value: any;
-  raw_value: string;
+  raw_value?: string;
 }
 
 export interface ProductImage {
   id: number;
   product_id: number;
-  image_path: string;
-  is_primary: boolean;
-  is_active: boolean;
-  sort_order: number;
+  image_path?: string;
+  image_url?: string;
+  url?: string;
+  is_primary?: boolean;
+  is_active?: boolean;
+  sort_order?: number;
+  display_order?: number;
 }
 
 export interface Field {
@@ -66,27 +69,132 @@ export interface CreateProductData {
 
 export interface CreateProductWithVariantsData extends CreateProductData {
   use_variants: boolean;
-  variant_attributes?: Record<string, string[]>; // e.g., { Color: ["Red", "Blue"], Size: ["S", "M"] }
+  variant_attributes?: Record<string, string[]>;
   base_price_adjustment?: number;
 }
 
-// Helper to normalize API response
+export type SearchField = 'name' | 'sku' | 'description' | 'category' | 'custom_fields';
+
+export interface ProductSearchHit extends Product {
+  search_stage?: string;
+  base_score?: number;
+  relevance_score?: number;
+}
+
+export interface AdvancedSearchParams {
+  query: string;
+  category_id?: number;
+  vendor_id?: number;
+  is_archived?: boolean;
+  enable_fuzzy?: boolean;
+  fuzzy_threshold?: number; // 50-100
+  search_fields?: SearchField[];
+  per_page?: number;
+  page?: number;
+}
+
+export interface AdvancedSearchResponse {
+  success: boolean;
+  query: string;
+  search_terms: string[];
+  total_results: number;
+  items: ProductSearchHit[];
+  pagination: {
+    total: number;
+    per_page: number;
+    current_page: number;
+    last_page: number;
+    from?: number;
+    to?: number;
+  } | null;
+  raw: any;
+}
+
+// ---------- helpers ----------
+function normalizeCategory(raw: any): { id: number; title: string } | undefined {
+  if (!raw) return undefined;
+  const id = raw.id;
+  if (typeof id !== 'number') return undefined;
+  const title = String(raw.title ?? raw.name ?? raw.full_path ?? '').trim();
+  return { id, title: title || 'Uncategorized' };
+}
+
+function normalizeVendor(raw: any): { id: number; name: string } | undefined {
+  if (!raw) return undefined;
+  const id = raw.id;
+  if (typeof id !== 'number') return undefined;
+  const name = String(raw.name ?? raw.title ?? '').trim();
+  return { id, name: name || 'Vendor' };
+}
+
+// Normalize API response into our Product interface
 function transformProduct(product: any): Product {
   return {
-    id: product.id,
-    name: product.name,
-    sku: product.sku,
-    description: product.description,
-    category_id: product.category_id,
-    vendor_id: product.vendor_id,
-    is_archived: product.is_archived,
-    custom_fields: product.custom_fields,
-    images: product.images,
-    variants: product.variants,
-    category: product.category,
-    vendor: product.vendor,
-    created_at: product.created_at,
-    updated_at: product.updated_at,
+    id: Number(product.id),
+    name: String(product.name ?? ''),
+    sku: String(product.sku ?? ''),
+    description: product.description ?? undefined,
+    category_id: Number(product.category_id ?? (product.category?.id ?? 0)),
+    vendor_id: Number(product.vendor_id ?? (product.vendor?.id ?? 0)),
+    is_archived: Boolean(product.is_archived),
+    custom_fields: Array.isArray(product.custom_fields) ? product.custom_fields : undefined,
+    images: Array.isArray(product.images) ? product.images : undefined,
+    variants: Array.isArray(product.variants) ? product.variants : undefined,
+    category: normalizeCategory(product.category),
+    vendor: normalizeVendor(product.vendor),
+    created_at: String(product.created_at ?? ''),
+    updated_at: String(product.updated_at ?? ''),
+  };
+}
+
+function extractItemsFromAdvancedSearch(result: any): any[] {
+  const root = result?.data ?? result ?? {};
+  // Common shapes:
+  // - { success, data: { items: [...], pagination: {...} } }
+  // - { success, data: { data: { items: [...] } } }
+  // - { success, data: [...] }
+  // - { success, data: { items: [...] } }
+  const dataRoot = root?.data ?? root;
+
+  const candidates = [
+    dataRoot?.items,
+    dataRoot?.data?.items,
+    dataRoot?.data?.data?.items,
+    dataRoot?.data,
+    dataRoot?.data?.data,
+    dataRoot,
+  ];
+
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+
+function extractPaginationFromAdvancedSearch(result: any): AdvancedSearchResponse['pagination'] {
+  const root = result?.data ?? result ?? {};
+  const dataRoot = root?.data ?? root;
+
+  const pg =
+    dataRoot?.pagination ??
+    dataRoot?.data?.pagination ??
+    dataRoot?.data?.data?.pagination ??
+    null;
+
+  if (!pg) return null;
+
+  const total = Number(pg.total ?? pg?.pagination?.total ?? 0);
+  const per_page = Number(pg.per_page ?? pg.limit ?? 0);
+  const current_page = Number(pg.current_page ?? pg.page ?? 1);
+  const last_page = Number(pg.last_page ?? pg.total_pages ?? 1);
+
+  return {
+    total: Number.isFinite(total) ? total : 0,
+    per_page: Number.isFinite(per_page) ? per_page : 0,
+    current_page: Number.isFinite(current_page) ? current_page : 1,
+    last_page: Number.isFinite(last_page) ? last_page : 1,
+    from: pg.from ?? undefined,
+    to: pg.to ?? undefined,
   };
 }
 
@@ -131,7 +239,7 @@ export const productService = {
           data: products,
           total: pagination.total ?? products.length,
           current_page: pagination.current_page ?? 1,
-          last_page: pagination.total_pages ?? 1,
+          last_page: pagination.total_pages ?? pagination.last_page ?? 1,
         };
       }
 
@@ -145,6 +253,184 @@ export const productService = {
     } catch (error: any) {
       console.error('Get products error:', error);
       return { data: [], total: 0, current_page: 1, last_page: 1 };
+    }
+  },
+
+  /**
+   * Get ALL products by paging through /products.
+   * Fixes environments where backend caps per_page (common cause of “missing products”).
+   */
+  async getAllAll(
+    params?: {
+      category_id?: number;
+      vendor_id?: number;
+      is_archived?: boolean;
+      search?: string;
+      per_page?: number;
+    },
+    opts?: { max_items?: number; max_pages?: number }
+  ): Promise<Product[]> {
+    const per_page = Math.min(Math.max(Number(params?.per_page ?? 200), 1), 200);
+    const max_items = Number(opts?.max_items ?? 100000);
+    const max_pages = Number(opts?.max_pages ?? 500);
+
+    const out: Product[] = [];
+    let page = 1;
+
+    while (page <= max_pages && out.length < max_items) {
+      const res = await this.getAll({ ...(params ?? {}), page, per_page });
+      out.push(...(res.data ?? []));
+
+      const last = Number(res.last_page ?? 1);
+      const total = Number(res.total ?? out.length);
+
+      if (page >= last) break;
+      if (out.length >= total) break;
+
+      page += 1;
+    }
+
+    // De-dup by id (defensive)
+    const seen = new Set<number>();
+    return out.filter((p) => {
+      if (!p?.id) return false;
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  },
+
+  /** Advanced multi-language search (Bangla + Roman + English + fuzzy) */
+  async advancedSearch(params: AdvancedSearchParams): Promise<AdvancedSearchResponse> {
+    const payload: any = {
+      query: params.query,
+      category_id: params.category_id,
+      vendor_id: params.vendor_id,
+      is_archived: params.is_archived ?? false,
+      enable_fuzzy: params.enable_fuzzy ?? true,
+      fuzzy_threshold: params.fuzzy_threshold ?? 60,
+      search_fields: params.search_fields ?? ['name', 'sku', 'description', 'category', 'custom_fields'],
+      per_page: params.per_page ?? 50,
+      page: params.page ?? 1,
+    };
+
+    try {
+      const response = await axiosInstance.post('/products/advanced-search', payload, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const result = response.data ?? {};
+      const itemsRaw = extractItemsFromAdvancedSearch(result);
+      const items: ProductSearchHit[] = itemsRaw.map((p: any) => ({
+        ...transformProduct(p),
+        search_stage: p.search_stage ?? p.searchStage ?? undefined,
+        base_score: p.base_score ?? undefined,
+        relevance_score: p.relevance_score ?? p.relevanceScore ?? undefined,
+      }));
+
+      const search_terms: string[] =
+        (result.search_terms || result.data?.search_terms || result.data?.data?.search_terms || []) ?? [];
+
+      const total_results =
+        Number(result.total_results ?? result.data?.total_results ?? result.data?.data?.total_results ?? items.length);
+
+      const pagination = extractPaginationFromAdvancedSearch(result);
+
+      return {
+        success: Boolean(result.success ?? true),
+        query: String(result.query ?? params.query),
+        search_terms: Array.isArray(search_terms) ? search_terms : [],
+        total_results: Number.isFinite(total_results) ? total_results : items.length,
+        items,
+        pagination,
+        raw: result,
+      };
+    } catch (error: any) {
+      console.error('Advanced search error:', error);
+      return {
+        success: false,
+        query: params.query,
+        search_terms: [params.query],
+        total_results: 0,
+        items: [],
+        pagination: null,
+        raw: error?.response?.data ?? null,
+      };
+    }
+  },
+
+  /**
+   * Advanced search but return more complete coverage by paging.
+   * Use max_items to cap the returned list for UI safety.
+   */
+  async advancedSearchAll(
+    params: Omit<AdvancedSearchParams, 'page' | 'per_page'> & { per_page?: number },
+    opts?: { max_items?: number; max_pages?: number }
+  ): Promise<ProductSearchHit[]> {
+    const per_page = Math.min(Math.max(Number(params.per_page ?? 200), 1), 200);
+    const max_items = Number(opts?.max_items ?? 2000);
+    const max_pages = Number(opts?.max_pages ?? 50);
+
+    const out: ProductSearchHit[] = [];
+    let page = 1;
+
+    while (page <= max_pages && out.length < max_items) {
+      const res = await this.advancedSearch({ ...(params as any), page, per_page });
+      out.push(...(res.items ?? []));
+
+      const last = Number(res.pagination?.last_page ?? 1);
+      const total = Number(res.pagination?.total ?? res.total_results ?? out.length);
+
+      if (page >= last) break;
+      if (out.length >= total) break;
+
+      page += 1;
+    }
+
+    // de-dup by id
+    const seen = new Set<number>();
+    return out.filter((p) => {
+      if (!p?.id) return false;
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  },
+
+  /** Quick Search (autocomplete) */
+  async quickSearch(q: string, limit = 10): Promise<ProductSearchHit[]> {
+    try {
+      const response = await axiosInstance.get('/products/quick-search', { params: { q, limit } });
+      const result = response.data;
+      const list = Array.isArray(result?.data) ? result.data : Array.isArray(result?.data?.data) ? result.data.data : [];
+      return list.map((p: any) => ({ ...transformProduct(p) }));
+    } catch (error) {
+      console.error('Quick search error:', error);
+      return [];
+    }
+  },
+
+  /** Search Suggestions */
+  async searchSuggestions(q: string, limit = 5): Promise<any[]> {
+    try {
+      const response = await axiosInstance.get('/products/search-suggestions', { params: { q, limit } });
+      const result = response.data;
+      return Array.isArray(result?.data) ? result.data : [];
+    } catch (error) {
+      console.error('Search suggestions error:', error);
+      return [];
+    }
+  },
+
+  /** Search Statistics */
+  async getSearchStats(): Promise<any> {
+    try {
+      const response = await axiosInstance.get('/products/search-stats');
+      const result = response.data;
+      return result?.data ?? {};
+    } catch (error) {
+      console.error('Search stats error:', error);
+      return {};
     }
   },
 
@@ -328,7 +614,7 @@ export const productService = {
     try {
       const response = await axiosInstance.get('/products/search-by-field', { params });
       const result = response.data;
-      
+
       if (result.success) {
         const products = (result.data.data || result.data || []).map(transformProduct);
         return {
