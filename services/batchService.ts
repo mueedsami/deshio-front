@@ -20,6 +20,9 @@ export interface Barcode {
 export interface Batch {
   id: number;
   batch_number: string;
+  /** Some APIs also include raw FK columns */
+  product_id?: number;
+  store_id?: number;
   product: Product;
   store: Store;
   quantity: number;
@@ -84,6 +87,15 @@ export interface BatchFilters {
   page?: number;
 }
 
+export interface ListAllOptions {
+  /** Safety cap to avoid loading too much into memory */
+  max_items?: number;
+  /** Override per_page (backend may still cap). Defaults to 200 */
+  per_page?: number;
+  /** Optional safety cap on number of pages to fetch */
+  max_pages?: number;
+}
+
 // Laravel Paginated Response Structure
 export interface PaginatedResponse<T> {
   success: boolean;
@@ -127,6 +139,36 @@ export interface BulkBatchPriceUpdateData {
 }
 
 class BatchService {
+  /**
+   * Fetch ALL batches by paging through the backend.
+   * Many environments cap per_page (often 20/50/100), so relying on a single request
+   * can silently hide batches.
+   */
+  async getBatchesAll(filters?: BatchFilters, opts?: ListAllOptions): Promise<Batch[]> {
+    const out: Batch[] = [];
+
+    const requestedPerPage = opts?.per_page ?? filters?.per_page ?? 200;
+    // Keep it reasonable; backend may still cap.
+    const per_page = Math.max(1, Math.min(200, Number(requestedPerPage) || 200));
+    const max_items = opts?.max_items ?? 200000;
+    const max_pages = opts?.max_pages ?? 5000;
+
+    let page = 1;
+    while (page <= max_pages && out.length < max_items) {
+      const resp = await this.getBatches({ ...(filters || {}), per_page, page });
+      const items = resp?.data?.data ?? [];
+      out.push(...items);
+
+      const lastPage = Number(resp?.data?.last_page || page);
+      if (page >= lastPage) break;
+      if (!items.length) break; // safety: stop if backend returns empty page
+
+      page += 1;
+    }
+
+    return out.slice(0, max_items);
+  }
+
   /**
    * Get all batches with filters (returns full paginated response)
    */
@@ -299,6 +341,19 @@ class BatchService {
       status: 'available',
       store_id: storeId
     });
+  }
+
+  /**
+   * Get ALL available batches by store (paged)
+   */
+  async getAvailableBatchesAll(storeId?: number, opts?: ListAllOptions): Promise<Batch[]> {
+    return this.getBatchesAll(
+      {
+        status: 'available',
+        store_id: storeId,
+      },
+      opts
+    );
   }
 }
 

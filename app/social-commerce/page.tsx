@@ -57,8 +57,8 @@ interface PathaoArea {
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [allProducts, setAllProducts] = useState<any[]>([]);
-  const [batches, setBatches] = useState<any[]>([]);
+  const [availableBatchCount, setAvailableBatchCount] = useState<number | null>(null);
+  const [isSearching, setIsSearching] = useState<boolean>(false);
   const [stores, setStores] = useState<any[]>([]);
 
   const [date, setDate] = useState(getTodayDate());
@@ -230,78 +230,35 @@ export default function SocialCommercePage() {
     }
   };
 
-  const fetchProducts = async () => {
-    try {
-      // ✅ Load ALL products by paging (backend often caps per_page)
-      const productsData = await productService.getAllAll({ is_archived: false }, { max_items: 200000 });
-      setAllProducts(Array.isArray(productsData) ? productsData : []);
-    } catch (error) {
-      console.error('Error fetching products:', error);
-      setAllProducts([]);
+  const fetchStoreBatchCount = async (storeId: string) => {
+    if (!storeId) {
+      setAvailableBatchCount(null);
+      return;
     }
-  };
 
-  const fetchBatchesForStore = async (storeId: string) => {
-    if (!storeId) return;
-
+    setIsLoadingData(true);
     try {
-      setIsLoadingData(true);
-      console.log('📦 Fetching batches for store:', storeId);
+      // ✅ lightweight: fetch counts only (no batch list download)
+      const res = await batchService.getStatistics(parseInt(storeId));
+      const data: any = (res as any)?.data ?? {};
+      const count =
+        typeof data?.available_batches === 'number'
+          ? data.available_batches
+          : typeof data?.active_batches === 'number'
+          ? data.active_batches
+          : typeof data?.total_batches === 'number'
+          ? data.total_batches
+          : null;
 
-      try {
-        const batchesData = await batchService.getAvailableBatches(parseInt(storeId));
-        console.log('✅ Raw batches from getAvailableBatches:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
-        }
-      } catch (err) {
-        console.warn('⚠️ getAvailableBatches failed, trying getBatchesArray...', err);
-      }
-
-      try {
-        const batchesData = await batchService.getBatchesArray({
-          store_id: parseInt(storeId),
-          status: 'available',
-        });
-        console.log('✅ Raw batches from getBatchesArray:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
-        }
-      } catch (err) {
-        console.warn('⚠️ getBatchesArray failed, trying getBatchesByStore...', err);
-      }
-
-      try {
-        const batchesData = await batchService.getBatchesByStore(parseInt(storeId));
-        console.log('✅ Raw batches from getBatchesByStore:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          const availableBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          setBatches(availableBatches);
-          console.log('✅ Filtered available batches:', availableBatches.length);
-          return;
-        }
-      } catch (err) {
-        console.error('⚠️ All batch fetch methods failed', err);
-      }
-
-      setBatches([]);
-      console.log('⚠️ No batches found for store:', storeId);
-    } catch (error: any) {
-      console.error('❌ Batch fetch error:', error);
-      setBatches([]);
+      setAvailableBatchCount(typeof count === 'number' ? count : null);
+    } catch (error) {
+      console.error('Error fetching batch statistics:', error);
+      setAvailableBatchCount(null);
     } finally {
       setIsLoadingData(false);
     }
   };
+
 
   // ✅ Pathao lookup
   const fetchPathaoCities = async () => {
@@ -337,85 +294,90 @@ export default function SocialCommercePage() {
     }
   };
 
-  const performLocalSearch = async (query: string) => {
+  const parseSellPrice = (v: any): number => {
+    const n = Number(String(v ?? '0').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const withinPriceRange = (price: number, min: number | null, max: number | null) => {
+    if (min !== null && price < min) return false;
+    if (max !== null && price > max) return false;
+    return true;
+  };
+
+  const buildSearchResultItem = (batch: any, prod: any, imageUrl: string, relevance_score: number, search_stage: string) => {
+    const pid = prod?.id ?? batch.product?.id ?? batch.product_id;
+    return {
+      id: pid,
+      name: prod?.name || batch.product?.name || batch.product_name || 'Unknown product',
+      sku: prod?.sku || batch.product?.sku || batch.product_sku || '',
+      batchId: batch.id,
+      batchNumber: batch.batch_number,
+      attributes: {
+        Price: parseSellPrice(batch.sell_price ?? 0),
+        mainImage: imageUrl,
+      },
+      available: batch.quantity,
+      expiryDate: batch.expiry_date,
+      daysUntilExpiry: batch.days_until_expiry,
+      relevance_score: relevance_score || 0,
+      search_stage: search_stage || 'api',
+    };
+  };
+
+  /**
+   * Lightweight fallback when product search fails:
+   * Uses backend batch list filtering (store_id + status + search) and then applies price filtering client-side.
+   * Does NOT preload all batches.
+   */
+  const performServerBatchSearch = async (
+    storeId: number,
+    query: string,
+    min: number | null,
+    max: number | null,
+    limit = 60
+  ) => {
+    const q = String(query || '').trim();
     const results: any[] = [];
-    const queryLower = query.toLowerCase().trim();
 
-    console.log('🔍 Local search for:', queryLower);
-
-    // ✅ First pass: collect matching products
-    const matchingProducts: Array<{ prod: any; relevanceScore: number }> = [];
-
-    for (const prod of allProducts) {
-      const productName = (prod.name || '').toLowerCase();
-      const productSku = (prod.sku || '').toLowerCase();
-
-      let matches = false;
-      let relevanceScore = 0;
-
-      if (productName === queryLower || productSku === queryLower) {
-        relevanceScore = 100;
-        matches = true;
-      } else if (productName.startsWith(queryLower) || productSku.startsWith(queryLower)) {
-        relevanceScore = 80;
-        matches = true;
-      } else if (productName.includes(queryLower) || productSku.includes(queryLower)) {
-        relevanceScore = 60;
-        matches = true;
-      }
-
-      if (matches) {
-        const productBatches = batches.filter((batch: any) => {
-          const batchProductId = batch.product?.id || batch.product_id;
-          return batchProductId === prod.id && batch.quantity > 0;
-        });
-
-        if (productBatches.length > 0) {
-          matchingProducts.push({ prod, relevanceScore });
-        }
-      }
-    }
-
-    // ✅ OPTIMIZED: Fetch images for all matching products in parallel
-    const uniqueProductIds = [...new Set(matchingProducts.map(m => m.prod.id))];
-    const imagePromises = uniqueProductIds.map(async (productId) => {
-      const imageUrl = await fetchPrimaryImage(productId);
-      return { productId, imageUrl };
+    const res = await batchService.getBatches({
+      store_id: storeId,
+      status: 'available',
+      search: q || undefined,
+      per_page: Math.min(100, limit),
+      page: 1,
+      // sort_by: 'sell_price',
+      // sort_order: 'asc',
     });
-    
-    const imageResults = await Promise.all(imagePromises);
-    const imageMap = new Map(imageResults.map(r => [r.productId, r.imageUrl]));
 
-    // ✅ Second pass: build results with cached images
-    for (const { prod, relevanceScore } of matchingProducts) {
-      const productBatches = batches.filter((batch: any) => {
-        const batchProductId = batch.product?.id || batch.product_id;
-        return batchProductId === prod.id && batch.quantity > 0;
-      });
+    const items = Array.isArray(res?.data?.data) ? res.data.data : [];
 
-      const imageUrl = imageMap.get(prod.id) || '/placeholder-image.jpg';
+    const filtered = items.filter((b: any) => {
+      if (Number(b.quantity) <= 0) return false;
+      const price = parseSellPrice(b.sell_price);
+      return withinPriceRange(price, min, max);
+    });
 
-      for (const batch of productBatches) {
-        results.push({
-          id: prod.id,
-          name: prod.name,
-          sku: prod.sku,
-          batchId: batch.id,
-          batchNumber: batch.batch_number,
-          attributes: {
-            Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
-            mainImage: imageUrl,
-          },
-          available: batch.quantity,
-          expiryDate: batch.expiry_date,
-          daysUntilExpiry: batch.days_until_expiry,
-          relevance_score: relevanceScore,
-          search_stage: 'local',
-        });
-      }
+    const productIds = [
+      ...new Set(
+        filtered
+          .map((b: any) => b.product?.id || b.product_id)
+          .filter((id: any) => typeof id === 'number')
+      ),
+    ];
+
+    const imagePairs = await Promise.all(
+      productIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
+    );
+    const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
+
+    for (const b of filtered) {
+      const pid = b.product?.id || b.product_id;
+      if (!pid) continue;
+      results.push(buildSearchResultItem(b, b.product, imageMap.get(pid) || '/placeholder-image.jpg', 50, 'batch-search'));
+      if (results.length >= limit) break;
     }
 
-    results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
     return results;
   };
 
@@ -593,15 +555,24 @@ export default function SocialCommercePage() {
     setSalesBy(userName);
 
     const loadInitialData = async () => {
-      await Promise.all([fetchProducts(), fetchStores()]);
+      await fetchStores();
     };
     loadInitialData();
   }, []);
 
   useEffect(() => {
-    if (selectedStore) {
-      fetchBatchesForStore(selectedStore);
+    if (!selectedStore) {
+      setAvailableBatchCount(null);
+      setSearchResults([]);
+      return;
     }
+
+    // ✅ lightweight: only fetch counts (no batch download)
+    fetchStoreBatchCount(selectedStore);
+
+    // Do not auto-load batches/products; wait for user to type or set price filters
+    setSelectedProduct(null);
+    setSearchResults([]);
   }, [selectedStore]);
 
   // ✅ Load Pathao cities only when domestic + manual selection mode
@@ -664,157 +635,150 @@ export default function SocialCommercePage() {
   useEffect(() => {
     const hasPriceFilter = Boolean(minPrice.trim() || maxPrice.trim());
 
-    if ((!searchQuery.trim() && !hasPriceFilter) || !Array.isArray(batches)) {
+    if (!selectedStore) {
       setSearchResults([]);
       return;
     }
 
-    if (batches.length === 0) {
-      console.log('⚠️ No batches available to search');
+    if (!searchQuery.trim() && !hasPriceFilter) {
+      setSearchResults([]);
       return;
     }
 
     const delayDebounce = setTimeout(async () => {
+      const storeId = Number(selectedStore);
+
       const min = minPrice.trim() !== '' && Number.isFinite(Number(minPrice)) ? Number(minPrice) : null;
       const max = maxPrice.trim() !== '' && Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : null;
 
-      const withinPriceRange = (price: number) => {
-        if (min !== null && price < min) return false;
-        if (max !== null && price > max) return false;
-        return true;
-      };
+      const q = String(searchQuery || '').trim();
+
+      setIsSearching(true);
 
       try {
-        // If only price filter is set (no text query), search locally from loaded batches
-        if (!searchQuery.trim()) {
-          const availableBatches = Array.isArray(batches)
-            ? batches.filter((b: any) => Number(b.quantity) > 0)
-            : [];
+        // ✅ Price-only filtering (no text query): fetch one page from backend (no full preload)
+        if (!q) {
+          const res = await batchService.getBatches({
+            store_id: storeId,
+            status: 'available',
+            per_page: 100,
+            page: 1,
+            sort_by: 'sell_price',
+            sort_order: 'asc',
+          });
+
+          const items = Array.isArray(res?.data?.data) ? res.data.data : [];
+          const filtered = items.filter((b: any) => {
+            if (Number(b.quantity) <= 0) return false;
+            const price = parseSellPrice(b.sell_price);
+            return withinPriceRange(price, min, max);
+          });
 
           const productIds = [
             ...new Set(
-              availableBatches
+              filtered
                 .map((b: any) => b.product?.id || b.product_id)
                 .filter((id: any) => typeof id === 'number')
             ),
           ];
-
-          const imagePromises = productIds.map(async (productId: number) => {
-            const imageUrl = await fetchPrimaryImage(productId);
-            return { productId, imageUrl };
-          });
-
-          const imageResults = await Promise.all(imagePromises);
-          const imageMap = new Map(imageResults.map((r) => [r.productId, r.imageUrl]));
+          const imagePairs = await Promise.all(
+            productIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
+          );
+          const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
 
           const results: any[] = [];
-
-          for (const batch of availableBatches) {
-            const pid = batch.product?.id || batch.product_id;
+          for (const b of filtered) {
+            const pid = b.product?.id || b.product_id;
             if (!pid) continue;
-
-            const price = Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
-            if (!withinPriceRange(price)) continue;
-
-            const prod =
-              batch.product || allProducts.find((p: any) => p.id === pid) || null;
-
-            results.push({
-              id: pid,
-              name: prod?.name || batch.product_name || 'Unknown product',
-              sku: prod?.sku || batch.product_sku || '',
-              batchId: batch.id,
-              batchNumber: batch.batch_number,
-              attributes: {
-                Price: price,
-              },
-              image: imageMap.get(pid) || '/placeholder-image.jpg',
-              isDefective: false,
-            });
-
-            if (results.length >= 50) break;
+            results.push(buildSearchResultItem(b, b.product, imageMap.get(pid) || '/placeholder-image.jpg', 50, 'price'));
+            if (results.length >= 60) break;
           }
 
           setSearchResults(results);
           return;
         }
 
-        const products = await productService.advancedSearchAll({
-          query: searchQuery,
-          is_archived: false,
-          enable_fuzzy: true,
-          fuzzy_threshold: 60,
-          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-          per_page: 50,
-        }, { max_items: 8000 });
+        // ✅ Text query present: use fast quick-search for 1-char queries, advanced-search otherwise
+        let products: any[] = [];
+        if (q.length <= 1) {
+          products = await productService.quickSearch(q, 15);
+        } else {
+          products = await productService.advancedSearchAll(
+            {
+              query: q,
+              is_archived: false,
+              enable_fuzzy: true,
+              fuzzy_threshold: 60,
+              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+              per_page: 30,
+            },
+            { max_items: 200 }
+          );
+        }
 
-        // Some backends return an empty list for very short queries (e.g. 1–2 letters)
-        // In that case, fall back to local search so the UI still works.
         if (!Array.isArray(products) || products.length === 0) {
-          const localResults = await performLocalSearch(searchQuery);
-          setSearchResults(localResults);
+          setSearchResults([]);
           return;
         }
+
+        // Prefetch images once per product
+        const uniqueProductIds = [...new Set(products.map((p: any) => p.id).filter((id: any) => typeof id === 'number'))];
+        const imagePairs = await Promise.all(
+          uniqueProductIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
+        );
+        const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
 
         const results: any[] = [];
 
-          // ✅ OPTIMIZED: Get unique product IDs first to avoid duplicate image fetches
-          const uniqueProductIds = [...new Set(products.map((p: any) => p.id))];
-          
-          // ✅ Pre-fetch images for all unique products in parallel
-          const imagePromises = uniqueProductIds.map(async (productId) => {
-            const imageUrl = await fetchPrimaryImage(productId);
-            return { productId, imageUrl };
+        // Fetch batches per product (store + product_id + available) — avoids downloading all batches
+        for (const prod of products) {
+          if (!prod?.id) continue;
+
+          const batchList = await batchService.getBatchesArray({
+            store_id: storeId,
+            status: 'available',
+            product_id: prod.id,
+            per_page: 30,
+            page: 1,
+            sort_by: 'sell_price',
+            sort_order: 'asc',
           });
-          
-          const imageResults = await Promise.all(imagePromises);
-          const imageMap = new Map(imageResults.map(r => [r.productId, r.imageUrl]));
 
-          for (const prod of products) {
-            const productBatches = batches.filter((batch: any) => {
-              const batchProductId = batch.product?.id || batch.product_id;
-              if (batchProductId !== prod.id) return false;
-              if (Number(batch.quantity) <= 0) return false;
+          const candidates = (Array.isArray(batchList) ? batchList : [])
+            .filter((b: any) => Number(b.quantity) > 0)
+            .filter((b: any) => withinPriceRange(parseSellPrice(b.sell_price), min, max))
+            .sort((a: any, b: any) => parseSellPrice(a.sell_price) - parseSellPrice(b.sell_price))
+            .slice(0, 3); // show up to 3 batches per product
 
-              const price = Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
-              return withinPriceRange(price);
-            });
+          if (candidates.length === 0) continue;
 
-            if (productBatches.length > 0) {
-              const imageUrl = imageMap.get(prod.id) || '/placeholder-image.jpg';
+          const img = imageMap.get(prod.id) || '/placeholder-image.jpg';
+          const rel = Number(prod.relevance_score || 0);
 
-              for (const batch of productBatches) {
-                results.push({
-                  id: prod.id,
-                  name: prod.name,
-                  sku: prod.sku,
-                  batchId: batch.id,
-                  batchNumber: batch.batch_number,
-                  attributes: {
-                    Price: Number(String(batch.sell_price ?? '0').replace(/[^0-9.-]/g, '')),
-                    mainImage: imageUrl,
-                  },
-                  available: batch.quantity,
-                  expiryDate: batch.expiry_date,
-                  daysUntilExpiry: batch.days_until_expiry,
-                  relevance_score: prod.relevance_score || 0,
-                  search_stage: prod.search_stage || 'api',
-                });
-              }
-            }
+          for (const b of candidates) {
+            results.push(buildSearchResultItem(b, prod, img, rel, prod.search_stage || 'api'));
+            if (results.length >= 60) break;
           }
+          if (results.length >= 60) break;
+        }
 
-          results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
-          setSearchResults(results);
-      } catch (error: any) {
-        console.warn('❌ API search failed, using local search');
-        const localResults = await performLocalSearch(searchQuery);
-        setSearchResults(localResults);
+        results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+        setSearchResults(results);
+      } catch (error) {
+        console.warn('❌ Search failed, using batch-search fallback', error);
+        try {
+          const fallback = await performServerBatchSearch(storeId, q, min, max, 60);
+          setSearchResults(fallback);
+        } catch (e) {
+          setSearchResults([]);
+        }
+      } finally {
+        setIsSearching(false);
       }
     }, 300);
 
     return () => clearTimeout(delayDebounce);
-  }, [searchQuery, minPrice, maxPrice, batches, allProducts]);
+  }, [selectedStore, searchQuery, minPrice, maxPrice]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
@@ -1170,9 +1134,9 @@ export default function SocialCommercePage() {
                       </option>
                     ))}
                   </select>
-                  {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading batches...</p>}
-                  {selectedStore && !isLoadingData && batches.length > 0 && (
-                    <p className="mt-1 text-xs text-green-600">{batches.length} batches available</p>
+                  {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading store info...</p>}
+                  {selectedStore && !isLoadingData && typeof availableBatchCount === 'number' && (
+                    <p className="mt-1 text-xs text-green-600">{availableBatchCount} batches available</p>
                   )}
                 </div>
               </div>
@@ -1539,13 +1503,13 @@ export default function SocialCommercePage() {
                         placeholder={
                           !selectedStore
                             ? 'Select a store first...'
-                            : isLoadingData
-                            ? 'Loading batches...'
-                            : 'Search product name...'
+                            : isSearching
+                            ? 'Searching...'
+                            : 'Type to search product...'
                         }
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        disabled={!selectedStore || isLoadingData}
+                        disabled={!selectedStore}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
                       <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2 sm:flex-shrink-0">
@@ -1555,7 +1519,7 @@ export default function SocialCommercePage() {
                           placeholder="Min ৳"
                           value={minPrice}
                           onChange={(e) => setMinPrice(e.target.value)}
-                          disabled={!selectedStore || isLoadingData}
+                          disabled={!selectedStore}
                           className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <input
@@ -1564,13 +1528,13 @@ export default function SocialCommercePage() {
                           placeholder="Max ৳"
                           value={maxPrice}
                           onChange={(e) => setMaxPrice(e.target.value)}
-                          disabled={!selectedStore || isLoadingData}
+                          disabled={!selectedStore}
                           className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                       </div>
 
                       <button
-                        disabled={!selectedStore || isLoadingData}
+                        disabled={!selectedStore}
                         className="w-full sm:w-auto px-4 py-2 bg-black hover:bg-gray-800 text-white rounded transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Search size={18} />
@@ -1583,13 +1547,14 @@ export default function SocialCommercePage() {
                       </div>
                     )}
 
-                    {selectedStore && isLoadingData && (
+                    
+                    {selectedStore && isSearching && (searchQuery || minPrice || maxPrice) && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
-                        Loading batches for selected store...
+                        Searching...
                       </div>
                     )}
 
-                    {selectedStore && !isLoadingData && (searchQuery || minPrice || maxPrice) && searchResults.length === 0 && (
+                    {selectedStore && !isSearching && (searchQuery || minPrice || maxPrice) && searchResults.length === 0 && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
                         {searchQuery ? (
                         <>No products found matching "{searchQuery}"</>
