@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search, X, Globe, AlertCircle } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -13,6 +13,30 @@ import productImageService from '@/services/productImageService';
 import batchService from '@/services/batchService';
 import defectIntegrationService from '@/services/defectIntegrationService';
 import productService from '@/services/productService';
+
+// -----------------------------
+// Helpers
+// -----------------------------
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Promise pool / concurrency limiter (no extra deps).
+ */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length) as any;
+  let next = 0;
+
+  const workers = Array.from({ length: Math.max(1, limit) }, async () => {
+    while (true) {
+      const idx = next++;
+      if (idx >= items.length) return;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
 
 interface DefectItem {
   id: string;
@@ -154,13 +178,13 @@ export default function SocialCommercePage() {
     return `${baseUrl}/storage/product-images/${imagePath}`;
   };
 
-  // ✅ Image cache to prevent duplicate API calls
-  const imageCache = new Map<number, string>();
+  // ✅ Image cache to prevent duplicate API calls (must persist across renders)
+  const imageCacheRef = useRef<Map<number, string>>(new Map());
 
   const fetchPrimaryImage = async (productId: number): Promise<string> => {
     // ✅ Check cache first
-    if (imageCache.has(productId)) {
-      return imageCache.get(productId)!;
+    if (imageCacheRef.current.has(productId)) {
+      return imageCacheRef.current.get(productId)!;
     }
 
     try {
@@ -180,12 +204,12 @@ export default function SocialCommercePage() {
       }
 
       // ✅ Cache the result
-      imageCache.set(productId, imageUrl);
+      imageCacheRef.current.set(productId, imageUrl);
       return imageUrl;
     } catch (error) {
       console.error('Error fetching product images:', error);
       const fallback = '/placeholder-image.jpg';
-      imageCache.set(productId, fallback);
+      imageCacheRef.current.set(productId, fallback);
       return fallback;
     }
   };
@@ -656,12 +680,13 @@ export default function SocialCommercePage() {
       setIsSearching(true);
 
       try {
-        // ✅ Price-only filtering (no text query): fetch one page from backend (no full preload)
+        // ✅ Price-only filtering (no text query): fetch a single page from backend (no full preload)
         if (!q) {
           const res = await batchService.getBatches({
             store_id: storeId,
             status: 'available',
-            per_page: 100,
+            // Keep this small; user can refine with text query for accuracy.
+            per_page: 60,
             page: 1,
             sort_by: 'sell_price',
             sort_order: 'asc',
@@ -681,9 +706,10 @@ export default function SocialCommercePage() {
                 .filter((id: any) => typeof id === 'number')
             ),
           ];
-          const imagePairs = await Promise.all(
-            productIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
-          );
+
+          // ⚠️ Avoid hammering the API for images (can cause 429). Fetch only a few images.
+          const topImageIds = productIds.slice(0, 10);
+          const imagePairs = await mapLimit(topImageIds, 2, async (pid) => ({ pid, url: await fetchPrimaryImage(pid) }));
           const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
 
           const results: any[] = [];
@@ -700,8 +726,9 @@ export default function SocialCommercePage() {
 
         // ✅ Text query present: use fast quick-search for 1-char queries, advanced-search otherwise
         let products: any[] = [];
+        const maxProductsForLookup = q.length <= 1 ? 10 : q.length === 2 ? 20 : 30;
         if (q.length <= 1) {
-          products = await productService.quickSearch(q, 15);
+          products = await productService.quickSearch(q, 10);
         } else {
           products = await productService.advancedSearchAll(
             {
@@ -712,7 +739,7 @@ export default function SocialCommercePage() {
               search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
               per_page: 30,
             },
-            { max_items: 200 }
+            { max_items: maxProductsForLookup }
           );
         }
 
@@ -721,17 +748,18 @@ export default function SocialCommercePage() {
           return;
         }
 
-        // Prefetch images once per product
-        const uniqueProductIds = [...new Set(products.map((p: any) => p.id).filter((id: any) => typeof id === 'number'))];
-        const imagePairs = await Promise.all(
-          uniqueProductIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
-        );
+        // ⚠️ Avoid hammering the API for images (can cause 429). Fetch only a few images.
+        const productsForLookup = (Array.isArray(products) ? products : []).slice(0, maxProductsForLookup);
+        const uniqueProductIds = [...new Set(productsForLookup.map((p: any) => p.id).filter((id: any) => typeof id === 'number'))];
+        const topImageIds = uniqueProductIds.slice(0, 10);
+        const imagePairs = await mapLimit(topImageIds, 2, async (pid) => ({ pid, url: await fetchPrimaryImage(pid) }));
         const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
 
         const results: any[] = [];
 
         // Fetch batches per product (store + product_id + available) — avoids downloading all batches
-        for (const prod of products) {
+        // ⚠️ Keep this capped and slightly paced to avoid API rate limits (429).
+        for (const prod of productsForLookup) {
           if (!prod?.id) continue;
 
           const batchList = await batchService.getBatchesArray({
@@ -760,11 +788,21 @@ export default function SocialCommercePage() {
             if (results.length >= 60) break;
           }
           if (results.length >= 60) break;
+
+          // Small delay helps avoid 429 when many products match.
+          await sleep(120);
         }
 
         results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
         setSearchResults(results);
       } catch (error) {
+        const status = (error as any)?.response?.status;
+        if (status === 429) {
+          console.warn('⚠️ Rate limited (429). Waiting briefly before allowing another search.');
+          setSearchResults([]);
+          // Do NOT call fallback on 429 (it will likely trigger more 429s)
+          return;
+        }
         console.warn('❌ Search failed, using batch-search fallback', error);
         try {
           const fallback = await performServerBatchSearch(storeId, q, min, max, 60);
@@ -775,7 +813,7 @@ export default function SocialCommercePage() {
       } finally {
         setIsSearching(false);
       }
-    }, 300);
+    }, 600);
 
     return () => clearTimeout(delayDebounce);
   }, [selectedStore, searchQuery, minPrice, maxPrice]);
