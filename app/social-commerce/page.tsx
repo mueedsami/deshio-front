@@ -221,7 +221,8 @@ export default function SocialCommercePage() {
 
   const fetchStores = async () => {
     try {
-      const response = await storeService.getStores({ is_active: true, per_page: 1000 });
+      // Backend validation: per_page must be <= 100
+      const response = await storeService.getStores({ is_active: true, per_page: 100 });
       let storesData: any[] = [];
 
       if (response?.success && response?.data) {
@@ -361,7 +362,8 @@ export default function SocialCommercePage() {
             sort_order: 'asc',
           },
           {
-            per_page: 200,
+            // Backend validation: per_page must be <= 100
+            per_page: 100,
             max_pages: 5000,
             max_items: 500000,
           }
@@ -760,7 +762,8 @@ export default function SocialCommercePage() {
             enable_fuzzy: true,
             fuzzy_threshold: 60,
             search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-            per_page: 200,
+            // Backend validation: per_page must be <= 100
+            per_page: 100,
           },
           { max_items: 50000, max_pages: 500 }
         );

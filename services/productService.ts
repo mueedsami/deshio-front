@@ -324,6 +324,9 @@ export const productService = {
 
   /** Advanced multi-language search (Bangla + Roman + English + fuzzy) */
   async advancedSearch(params: AdvancedSearchParams): Promise<AdvancedSearchResponse> {
+    // Backend validation: per_page must be <= 100
+    const per_page = Math.min(Math.max(Number(params.per_page ?? 50), 1), 100);
+    const page = Math.max(1, Number(params.page ?? 1) || 1);
     const payload: any = {
       query: params.query,
       category_id: params.category_id,
@@ -332,8 +335,8 @@ export const productService = {
       enable_fuzzy: params.enable_fuzzy ?? true,
       fuzzy_threshold: params.fuzzy_threshold ?? 60,
       search_fields: params.search_fields ?? ['name', 'sku', 'description', 'category', 'custom_fields'],
-      per_page: params.per_page ?? 50,
-      page: params.page ?? 1,
+      per_page,
+      page,
     };
 
     try {
@@ -389,7 +392,8 @@ export const productService = {
     params: Omit<AdvancedSearchParams, 'page' | 'per_page'> & { per_page?: number },
     opts?: { max_items?: number; max_pages?: number }
   ): Promise<ProductSearchHit[]> {
-    const per_page = Math.min(Math.max(Number(params.per_page ?? 200), 1), 200);
+    // Backend validation: per_page must be <= 100
+    const per_page = Math.min(Math.max(Number(params.per_page ?? 100), 1), 100);
     const max_items = Number(opts?.max_items ?? 2000);
     const max_pages = Number(opts?.max_pages ?? 50);
 

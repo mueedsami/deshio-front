@@ -147,9 +147,9 @@ class BatchService {
   async getBatchesAll(filters?: BatchFilters, opts?: ListAllOptions): Promise<Batch[]> {
     const out: Batch[] = [];
 
-    const requestedPerPage = opts?.per_page ?? filters?.per_page ?? 200;
-    // Keep it reasonable; backend may still cap.
-    const per_page = Math.max(1, Math.min(200, Number(requestedPerPage) || 200));
+    const requestedPerPage = opts?.per_page ?? filters?.per_page ?? 100;
+    // Backend validation: per_page must be <= 100
+    const per_page = Math.max(1, Math.min(100, Number(requestedPerPage) || 100));
     const max_items = opts?.max_items ?? 200000;
     const max_pages = opts?.max_pages ?? 5000;
 
