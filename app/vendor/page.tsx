@@ -61,7 +61,7 @@ const Modal = ({
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'md' | 'lg' | 'xl';
+  size?: 'md' | 'lg' | 'xl' | 'full';
   /**
    * IMPORTANT: allows stacking modals (Quick Add Product over PO)
    */
@@ -69,17 +69,22 @@ const Modal = ({
 }) => {
   if (!isOpen) return null;
 
-  // ✅ wider overall; xl is now much wider
-  const sizeClasses: Record<'md' | 'lg' | 'xl', string> = {
+  // ✅ wider overall; xl is now much wider; full = true fullscreen
+  const sizeClasses: Record<'md' | 'lg' | 'xl' | 'full', string> = {
     md: 'max-w-md',
     lg: 'max-w-4xl',
     xl: 'max-w-6xl',
+    full: 'w-screen h-screen max-w-none',
   };
 
+  const isFull = size === 'full';
+
   return (
-    <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/10 backdrop-blur-md overflow-y-auto`}>
+    <div
+      className={`fixed inset-0 ${zIndexClass} flex ${isFull ? 'items-stretch justify-stretch' : 'items-center justify-center'} bg-black/10 backdrop-blur-md overflow-hidden`}
+    >
       <div
-        className={`bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full ${sizeClasses[size]} mx-4 max-h-[90vh] overflow-y-auto`}
+        className={`bg-white dark:bg-gray-800 shadow-xl w-full ${sizeClasses[size]} ${isFull ? 'mx-0 rounded-none max-h-none h-full' : 'mx-4 rounded-xl max-h-[90vh]'} overflow-y-auto`}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-10">
           <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
@@ -371,7 +376,31 @@ export default function VendorPaymentPage() {
       });
     }
 
-    return list.slice(0, 30);
+    // ✅ Show grouped rows (by SKU) so variations don't spam the list.
+    const keyFor = (p: any) => {
+      const id = Number(p?.id ?? 0);
+      const rawSku = String(p?.sku ?? '').trim().toLowerCase();
+      if (!rawSku) return `__no_sku_${id || Math.random()}`;
+      const sku = rawSku.replace(/\s+/g, '');
+      const stripped = sku.replace(/[-_]?(?:\d+(?:\.\d+)?)$/i, '');
+      return (stripped || sku).trim();
+    };
+
+    const grouped = new Map<string, any>();
+    for (const p of list) {
+      const k = keyFor(p);
+      if (!grouped.has(k)) {
+        grouped.set(k, p);
+        continue;
+      }
+      // Prefer the "base" item if it exists (no SKU), otherwise keep first.
+      const existing = grouped.get(k);
+      const existingSku = String(existing?.sku ?? '').trim();
+      const newSku = String(p?.sku ?? '').trim();
+      if (existingSku && !newSku) grouped.set(k, p);
+    }
+
+    return Array.from(grouped.values()).slice(0, 30);
   }, [poVendorProductOptions, poSearch, poCategoryIdSet]);
 
   const addProductToPO = (productId: number) => {
@@ -474,11 +503,23 @@ export default function VendorPaymentPage() {
     return () => window.clearTimeout(t);
   }, [showAddPurchase, purchaseForm, poSearch, poCategoryId, poShowAllProducts]);
 
+  /**
+   * Grouping rule for variations (PO screen):
+   * ✅ Group ONLY by SKU (never by name), per requirement.
+   *
+   * We normalize the SKU and also remove trailing numeric size suffixes
+   * (e.g., ABC-30 / ABC 30 / ABC_30 -> ABC) so size-based variations collapse.
+   *
+   * Products without SKU are treated as standalone (no inferred variations).
+   */
   const getVariantGroupKey = (p: Product): string => {
-    const sku = (((p as any).sku || '') as string).trim().toLowerCase();
-    if (sku) return sku.replace(/[-_\s]?\d+$/i, '');
-    const name = (p.name || '').trim().toLowerCase();
-    return name.replace(/\s+\d+(?:\.\d+)?$/i, '').trim();
+    const id = Number((p as any)?.id ?? 0);
+    const rawSku = String((p as any)?.sku ?? '').trim().toLowerCase();
+    if (!rawSku) return `__no_sku_${id || Math.random()}`;
+
+    const sku = rawSku.replace(/\s+/g, '');
+    const stripped = sku.replace(/[-_]?\d+(?:\.\d+)?$/i, '');
+    return (stripped || sku).trim();
   };
 
   const extractTrailingSize = (p: Product): number | null => {
@@ -490,7 +531,7 @@ export default function VendorPaymentPage() {
   };
 
   const getVariantGroupProducts = (p: Product): Product[] => {
-    // If backend already returns variants, use them
+    // If backend already returns variants, use them (trusted relation)
     if (Array.isArray((p as any).variants) && (p as any).variants.length > 0) {
       const all = [p, ...(p as any).variants].filter(Boolean) as any[];
       const map = new Map<number, Product>();
@@ -500,17 +541,9 @@ export default function VendorPaymentPage() {
       return Array.from(map.values());
     }
 
-    // Fallback: infer variants from the full product list by SKU prefix or name base
+    // Fallback: infer variants from full product list using SKU-group key ONLY.
     const key = getVariantGroupKey(p);
-    const grouped = products.filter((x) => getVariantGroupKey(x) === key);
-
-    if (grouped.length <= 1) {
-      const base = (p.name || '').trim().toLowerCase().replace(/\s+\d+(?:\.\d+)?$/i, '').trim();
-      const starts = products.filter((x) => (x.name || '').trim().toLowerCase().startsWith(base));
-      return starts;
-    }
-
-    return grouped;
+    return products.filter((x) => getVariantGroupKey(x) === key);
   };
 
   const openVariantPicker = (productId: string) => {
@@ -1405,8 +1438,8 @@ export default function VendorPaymentPage() {
         </div>
       </Modal>
 
-      {/* ✅ Create Purchase Order Modal - NOW MUCH WIDER */}
-      <Modal isOpen={showAddPurchase} onClose={() => setShowAddPurchase(false)} title="Create Purchase Order" size="xl">
+      {/* ✅ Create Purchase Order Modal - FULLSCREEN */}
+      <Modal isOpen={showAddPurchase} onClose={() => setShowAddPurchase(false)} title="Create Purchase Order" size="full">
         <div className="space-y-4">
           {poDraftRestored && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -1808,7 +1841,7 @@ export default function VendorPaymentPage() {
         isOpen={showVariantPicker}
         onClose={() => setShowVariantPicker(false)}
         title={`Add variations${variantBaseProduct?.name ? `: ${variantBaseProduct.name}` : ''}`}
-        size="xl"
+        size="full"
         zIndexClass="z-[70]"
       >
         <div className="space-y-4">
