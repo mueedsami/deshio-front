@@ -505,21 +505,20 @@ export default function VendorPaymentPage() {
 
   /**
    * Grouping rule for variations (PO screen):
-   * ✅ Group ONLY by SKU (never by name), per requirement.
+   * ✅ Group ONLY by the FULL SKU (exact match), never by name or SKU-prefix.
    *
-   * We normalize the SKU and also remove trailing numeric size suffixes
-   * (e.g., ABC-30 / ABC 30 / ABC_30 -> ABC) so size-based variations collapse.
+   * Why: Our SKUs often end with digits (e.g. JA-84-22500). Stripping the
+   * trailing numeric part incorrectly grouped unrelated products (JA-84-*).
    *
    * Products without SKU are treated as standalone (no inferred variations).
    */
   const getVariantGroupKey = (p: Product): string => {
     const id = Number((p as any)?.id ?? 0);
-    const rawSku = String((p as any)?.sku ?? '').trim().toLowerCase();
-    if (!rawSku) return `__no_sku_${id || Math.random()}`;
+    const rawSku = String((p as any)?.sku ?? '').trim();
+    if (!rawSku) return `__no_sku_${id || 0}`;
 
-    const sku = rawSku.replace(/\s+/g, '');
-    const stripped = sku.replace(/[-_]?\d+(?:\.\d+)?$/i, '');
-    return (stripped || sku).trim();
+    // Normalize for safe equality (case-insensitive, ignore spaces)
+    return rawSku.toLowerCase().replace(/\s+/g, '');
   };
 
   const extractTrailingSize = (p: Product): number | null => {
