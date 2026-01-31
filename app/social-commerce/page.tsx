@@ -11,7 +11,6 @@ import { useCustomerLookup, type RecentOrder } from '@/lib/hooks/useCustomerLook
 import storeService from '@/services/storeService';
 import batchService from '@/services/batchService';
 import defectIntegrationService from '@/services/defectIntegrationService';
-import productService from '@/services/productService';
 
 // -----------------------------
 // Helpers
@@ -349,9 +348,9 @@ export default function SocialCommercePage() {
   };
 
   /**
-   * Lightweight fallback when product search fails:
+   * Server-side batch search (paged) for Social Commerce.
    * Uses backend batch list filtering (store_id + status + search) and then applies price filtering client-side.
-   * Does NOT preload all batches.
+   * This avoids per-product batch calls (which can trigger 429) and avoids silently missing results due to backend page caps.
    */
   const performServerBatchSearch = async (
     storeId: number,
@@ -363,17 +362,21 @@ export default function SocialCommercePage() {
     const q = String(query || '').trim();
     const results: any[] = [];
 
-    const res = await batchService.getBatches({
-      store_id: storeId,
-      status: 'available',
-      search: q || undefined,
-      per_page: Math.min(100, limit),
-      page: 1,
-      // sort_by: 'sell_price',
-      // sort_order: 'asc',
-    });
-
-    const items = Array.isArray(res?.data?.data) ? res.data.data : [];
+    const items = await batchService.getBatchesAll(
+      {
+        store_id: storeId,
+        status: 'available',
+        search: q || undefined,
+        sort_by: 'sell_price',
+        sort_order: 'asc',
+      },
+      {
+        // Backend often caps per_page; we page through until we have enough.
+        per_page: 200,
+        max_items: Math.max(1, Number(limit) || 60),
+        max_pages: 200,
+      }
+    );
 
     const filtered = items.filter((b: any) => {
       if (Number(b.quantity) <= 0) return false;
@@ -712,73 +715,21 @@ export default function SocialCommercePage() {
           return;
         }
 
-        // ✅ Text query present: use fast quick-search for 1-char queries, advanced-search otherwise
-        let products: any[] = [];
-        const maxProductsForLookup = q.length <= 1 ? 10 : q.length === 2 ? 20 : 30;
-        if (q.length <= 1) {
-          products = await productService.quickSearch(q, 10);
-        } else {
-          products = await productService.advancedSearchAll(
-            {
-              query: q,
-              is_archived: false,
-              enable_fuzzy: true,
-              fuzzy_threshold: 60,
-              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-              per_page: 30,
-            },
-            { max_items: maxProductsForLookup }
-          );
-        }
+        // ✅ Text query present
+        // IMPORTANT: Do NOT ... per-product batch calls (can trigger 429 and silently miss results).
+        // Instead, use the backend batch search (paged) to return ... batches.
+        // This ensures searching "jamdani" finds ALL jamdani batches (not just first 30/60).
 
-        if (!Array.isArray(products) || products.length === 0) {
-          setSearchResults([]);
-          return;
-        }
+        // For 1-char queries keep results small (very broad query).
+        const desiredLimit = q.length <= 1
+          ? 120
+          : Math.min(Math.max(Number(availableBatchCount ?? 0), 500), 15000);
 
-        // ⚠️ Avoid hammering the API for images (can cause 429). Fetch only a few images.
-        const productsForLookup = (Array.isArray(products) ? products : []).slice(0, maxProductsForLookup);
-
-        const results: any[] = [];
-
-        // Fetch batches per product (store + product_id + available) — avoids downloading all batches
-        // ⚠️ Keep this capped and slightly paced to avoid API rate limits (429).
-        for (const prod of productsForLookup) {
-          if (!prod?.id) continue;
-
-          const batchList = await batchService.getBatchesArray({
-            store_id: storeId,
-            status: 'available',
-            product_id: prod.id,
-            per_page: 30,
-            page: 1,
-            sort_by: 'sell_price',
-            sort_order: 'asc',
-          });
-
-          const candidates = (Array.isArray(batchList) ? batchList : [])
-            .filter((b: any) => Number(b.quantity) > 0)
-            .filter((b: any) => withinPriceRange(parseSellPrice(b.sell_price), min, max))
-            .sort((a: any, b: any) => parseSellPrice(a.sell_price) - parseSellPrice(b.sell_price))
-            .slice(0, 3); // show up to 3 batches per product
-
-          if (candidates.length === 0) continue;
-
-          const img = getProductCardImage(prod);
-          const rel = Number(prod.relevance_score || 0);
-
-          for (const b of candidates) {
-            results.push(buildSearchResultItem(b, prod, img, rel, prod.search_stage || 'api'));
-            if (results.length >= 60) break;
-          }
-          if (results.length >= 60) break;
-
-          // Small delay helps avoid 429 when many products match.
-          await sleep(120);
-        }
-
-        results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+        const results = await performServerBatchSearch(storeId, q, min, max, desiredLimit);
+        // Sort cheapest first for easier selection.
+        results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
         setSearchResults(results);
+        return;
       } catch (error) {
         const status = (error as any)?.response?.status;
         if (status === 429) {
@@ -800,7 +751,7 @@ export default function SocialCommercePage() {
     }, 600);
 
     return () => clearTimeout(delayDebounce);
-  }, [selectedStore, searchQuery, minPrice, maxPrice]);
+  }, [selectedStore, searchQuery, minPrice, maxPrice, availableBatchCount]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
