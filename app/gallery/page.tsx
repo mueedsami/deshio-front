@@ -140,7 +140,7 @@ export default function GalleryPage() {
         if (!url) return null;
         if (url.startsWith('http')) return url;
         if (url.startsWith('/storage')) return `${baseUrl}${url}`;
-        return `${baseUrl}/storage/product-images/${url}`;
+        return `${baseUrl}/storage/${String(url).replace(/^\/+/, '')}`;
       })
       .filter(Boolean) as string[];
 

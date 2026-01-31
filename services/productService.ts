@@ -11,6 +11,7 @@ export interface Product {
   is_archived: boolean;
   custom_fields?: CustomField[];
   images?: ProductImage[];
+  primary_image?: PrimaryImage;
   variants?: any[]; // Product variants
   category?: {
     id: number;
@@ -42,6 +43,14 @@ export interface ProductImage {
   is_active?: boolean;
   sort_order?: number;
   display_order?: number;
+}
+
+export interface PrimaryImage {
+  id: number;
+  url: string;
+  alt_text?: string;
+  image_url?: string;
+  image_path?: string;
 }
 
 export interface Field {
@@ -139,6 +148,19 @@ function transformProduct(product: any): Product {
     is_archived: Boolean(product.is_archived),
     custom_fields: Array.isArray(product.custom_fields) ? product.custom_fields : undefined,
     images: Array.isArray(product.images) ? product.images : undefined,
+    primary_image: (() => {
+      const pi = product?.primary_image;
+      if (!pi) return undefined;
+      const u = pi.url ?? pi.image_url ?? pi.image_path;
+      if (!u) return undefined;
+      return {
+        id: Number(pi.id ?? 0),
+        url: String(u),
+        alt_text: pi.alt_text ?? product?.name ?? undefined,
+        image_url: pi.image_url ?? undefined,
+        image_path: pi.image_path ?? undefined,
+      } as PrimaryImage;
+    })(),
     variants: Array.isArray(product.variants) ? product.variants : undefined,
     category: normalizeCategory(product.category),
     vendor: normalizeVendor(product.vendor),

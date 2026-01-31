@@ -270,12 +270,16 @@ export default function VendorPaymentPage() {
     if (url.startsWith('/storage')) return `${baseUrl}${url}`;
     if (url.startsWith('/')) return url;
 
-    if (!baseUrl) return `/storage/product-images/${url}`;
-    return `${baseUrl}/storage/product-images/${url}`;
+    if (!baseUrl) return `/storage/${String(url).replace(/^\/+/, '')}`;
+    return `${baseUrl}/storage/${String(url).replace(/^\/+/, '')}`;
   };
 
   const getProductPrimaryImage = (p?: Product | null) => {
     if (!p) return '/placeholder-image.jpg';
+    const pi = (p as any)?.primary_image;
+    const piUrl = pi?.url || pi?.image_url || pi?.image_path;
+    if (piUrl) return normalizeImageUrl(String(piUrl));
+
     const imgs: any[] = Array.isArray((p as any).images) ? (p as any).images : [];
     if (imgs.length === 0) return '/placeholder-image.jpg';
 

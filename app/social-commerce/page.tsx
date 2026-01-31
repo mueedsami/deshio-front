@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, X, Globe, AlertCircle } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -9,7 +9,6 @@ import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 import axios from '@/lib/axios';
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import storeService from '@/services/storeService';
-import productImageService from '@/services/productImageService';
 import batchService from '@/services/batchService';
 import defectIntegrationService from '@/services/defectIntegrationService';
 import productService from '@/services/productService';
@@ -18,25 +17,6 @@ import productService from '@/services/productService';
 // Helpers
 // -----------------------------
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Promise pool / concurrency limiter (no extra deps).
- */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, idx: number) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length) as any;
-  let next = 0;
-
-  const workers = Array.from({ length: Math.max(1, limit) }, async () => {
-    while (true) {
-      const idx = next++;
-      if (idx >= items.length) return;
-      results[idx] = await fn(items[idx], idx);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
-}
 
 interface DefectItem {
   id: string;
@@ -162,57 +142,58 @@ export default function SocialCommercePage() {
     }
   };
 
-  const getImageUrl = (imagePath: string | null | undefined): string => {
-    if (!imagePath) return '/placeholder-image.jpg';
-
-    if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-      return imagePath;
-    }
-
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || '';
-
-    if (imagePath.startsWith('/storage')) {
-      return `${baseUrl}${imagePath}`;
-    }
-
-    return `${baseUrl}/storage/product-images/${imagePath}`;
+  const getBaseUrl = () => {
+    const api = process.env.NEXT_PUBLIC_API_URL || '';
+    return api ? api.replace(/\/api\/?$/, '') : '';
   };
 
-  // ✅ Image cache to prevent duplicate API calls (must persist across renders)
-  const imageCacheRef = useRef<Map<number, string>>(new Map());
+  // ✅ DO NOT call any image API — use URLs from product search response
+  // - Quick search: product.primary_image.url
+  // - Advanced search: product.images[].image_url (primary first)
+  const normalizeImageUrl = (url?: string | null): string => {
+    if (!url) return '/placeholder-image.jpg';
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
 
-  const fetchPrimaryImage = async (productId: number): Promise<string> => {
-    // ✅ Check cache first
-    if (imageCacheRef.current.has(productId)) {
-      return imageCacheRef.current.get(productId)!;
-    }
+    const baseUrl = getBaseUrl();
 
-    try {
-      const images = await productImageService.getProductImages(productId);
+    // backend often returns /storage/....
+    if (url.startsWith('/storage')) return baseUrl ? `${baseUrl}${url}` : url;
 
-      const primaryImage = images.find((img: any) => img.is_primary && img.is_active);
+    // if it already starts with "/", treat as site-relative
+    if (url.startsWith('/')) return url;
 
-      let imageUrl = '/placeholder-image.jpg';
-
-      if (primaryImage) {
-        imageUrl = getImageUrl(primaryImage.image_url || primaryImage.image_path);
-      } else {
-        const firstActiveImage = images.find((img: any) => img.is_active);
-        if (firstActiveImage) {
-          imageUrl = getImageUrl(firstActiveImage.image_url || firstActiveImage.image_path);
-        }
-      }
-
-      // ✅ Cache the result
-      imageCacheRef.current.set(productId, imageUrl);
-      return imageUrl;
-    } catch (error) {
-      console.error('Error fetching product images:', error);
-      const fallback = '/placeholder-image.jpg';
-      imageCacheRef.current.set(productId, fallback);
-      return fallback;
-    }
+    // otherwise treat as storage-relative path like: products/5/xxx.jpg
+    const path = `/storage/${String(url).replace(/^\/+/, '')}`;
+    return baseUrl ? `${baseUrl}${path}` : path;
   };
+
+  const pickProductImage = (p: any): string | undefined => {
+    if (!p) return undefined;
+
+    const pi = p?.primary_image;
+    const piUrl = pi?.url || pi?.image_url || pi?.image_path;
+    if (piUrl) return String(piUrl);
+
+    const imgs = Array.isArray(p?.images) ? p.images : [];
+    if (imgs.length > 0) {
+      const active = imgs.filter((img: any) => img?.is_active !== false);
+      active.sort((a: any, b: any) => {
+        if (a?.is_primary && !b?.is_primary) return -1;
+        if (!a?.is_primary && b?.is_primary) return 1;
+        return (a?.sort_order || 0) - (b?.sort_order || 0);
+      });
+      const first = active[0] || imgs[0];
+      const u = first?.image_url || first?.url || first?.image_path || first?.image;
+      if (u) return String(u);
+    }
+
+    return undefined;
+  };
+
+  const getProductCardImage = (p: any): string => {
+    return normalizeImageUrl(pickProductImage(p));
+  };
+
 
   const fetchStores = async () => {
     try {
@@ -382,23 +363,10 @@ export default function SocialCommercePage() {
       return withinPriceRange(price, min, max);
     });
 
-    const productIds = [
-      ...new Set(
-        filtered
-          .map((b: any) => b.product?.id || b.product_id)
-          .filter((id: any) => typeof id === 'number')
-      ),
-    ];
-
-    const imagePairs = await Promise.all(
-      productIds.map(async (pid: number) => ({ pid, url: await fetchPrimaryImage(pid) }))
-    );
-    const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
-
     for (const b of filtered) {
       const pid = b.product?.id || b.product_id;
       if (!pid) continue;
-      results.push(buildSearchResultItem(b, b.product, imageMap.get(pid) || '/placeholder-image.jpg', 50, 'batch-search'));
+      results.push(buildSearchResultItem(b, b.product, getProductCardImage(b.product), 50, 'batch-search'));
       if (results.length >= limit) break;
     }
 
@@ -699,24 +667,11 @@ export default function SocialCommercePage() {
             return withinPriceRange(price, min, max);
           });
 
-          const productIds = [
-            ...new Set(
-              filtered
-                .map((b: any) => b.product?.id || b.product_id)
-                .filter((id: any) => typeof id === 'number')
-            ),
-          ];
-
-          // ⚠️ Avoid hammering the API for images (can cause 429). Fetch only a few images.
-          const topImageIds = productIds.slice(0, 10);
-          const imagePairs = await mapLimit(topImageIds, 2, async (pid) => ({ pid, url: await fetchPrimaryImage(pid) }));
-          const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
-
           const results: any[] = [];
           for (const b of filtered) {
             const pid = b.product?.id || b.product_id;
             if (!pid) continue;
-            results.push(buildSearchResultItem(b, b.product, imageMap.get(pid) || '/placeholder-image.jpg', 50, 'price'));
+            results.push(buildSearchResultItem(b, b.product, getProductCardImage(b.product), 50, 'price'));
             if (results.length >= 60) break;
           }
 
@@ -750,10 +705,6 @@ export default function SocialCommercePage() {
 
         // ⚠️ Avoid hammering the API for images (can cause 429). Fetch only a few images.
         const productsForLookup = (Array.isArray(products) ? products : []).slice(0, maxProductsForLookup);
-        const uniqueProductIds = [...new Set(productsForLookup.map((p: any) => p.id).filter((id: any) => typeof id === 'number'))];
-        const topImageIds = uniqueProductIds.slice(0, 10);
-        const imagePairs = await mapLimit(topImageIds, 2, async (pid) => ({ pid, url: await fetchPrimaryImage(pid) }));
-        const imageMap = new Map(imagePairs.map((x) => [x.pid, x.url]));
 
         const results: any[] = [];
 
@@ -780,7 +731,7 @@ export default function SocialCommercePage() {
 
           if (candidates.length === 0) continue;
 
-          const img = imageMap.get(prod.id) || '/placeholder-image.jpg';
+          const img = getProductCardImage(prod);
           const rel = Number(prod.relevance_score || 0);
 
           for (const b of candidates) {

@@ -7,7 +7,6 @@ import Header from '@/components/Header';
 import inventoryService, { GlobalInventoryItem, Store as StoreBreakdown } from '@/services/inventoryService';
 import productService from '@/services/productService';
 import categoryService from '@/services/groupInventory';
-import productImageService from '@/services/productImageService';
 import defectiveProductService, { type DefectiveProduct } from '@/services/defectiveProductService';
 
 interface Category {
@@ -106,8 +105,8 @@ export default function ViewInventoryPage() {
     if (url.startsWith('/')) return url;
 
     // otherwise treat as filename stored in product-images
-    if (!baseUrl) return `/storage/product-images/${url}`; // best-effort fallback
-    return `${baseUrl}/storage/product-images/${url}`;
+    if (!baseUrl) return `/storage/${String(url).replace(/^\/+/, '')}`; // best-effort fallback
+    return `${baseUrl}/storage/${String(url).replace(/^\/+/, '')}`;
   };
 
   const getCategoryName = (categoryId: number, cats: Category[]): string => {
@@ -195,7 +194,12 @@ export default function ViewInventoryPage() {
     const cfImage = getCustomFieldValue(product, ['image']);
     if (cfImage) return cfImage;
 
-    // 2) product.images (if present)
+    // 2) quick-search primary_image
+    const pi = (product as any)?.primary_image;
+    const piUrl = pi?.url || pi?.image_url || pi?.image_path;
+    if (piUrl) return String(piUrl);
+
+    // 3) product.images (if present)
     const imgs = Array.isArray(product?.images) ? product.images : [];
     if (imgs.length > 0) {
       const active = imgs.filter((img: any) => img?.is_active !== false);
@@ -313,16 +317,6 @@ export default function ViewInventoryPage() {
       // Try to pick image from meta first
       let img = pickImageFromProductMeta(meta);
 
-      // If still missing, hit the dedicated primary-image endpoint (only then)
-      if (!img) {
-        try {
-          const primary = await withRetry(() => productImageService.getPrimaryImage(productId), { attempts: 2, baseDelayMs: 500 });
-          const u = (primary as any)?.image_url || (primary as any)?.image_path;
-          if (u) img = String(u);
-        } catch {
-          // ignore
-        }
-      }
 
       if (img) {
         setProductImageById(prev => ({ ...prev, [productId]: normalizeImageUrl(img) }));
