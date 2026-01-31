@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search, X, Globe, AlertCircle } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -10,12 +10,12 @@ import axios from '@/lib/axios';
 import { useCustomerLookup, type RecentOrder } from '@/lib/hooks/useCustomerLookup';
 import storeService from '@/services/storeService';
 import batchService from '@/services/batchService';
+import productService from '@/services/productService';
 import defectIntegrationService from '@/services/defectIntegrationService';
 
 // -----------------------------
 // Helpers
 // -----------------------------
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface DefectItem {
   id: string;
@@ -111,6 +111,13 @@ export default function SocialCommercePage() {
   const [defectiveProduct, setDefectiveProduct] = useState<DefectItem | null>(null);
   const [selectedStore, setSelectedStore] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // ✅ Store batches cache for Social Commerce search
+  // We load ALL available batches for the selected store (paged) once, then filter locally.
+  const [storeAvailableBatches, setStoreAvailableBatches] = useState<any[]>([]);
+  const [storeBatchesStoreId, setStoreBatchesStoreId] = useState<number | null>(null);
+  const [isLoadingBatches, setIsLoadingBatches] = useState<boolean>(false);
+  const batchesLoadRef = useRef<Promise<any[]> | null>(null);
 
   // 🧑‍💼 Existing customer + last order summary states
   const [existingCustomer, setExistingCustomer] = useState<any | null>(null);
@@ -327,6 +334,64 @@ export default function SocialCommercePage() {
     return true;
   };
 
+
+  const ensureStoreBatchesLoaded = async (storeId: number): Promise<any[]> => {
+    // Already loaded for this store
+    if (storeBatchesStoreId === storeId && Array.isArray(storeAvailableBatches) && storeAvailableBatches.length) {
+      return storeAvailableBatches;
+    }
+
+    // If there is an in-flight request, await it (prevents duplicate loads on fast typing)
+    if (batchesLoadRef.current) {
+      try {
+        return await batchesLoadRef.current;
+      } catch {
+        // fallthrough and retry
+      }
+    }
+
+    const task = (async () => {
+      setIsLoadingBatches(true);
+      try {
+        const items = await batchService.getBatchesAll(
+          {
+            store_id: storeId,
+            status: 'available',
+            sort_by: 'sell_price',
+            sort_order: 'asc',
+          },
+          {
+            per_page: 200,
+            max_pages: 5000,
+            max_items: 500000,
+          }
+        );
+
+        // Keep only batches that actually have quantity
+        const available = (items || []).filter((b: any) => Number(b?.quantity ?? 0) > 0);
+        setStoreAvailableBatches(available);
+        setStoreBatchesStoreId(storeId);
+        return available;
+      } finally {
+        setIsLoadingBatches(false);
+        batchesLoadRef.current = null;
+      }
+    })();
+
+    batchesLoadRef.current = task;
+    return await task;
+  };
+
+  const matchesOneCharQuery = (batch: any, q: string) => {
+    const needle = String(q || '').trim().toLowerCase();
+    if (!needle) return false;
+    const prod = batch?.product ?? {};
+    const name = String(prod?.name ?? batch?.product_name ?? '').toLowerCase();
+    const sku = String(prod?.sku ?? batch?.product_sku ?? '').toLowerCase();
+    const bn = String(batch?.batch_number ?? '').toLowerCase();
+    return name.includes(needle) || sku.includes(needle) || bn.includes(needle);
+  };
+
   const buildSearchResultItem = (batch: any, prod: any, imageUrl: string, relevance_score: number, search_stage: string) => {
     const pid = prod?.id ?? batch.product?.id ?? batch.product_id;
     return {
@@ -345,53 +410,6 @@ export default function SocialCommercePage() {
       relevance_score: relevance_score || 0,
       search_stage: search_stage || 'api',
     };
-  };
-
-  /**
-   * Server-side batch search (paged) for Social Commerce.
-   * Uses backend batch list filtering (store_id + status + search) and then applies price filtering client-side.
-   * This avoids per-product batch calls (which can trigger 429) and avoids silently missing results due to backend page caps.
-   */
-  const performServerBatchSearch = async (
-    storeId: number,
-    query: string,
-    min: number | null,
-    max: number | null,
-    limit = 60
-  ) => {
-    const q = String(query || '').trim();
-    const results: any[] = [];
-
-    const items = await batchService.getBatchesAll(
-      {
-        store_id: storeId,
-        status: 'available',
-        search: q || undefined,
-        sort_by: 'sell_price',
-        sort_order: 'asc',
-      },
-      {
-        // Backend often caps per_page; we page through until we have enough.
-        per_page: 200,
-        max_items: Math.max(1, Number(limit) || 60),
-        max_pages: 200,
-      }
-    );
-
-    const filtered = items.filter((b: any) => {
-      if (Number(b.quantity) <= 0) return false;
-      const price = parseSellPrice(b.sell_price);
-      return withinPriceRange(price, min, max);
-    });
-
-    for (const b of filtered) {
-      const pid = b.product?.id || b.product_id;
-      if (!pid) continue;
-      results.push(buildSearchResultItem(b, b.product, getProductCardImage(b.product), 50, 'batch-search'));
-      if (results.length >= limit) break;
-    }
-
-    return results;
   };
 
   const calculateAmount = (basePrice: number, qty: number, discPer: number, discTk: number) => {
@@ -592,11 +610,20 @@ export default function SocialCommercePage() {
     if (!selectedStore) {
       setAvailableBatchCount(null);
       setSearchResults([]);
+      // reset batch cache
+      setStoreAvailableBatches([]);
+      setStoreBatchesStoreId(null);
+      batchesLoadRef.current = null;
       return;
     }
 
     // ✅ lightweight: only fetch counts (no batch download)
     fetchStoreBatchCount(selectedStore);
+
+    // Reset cache when store changes (batches will be loaded on-demand when searching)
+    setStoreAvailableBatches([]);
+    setStoreBatchesStoreId(null);
+    batchesLoadRef.current = null;
 
     // Do not auto-load batches/products; wait for user to type or set price filters
     setSelectedProduct(null);
@@ -660,6 +687,7 @@ export default function SocialCommercePage() {
     setPathaoAreaId('');
   }, [pathaoZoneId, isInternational]);
 
+  
   useEffect(() => {
     const hasPriceFilter = Boolean(minPrice.trim() || maxPrice.trim());
 
@@ -675,6 +703,10 @@ export default function SocialCommercePage() {
 
     const delayDebounce = setTimeout(async () => {
       const storeId = Number(selectedStore);
+      if (!Number.isFinite(storeId) || storeId <= 0) {
+        setSearchResults([]);
+        return;
+      }
 
       const min = minPrice.trim() !== '' && Number.isFinite(Number(minPrice)) ? Number(minPrice) : null;
       const max = maxPrice.trim() !== '' && Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : null;
@@ -684,74 +716,122 @@ export default function SocialCommercePage() {
       setIsSearching(true);
 
       try {
-        // ✅ Price-only filtering (no text query): fetch a single page from backend (no full preload)
-        if (!q) {
-          const res = await batchService.getBatches({
-            store_id: storeId,
-            status: 'available',
-            // Keep this small; user can refine with text query for accuracy.
-            per_page: 60,
-            page: 1,
-            sort_by: 'sell_price',
-            sort_order: 'asc',
-          });
+        // ✅ Always work against the FULL available batch list for the selected store (paged).
+        const batches = await ensureStoreBatchesLoaded(storeId);
 
-          const items = Array.isArray(res?.data?.data) ? res.data.data : [];
-          const filtered = items.filter((b: any) => {
-            if (Number(b.quantity) <= 0) return false;
+        // ✅ Price-only filter
+        if (!q) {
+          const filtered = batches.filter((b: any) => {
             const price = parseSellPrice(b.sell_price);
             return withinPriceRange(price, min, max);
           });
 
-          const results: any[] = [];
-          for (const b of filtered) {
-            const pid = b.product?.id || b.product_id;
-            if (!pid) continue;
-            results.push(buildSearchResultItem(b, b.product, getProductCardImage(b.product), 50, 'price'));
-            if (results.length >= 60) break;
-          }
+          const results = filtered.map((b: any) =>
+            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'price')
+          );
 
+          results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
           setSearchResults(results);
           return;
         }
 
-        // ✅ Text query present
-        // IMPORTANT: Do NOT ... per-product batch calls (can trigger 429 and silently miss results).
-        // Instead, use the backend batch search (paged) to return ... batches.
-        // This ensures searching "jamdani" finds ALL jamdani batches (not just first 30/60).
+        // ✅ 1-character query: fast local filter (avoid flooding backend on extremely broad searches)
+        if (q.length === 1) {
+          const filtered = batches.filter((b: any) => matchesOneCharQuery(b, q)).filter((b: any) => {
+            const price = parseSellPrice(b.sell_price);
+            return withinPriceRange(price, min, max);
+          });
 
-        // For 1-char queries keep results small (very broad query).
-        const desiredLimit = q.length <= 1
-          ? 120
-          : Math.min(Math.max(Number(availableBatchCount ?? 0), 500), 15000);
+          const results = filtered.map((b: any) =>
+            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'local')
+          );
 
-        const results = await performServerBatchSearch(storeId, q, min, max, desiredLimit);
-        // Sort cheapest first for easier selection.
-        results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
-        setSearchResults(results);
-        return;
-      } catch (error) {
-        const status = (error as any)?.response?.status;
-        if (status === 429) {
-          console.warn('⚠️ Rate limited (429). Waiting briefly before allowing another search.');
-          setSearchResults([]);
-          // Do NOT call fallback on 429 (it will likely trigger more 429s)
+          results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
+          setSearchResults(results);
           return;
         }
-        console.warn('❌ Search failed, using batch-search fallback', error);
+
+        // ✅ Main search (multi-language + fuzzy): use Product Advanced Search
+        // Then map products -> filter the store's batches locally (exact coverage, no silent paging loss).
+        const hits = await productService.advancedSearchAll(
+          {
+            query: q,
+            is_archived: false,
+            enable_fuzzy: true,
+            fuzzy_threshold: 60,
+            search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+            per_page: 200,
+          },
+          { max_items: 50000, max_pages: 500 }
+        );
+
+        if (!hits.length) {
+          setSearchResults([]);
+          return;
+        }
+
+        const productMap = new Map<number, any>();
+        for (const h of hits) {
+          if (h?.id) productMap.set(Number(h.id), h);
+        }
+
+        const filteredBatches = batches.filter((b: any) => {
+          const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
+          if (!pid || !productMap.has(pid)) return false;
+          const price = parseSellPrice(b.sell_price);
+          return withinPriceRange(price, min, max);
+        });
+
+        const results = filteredBatches.map((b: any) => {
+          const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
+          const prod = productMap.get(pid) ?? b.product;
+          const score = Number((productMap.get(pid) as any)?.relevance_score ?? 0);
+          const stage = String((productMap.get(pid) as any)?.search_stage ?? 'advanced');
+          return buildSearchResultItem(b, prod, getProductCardImage(prod), score, stage);
+        });
+
+        // Sort: best match first, then cheaper batches first
+        results.sort((a: any, b: any) => {
+          const d = Number(b?.relevance_score ?? 0) - Number(a?.relevance_score ?? 0);
+          if (d !== 0) return d;
+          return Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0);
+        });
+
+        setSearchResults(results);
+      } catch (error) {
+        console.error('❌ Social commerce search failed:', error);
+        // Fallback: local filtering on already-loaded batches (name/sku contains)
         try {
-          const fallback = await performServerBatchSearch(storeId, q, min, max, 60);
-          setSearchResults(fallback);
-        } catch (e) {
+          const storeId2 = Number(selectedStore);
+          const batches = (storeBatchesStoreId === storeId2 && storeAvailableBatches.length)
+            ? storeAvailableBatches
+            : await ensureStoreBatchesLoaded(storeId2);
+
+          const needle = String(searchQuery || '').trim().toLowerCase();
+          const filtered = batches.filter((b: any) => {
+            const prod = b?.product ?? {};
+            const name = String(prod?.name ?? '').toLowerCase();
+            const sku = String(prod?.sku ?? '').toLowerCase();
+            const ok = name.includes(needle) || sku.includes(needle);
+            if (!ok) return false;
+            const price = parseSellPrice(b.sell_price);
+            return withinPriceRange(price, min, max);
+          });
+
+          const results = filtered.map((b: any) =>
+            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'fallback')
+          );
+          setSearchResults(results);
+        } catch {
           setSearchResults([]);
         }
       } finally {
         setIsSearching(false);
       }
-    }, 600);
+    }, 350);
 
     return () => clearTimeout(delayDebounce);
-  }, [selectedStore, searchQuery, minPrice, maxPrice, availableBatchCount]);
+  }, [selectedStore, searchQuery, minPrice, maxPrice]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
@@ -1508,7 +1588,7 @@ export default function SocialCommercePage() {
                           !selectedStore
                             ? 'Select a store first...'
                             : isSearching
-                            ? 'Searching...'
+                            ? (isLoadingBatches ? 'Loading store batches...' : 'Searching...')
                             : 'Type to search product...'
                         }
                         value={searchQuery}
@@ -1554,7 +1634,7 @@ export default function SocialCommercePage() {
                     
                     {selectedStore && isSearching && (searchQuery || minPrice || maxPrice) && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
-                        Searching...
+                        {isLoadingBatches ? 'Loading store batches...' : 'Searching...'}
                       </div>
                     )}
 
