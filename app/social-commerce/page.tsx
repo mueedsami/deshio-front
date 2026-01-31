@@ -7,7 +7,7 @@ import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
 import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
 import axios from '@/lib/axios';
-import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
+import { useCustomerLookup, type RecentOrder } from '@/lib/hooks/useCustomerLookup';
 import storeService from '@/services/storeService';
 import batchService from '@/services/batchService';
 import defectIntegrationService from '@/services/defectIntegrationService';
@@ -116,6 +116,7 @@ export default function SocialCommercePage() {
   // 🧑‍💼 Existing customer + last order summary states
   const [existingCustomer, setExistingCustomer] = useState<any | null>(null);
   const [lastOrderInfo, setLastOrderInfo] = useState<any | null>(null);
+  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [customerCheckError, setCustomerCheckError] = useState<string | null>(null);
   const [lastPrefilledOrderId, setLastPrefilledOrderId] = useState<number | null>(null);
@@ -139,6 +140,23 @@ export default function SocialCommercePage() {
     } else {
       console.log('Success:', message);
       alert(message);
+    }
+  };
+
+  const formatOrderDateTime = (v?: any) => {
+    if (!v) return '—';
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleString();
+  };
+
+  const formatBDT = (v?: any) => {
+    const n = Number(String(v ?? '0').replace(/[^0-9.-]/g, ''));
+    const amt = Number.isFinite(n) ? n : 0;
+    try {
+      return new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amt);
+    } catch {
+      return `৳${Math.round(amt)}`;
     }
   };
 
@@ -475,11 +493,26 @@ export default function SocialCommercePage() {
     }
 
     const lo: any = customerLookup.lastOrder;
-    if (lo?.last_order_id) {
+    const ros = Array.isArray((customerLookup as any)?.recentOrders)
+      ? ((customerLookup as any).recentOrders as RecentOrder[])
+      : [];
+    setRecentOrders(ros);
+
+    // Prefer the detailed list for UI; fall back to the summary if list isn't available
+    if (ros.length > 0) {
+      const first = ros[0];
+      setLastOrderInfo({
+        id: first.id,
+        date: first.order_date,
+        total_amount: first.total_amount,
+        items: Array.isArray(first.items) ? first.items : [],
+      });
+    } else if (lo?.last_order_id) {
       setLastOrderInfo({
         id: lo.last_order_id,
         date: lo.last_order_date,
         total_amount: lo.last_order_total,
+        items: [],
       });
     } else {
       setLastOrderInfo(null);
@@ -490,7 +523,7 @@ export default function SocialCommercePage() {
       prefillDeliveryFromOrder(Number(lo.last_order_id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerLookup.customer, customerLookup.lastOrder, customerLookup.loading, customerLookup.error]);
+  }, [customerLookup.customer, customerLookup.lastOrder, (customerLookup as any).recentOrders, customerLookup.loading, customerLookup.error]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -1198,30 +1231,61 @@ export default function SocialCommercePage() {
                                     setExistingCustomer((prev: any) => (prev ? { ...prev, tags: next } : prev))
                                   }
                                 />
-                                {lastOrderInfo ? (
+                                {recentOrders.length > 0 ? (
                                   <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-700/40 dark:bg-amber-900/15">
                                     <p className="text-sm font-extrabold tracking-wide text-amber-900 dark:text-amber-100">
-                                      LAST ORDER
+                                      LAST 5 ORDERS
                                     </p>
-                                    <p className="mt-1 text-[11px] text-gray-700 dark:text-gray-200">
-                                      Date:{' '}
-                                      <span className="font-bold text-black dark:text-white">
-                                        {lastOrderInfo.date ? new Date(lastOrderInfo.date).toLocaleString() : 'N/A'}
-                                      </span>
-                                    </p>
-                                    {lastOrderInfo.summary_text && (
-                                      <p className="mt-1 text-[11px] text-gray-700 dark:text-gray-200">
-                                        Items:{' '}
-                                        <span className="font-bold text-black dark:text-white">
-                                          {lastOrderInfo.summary_text}
-                                        </span>
-                                      </p>
-                                    )}
+
+                                    <div className="mt-2 space-y-2 max-h-56 overflow-auto pr-1">
+                                      {recentOrders.slice(0, 5).map((o, idx) => (
+                                        <div
+                                          key={o.id}
+                                          className="rounded-lg border border-amber-200/70 bg-white/70 p-2 dark:border-amber-700/40 dark:bg-black/10"
+                                        >
+                                          <div className="flex items-start justify-between gap-3">
+                                            <p className="text-[11px] font-bold text-amber-900 dark:text-amber-100">
+                                              {idx === 0 ? 'Most recent:' : `#${idx + 1}:`}{' '}
+                                              <span className="text-gray-900 dark:text-white">
+                                                {o.order_number ? `Order ${o.order_number}` : `Order ID ${o.id}`}
+                                              </span>
+                                            </p>
+                                            <p className="text-[11px] text-gray-600 dark:text-gray-200 whitespace-nowrap">
+                                              {formatOrderDateTime(o.order_date)}
+                                            </p>
+                                          </div>
+
+                                          <div className="mt-1 flex items-start justify-between gap-3">
+                                            <div className="text-[11px] text-gray-700 dark:text-gray-200">
+                                              {Array.isArray(o.items) && o.items.length > 0 ? (
+                                                <div className="space-y-0.5">
+                                                  {o.items.slice(0, 6).map((it, i) => (
+                                                    <div key={`${o.id}-${i}`} className="truncate">
+                                                      • {it.product_name || 'Unnamed product'}
+                                                      {it.quantity ? ` ×${it.quantity}` : ''}
+                                                    </div>
+                                                  ))}
+                                                  {o.items.length > 6 && (
+                                                    <div className="text-gray-500 dark:text-gray-300 italic">
+                                                      + {o.items.length - 6} more
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              ) : (
+                                                <div className="text-gray-500 dark:text-gray-300 italic">Items not available</div>
+                                              )}
+                                            </div>
+
+                                            <div className="text-[11px] font-semibold text-gray-900 dark:text-white whitespace-nowrap">
+                                              {formatBDT((o as any)?.total_amount)}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
                                   </div>
                                 ) : (
-                                  <p className="mt-1 text-gray-600 dark:text-gray-300">
-                                    No previous orders found for this customer.
-                                  </p>
+                                  <p className="mt-1 text-gray-600 dark:text-gray-300">No previous orders found for this customer.</p>
                                 )}
                               </div>
                             </div>
