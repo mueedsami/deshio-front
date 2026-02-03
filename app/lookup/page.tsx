@@ -764,7 +764,7 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
         if (showPrice) {
           ctx.textBaseline = 'bottom';
           ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
-          const priceText = `Price (VAT Inclusive): ৳${Number(priceNum).toLocaleString('en-BD')}`;
+          const priceText = `Price (VAT Inc.): ৳${Number(priceNum).toLocaleString('en-BD')}`;
           ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), cx, hPx - pad);
         }
 
