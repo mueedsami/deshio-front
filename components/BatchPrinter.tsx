@@ -134,7 +134,7 @@ async function renderLabelBase64(opts: {
 
   // Product name
   const nameY = pad + Math.round(hPx * 0.14);
-  ctx.font = `600 ${Math.round(hPx * 0.09)}px Arial`; // ~18px
+  ctx.font = `700 ${Math.round(hPx * 0.09)}px Arial`; // ~18px
   const safeName = fitText(ctx, (opts.productName || 'Product').trim(), wPx - pad * 2);
   ctx.fillText(safeName, centerX, nameY);
 
@@ -187,9 +187,9 @@ async function renderLabelBase64(opts: {
   ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
 
   // Price
-  const priceText = `Price (VAT Inclusive): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
+  const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
   ctx.textBaseline = 'bottom';
-  ctx.font = `700 ${Math.round(hPx * 0.085)}px Arial`;
+  ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
   const priceY = hPx - pad;
   ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
 
