@@ -13,6 +13,7 @@ import lookupService from '@/services/lookupService';
 import purchaseOrderService from '@/services/purchase-order.service';
 import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
+import BatchPrinter from "@/components/BatchPrinter";
 
 type LookupTab = 'customer' | 'order' | 'barcode' | 'batch';
 
@@ -79,6 +80,20 @@ type BatchLookupData = {
     metadata?: any;
     meta?: any;
   }>;
+};
+
+type PrinterProduct = {
+  id: number;
+  name: string;
+};
+
+type PrinterBatch = {
+  id: number;
+  productId: number;
+  quantity: number;
+  costPrice: number;
+  sellingPrice: number;
+  baseCode: string;
 };
 
 export default function LookupPage() {
@@ -2470,6 +2485,41 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
                                 <p className="text-xs font-semibold text-black dark:text-white">{computed.defective}</p>
                               </div>
                             </div>
+                          );
+                        })()}
+                      </div>
+
+
+                      {/* Print (BatchPrinter) */}
+                      <div className="mt-4">
+                        {(() => {
+                          const prices = extractBatchPrices(batchData.batch);
+
+                          const printerBatch: PrinterBatch = {
+                            id: batchData.batch.id,
+                            productId: batchData.batch.product.id,
+                            quantity: Number(
+                              batchData.batch.quantity ??
+                                batchData.batch.original_quantity ??
+                                batchData.summary?.total_units ??
+                                0
+                            ),
+                            costPrice: Number(prices.cost ?? 0),
+                            sellingPrice: Number(prices.sell ?? 0),
+                            baseCode: batchData.batch.base_code,
+                          };
+
+                          const printerProduct: PrinterProduct = {
+                            id: printerBatch.productId,
+                            name: batchData.batch.product.name ?? "Product",
+                          };
+
+                          const activeCodes = (batchData.barcodes || [])
+                            .filter((b) => b.is_active)
+                            .map((b) => b.barcode);
+
+                          return (
+                            <BatchPrinter batch={printerBatch} product={printerProduct} barcodes={activeCodes} />
                           );
                         })()}
                       </div>
