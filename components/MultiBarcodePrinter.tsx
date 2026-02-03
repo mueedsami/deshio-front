@@ -204,7 +204,7 @@ export async function renderBarcodeLabelBase64(opts: {
   ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
 
   // Price
-  const priceText = `Price (VAT Inclusive): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
+  const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
   ctx.textBaseline = "bottom";
   ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
   const priceY = hPx - pad;
