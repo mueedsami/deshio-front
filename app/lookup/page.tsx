@@ -679,7 +679,7 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
         ctx.fillRect(0, 0, wPx, hPx);
 
         const pad = Math.round(wPx * 0.04);
-        const shiftPx = Math.round((2 / 25.4) * DPI); // shift right by 2mm
+        const shiftPx = Math.round((0 / 25.4) * DPI); // shift right by 2mm
         const cx = wPx / 2 + shiftPx;
 
         ctx.fillStyle = '#000';
