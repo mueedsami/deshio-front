@@ -9,6 +9,7 @@ import BatchForm from '@/components/BatchForm';
 import BatchCard from '@/components/BatchCard';
 import GroupedBatchCard, { buildSkuGroups, BatchSkuGroup } from '@/components/GroupedBatchCard';
 import batchService, { Batch, CreateBatchData, UpdateBatchData } from '@/services/batchService';
+import productService, { ProductSearchHit } from '@/services/productService';
 import storeService, { Store } from '@/services/storeService';
 
 interface Product {
@@ -38,6 +39,13 @@ export default function BatchPage() {
 
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
+  // ✅ Flat search mode: either select a product (recommended) or search by batch number
+  const [flatSearchMode, setFlatSearchMode] = useState<'product' | 'batch'>('product');
+  const [flatProductFilter, setFlatProductFilter] = useState<ProductSearchHit | null>(null);
+  const [productHits, setProductHits] = useState<ProductSearchHit[]>([]);
+  const [productHitsOpen, setProductHitsOpen] = useState(false);
+  const [productHitsLoading, setProductHitsLoading] = useState(false);
+
 
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductName, setSelectedProductName] = useState<string>('');
@@ -54,7 +62,8 @@ export default function BatchPage() {
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
   // ✅ View mode: grouped by SKU (easy for variations) vs flat batches
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
+  // Default to flat to avoid loading ALL batches on initial page load.
+  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('flat');
 
   // ✅ Pagination + server-side search for flat view
   const [flatPage, setFlatPage] = useState<number>(1);
@@ -150,13 +159,15 @@ export default function BatchPage() {
       setLoading(true);
       setLoadingMessage('Loading batches...');
 
-      const search = batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
+      const search = flatSearchMode === 'batch' && batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
+      const product_id = flatSearchMode === 'product' && flatProductFilter?.id ? flatProductFilter.id : undefined;
 
       const resp = await batchService.getBatches({
         sort_by: 'created_at',
         sort_order: 'desc',
         page,
         per_page,
+        ...(product_id ? { product_id } : {}),
         ...(search ? { search } : {}),
       });
 
@@ -182,23 +193,18 @@ export default function BatchPage() {
   const loadGroupedBatches = async () => {
     try {
       setLoading(true);
-      setLoadingMessage('Loading all batches for grouped view...');
+      // ⚠️ Do NOT fetch all batches here (it can be thousands).
+      // Grouped view will start with a single page (100 max) and can be expanded later if needed.
+      setLoadingMessage('Loading batches for grouped view...');
 
-      const search = batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
-      const all = await batchService.getBatchesAll(
-        {
-          sort_by: 'created_at',
-          sort_order: 'desc',
-          ...(search ? { search } : {}),
-        },
-        {
-          per_page: 100,
-          // Safety caps (still effectively "all" for most shops)
-          max_items: 50000,
-          max_pages: 800,
-        }
-      );
-      setBatches(Array.isArray(all) ? all : []);
+      const resp = await batchService.getBatches({
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        page: 1,
+        per_page: 100,
+      });
+      const items = resp?.data?.data ?? [];
+      setBatches(Array.isArray(items) ? items : []);
     } catch (err) {
       console.error('Error loading grouped batches:', err);
       showToast('Failed to load batches', 'error');
@@ -208,7 +214,53 @@ export default function BatchPage() {
     }
   };
 
-  // Reload list when view / search / pagination changes (debounced for search typing)
+  const flatQueryKey = useMemo(() => {
+    // In product mode, we only apply search after user selects a product.
+    if (flatSearchMode === 'product') {
+      return flatProductFilter?.id ? `product:${flatProductFilter.id}` : 'product:none';
+    }
+    // Batch mode applies backend "search".
+    return `batch:${batchSearchQuery.trim()}`;
+  }, [flatSearchMode, flatProductFilter?.id, batchSearchQuery]);
+
+  // Product suggestions for flat view (so you can filter batches by product without loading everything)
+  useEffect(() => {
+    if (viewMode !== 'flat' || flatSearchMode !== 'product') {
+      setProductHits([]);
+      setProductHitsOpen(false);
+      setProductHitsLoading(false);
+      return;
+    }
+
+    // Once a product is selected, no need to keep suggestions open.
+    if (flatProductFilter?.id) {
+      setProductHits([]);
+      setProductHitsOpen(false);
+      setProductHitsLoading(false);
+      return;
+    }
+
+    const q = batchSearchQuery.trim();
+    if (q.length < 2) {
+      setProductHits([]);
+      setProductHitsLoading(false);
+      return;
+    }
+
+    const t = setTimeout(async () => {
+      try {
+        setProductHitsLoading(true);
+        const hits = await productService.quickSearch(q, 12);
+        setProductHits(Array.isArray(hits) ? hits : []);
+      } finally {
+        setProductHitsLoading(false);
+      }
+    }, 250);
+
+    return () => clearTimeout(t);
+  }, [viewMode, flatSearchMode, batchSearchQuery, flatProductFilter?.id]);
+
+  // Reload list when view / paging / applied filters change
   useEffect(() => {
     const t = setTimeout(() => {
       if (viewMode === 'flat') {
@@ -216,10 +268,10 @@ export default function BatchPage() {
       } else {
         loadGroupedBatches();
       }
-    }, 350);
+    }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, batchSearchQuery, flatPage, flatPerPage]);
+  }, [viewMode, flatPage, flatPerPage, flatQueryKey]);
 
   // Reset paging when search / view changes
   useEffect(() => {
@@ -649,7 +701,12 @@ export default function BatchPage() {
                       ) : null}
                     </>
                   )}
-                  {batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null}
+                  {viewMode === 'grouped'
+                    ? (batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null)
+                    : (flatSearchMode === 'batch'
+                        ? (batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null)
+                        : (flatProductFilter ? <span className="ml-1">(filtered)</span> : null)
+                      )}
                 </span>
               </div>
 
@@ -706,17 +763,138 @@ export default function BatchPage() {
                 )}
               </div>
 
-              {/* Search (Product-wise / Batch-wise) */}
-              <div className="w-full md:w-[420px]">
+              {/* Search */}
+              <div className="w-full md:w-[520px]">
+                {viewMode === 'flat' ? (
+                  <div className="mb-2 flex items-center gap-2 flex-wrap">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Search by</span>
+                    <select
+                      value={flatSearchMode}
+                      onChange={(e) => {
+                        const mode = (e.target.value as any) as 'product' | 'batch';
+                        setFlatSearchMode(mode);
+                        setFlatPage(1);
+                        setProductHits([]);
+                        setProductHitsOpen(false);
+                        if (mode === 'batch') setFlatProductFilter(null);
+                      }}
+                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    >
+                      <option value="product">Product (name/SKU)</option>
+                      <option value="batch">Batch number</option>
+                    </select>
+
+                    {flatSearchMode === 'product' && flatProductFilter ? (
+                      <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">
+                        {flatProductFilter.name}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFlatProductFilter(null);
+                            setBatchSearchQuery('');
+                            setProductHits([]);
+                            setProductHitsOpen(false);
+                            setFlatPage(1);
+                          }}
+                          className="hover:opacity-80"
+                          title="Clear product filter"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
                     value={batchSearchQuery}
-                    onChange={(e) => setBatchSearchQuery(e.target.value)}
-                    placeholder="Search by product name, SKU, or batch number..."
-                    className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setBatchSearchQuery(v);
+                      if (viewMode === 'flat' && flatSearchMode === 'product') {
+                        // Typing a new keyword should clear existing product selection.
+                        if (flatProductFilter && v.trim() !== flatProductFilter.name) {
+                          setFlatProductFilter(null);
+                        }
+                        setProductHitsOpen(true);
+                      }
+                    }}
+                    onFocus={() => {
+                      if (viewMode === 'flat' && flatSearchMode === 'product') setProductHitsOpen(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && viewMode === 'flat' && flatSearchMode === 'product' && !flatProductFilter) {
+                        // Convenience: Enter selects the first suggestion.
+                        const first = productHits?.[0];
+                        if (first?.id) {
+                          setFlatProductFilter(first);
+                          setBatchSearchQuery(first.name || '');
+                          setProductHitsOpen(false);
+                          setFlatPage(1);
+                        }
+                      }
+                    }}
+                    placeholder={
+                      viewMode === 'flat'
+                        ? flatSearchMode === 'product'
+                          ? 'Type product name/SKU, then pick from suggestions…'
+                          : 'Type batch number…'
+                        : 'Search within loaded list…'
+                    }
+                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
+
+                  {batchSearchQuery.trim() ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBatchSearchQuery('');
+                        setProductHits([]);
+                        setProductHitsOpen(false);
+                        // Only clear product filter if we were searching by product.
+                        if (flatSearchMode === 'product') setFlatProductFilter(null);
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                      title="Clear"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  ) : null}
+
+                  {/* Product suggestions dropdown (flat + product mode) */}
+                  {viewMode === 'flat' && flatSearchMode === 'product' && !flatProductFilter && productHitsOpen ? (
+                    <div className="absolute z-50 mt-2 w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg overflow-hidden">
+                      {productHitsLoading ? (
+                        <div className="p-3 text-sm text-gray-500 dark:text-gray-400">Searching products…</div>
+                      ) : productHits.length === 0 ? (
+                        <div className="p-3 text-sm text-gray-500 dark:text-gray-400">
+                          {batchSearchQuery.trim().length < 2 ? 'Type at least 2 characters to search products.' : 'No matching products found.'}
+                        </div>
+                      ) : (
+                        <div className="max-h-72 overflow-auto">
+                          {productHits.map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => {
+                                setFlatProductFilter(p);
+                                setBatchSearchQuery(p.name || '');
+                                setProductHitsOpen(false);
+                                setFlatPage(1);
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700"
+                            >
+                              <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">SKU: {p.sku || '—'}</div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
