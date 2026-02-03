@@ -101,7 +101,9 @@ function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: num
   return [line1, line2] as const;
 }
 
-async function renderLabelBase64(opts: {
+// Exported so other pages (e.g., Purchase Order) can one-click print a single label
+// while still using the same pixel-perfect label renderer.
+export async function renderBarcodeLabelBase64(opts: {
   code: string;
   productName: string;
   price: number;
@@ -359,7 +361,7 @@ export default function MultiBarcodePrinter({
         if (!qty) continue;
 
         for (let i = 0; i < qty; i++) {
-          const base64 = await renderLabelBase64({
+          const base64 = await renderBarcodeLabelBase64({
             code: it.code,
             productName: (it.productName || "Product").substring(0, 28),
             price: it.price,

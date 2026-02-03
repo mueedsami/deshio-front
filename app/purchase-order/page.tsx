@@ -5,6 +5,8 @@ import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDo
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
+import { renderBarcodeLabelBase64 } from '@/components/MultiBarcodePrinter';
+import { barcodeTrackingService } from '@/services/barcodeTrackingService';
 import purchaseOrderService, { 
   PurchaseOrder, 
   ReceiveItemData,
@@ -229,6 +231,103 @@ export default function PurchaseOrdersPage() {
 
     return out;
   }, [selectedPO]);
+
+  // ✅ Per-batch / per-barcode printing UI helpers (inside PO details modal)
+  const [expandedBatchIds, setExpandedBatchIds] = useState<Record<number, boolean>>({});
+  const [batchBarcodeCache, setBatchBarcodeCache] = useState<
+    Record<number, { loading: boolean; codes: string[]; error?: string }>
+  >({});
+
+  const toggleBatchBarcodes = async (source: BatchBarcodeSource) => {
+    const batchId = Number(source.batchId);
+    if (!batchId) return;
+
+    setExpandedBatchIds((prev) => ({ ...prev, [batchId]: !prev[batchId] }));
+
+    // If we're collapsing, no need to fetch
+    const willExpand = !expandedBatchIds[batchId];
+    if (!willExpand) return;
+
+    // Already loaded
+    if (batchBarcodeCache[batchId]?.codes?.length) return;
+    if (batchBarcodeCache[batchId]?.loading) return;
+
+    setBatchBarcodeCache((prev) => ({
+      ...prev,
+      [batchId]: { loading: true, codes: [], error: undefined },
+    }));
+
+    try {
+      const res = await barcodeTrackingService.getBatchBarcodes(batchId);
+      const codes = (res.data?.barcodes || [])
+        .filter((b) => b.is_active)
+        .map((b) => String(b.barcode))
+        .filter(Boolean);
+
+      // Fallback to primary barcode if no per-unit barcodes exist
+      const finalCodes = codes.length ? codes : source.fallbackCode ? [String(source.fallbackCode)] : [];
+
+      setBatchBarcodeCache((prev) => ({
+        ...prev,
+        [batchId]: { loading: false, codes: finalCodes, error: undefined },
+      }));
+    } catch (e: any) {
+      console.error('Failed to fetch batch barcodes:', batchId, e);
+      setBatchBarcodeCache((prev) => ({
+        ...prev,
+        [batchId]: { loading: false, codes: [], error: e?.message || 'Failed to load barcodes' },
+      }));
+    }
+  };
+
+  const quickPrintSingleBarcode = async (params: { barcode: string; productName: string; price: number }) => {
+    try {
+      const qz = (window as any)?.qz;
+      if (!qz) throw new Error('QZ Tray not available');
+
+      if (!(await qz.websocket.isActive())) {
+        await qz.websocket.connect();
+      }
+
+      // Pick default printer (fallback to first available)
+      let printer: string | null = null;
+      try {
+        printer = await qz.printers.getDefault();
+      } catch (e) {
+        const list = await qz.printers.find();
+        if (Array.isArray(list) && list.length) printer = list[0];
+      }
+      if (!printer) throw new Error('No printer found. Set a default printer and try again.');
+
+      const LABEL_W_MM = 39;
+      const LABEL_H_MM = 25;
+      const DPI = 300;
+      const mmToIn = (mm: number) => mm / 25.4;
+
+      const base64 = await renderBarcodeLabelBase64({
+        code: params.barcode,
+        productName: params.productName,
+        price: params.price,
+        dpi: DPI,
+      });
+
+      const config = qz.configs.create(printer, {
+        units: 'in',
+        size: { width: mmToIn(LABEL_W_MM), height: mmToIn(LABEL_H_MM) },
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
+        density: DPI,
+        colorType: 'blackwhite',
+        interpolation: 'nearest-neighbor',
+        scaleContent: false,
+      });
+
+      const data: any[] = [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }];
+      await qz.print(config, data);
+    } catch (err: any) {
+      console.error('Single barcode print failed:', err);
+      alert(err?.message || 'Failed to print barcode');
+    }
+  };
 
   // Modals
   const [showViewModal, setShowViewModal] = useState(false);
@@ -1202,6 +1301,96 @@ export default function PurchaseOrdersPage() {
                   />
                 </div>
               </div>
+
+              {/* ✅ Per-batch + per-unit controls */}
+              {poBarcodeSources.length > 0 ? (
+                <div className="mt-4 space-y-3">
+                  <div className="text-xs text-gray-600 dark:text-gray-400">
+                    Tip: Use <b>Print this batch</b> to print all active unit barcodes for a single received batch.
+                    Or expand a batch to <b>print any unit barcode one by one</b>.
+                  </div>
+
+                  {poBarcodeSources.map((s) => {
+                    const open = !!expandedBatchIds[s.batchId];
+                    const cache = batchBarcodeCache[s.batchId];
+                    const priceText = `৳${formatCurrency(s.price)}`;
+
+                    return (
+                      <div
+                        key={s.batchId}
+                        className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3"
+                      >
+                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="font-semibold text-gray-900 dark:text-gray-100 truncate">
+                              {s.productName}
+                            </div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                              Batch ID: {s.batchId}
+                              {s.fallbackCode ? ` • Primary: ${s.fallbackCode}` : ''}
+                              {s.price ? ` • Price: ${priceText}` : ''}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <GroupedAllBarcodesPrinter
+                              sources={[s]}
+                              buttonLabel="Print this batch"
+                              title={`PO ${selectedPO.po_number} — Batch ${s.batchId}`}
+                              softLimit={600}
+                            />
+
+                            <button
+                              type="button"
+                              onClick={() => toggleBatchBarcodes(s)}
+                              className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800"
+                            >
+                              {open ? 'Hide barcodes' : 'Show barcodes'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {open ? (
+                          <div className="mt-3">
+                            {cache?.loading ? (
+                              <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
+                                <Loader2 className="w-4 h-4 animate-spin" /> Loading barcodes...
+                              </div>
+                            ) : cache?.error ? (
+                              <div className="text-xs text-red-600 dark:text-red-400">{cache.error}</div>
+                            ) : (cache?.codes?.length || 0) === 0 ? (
+                              <div className="text-xs text-amber-600 dark:text-amber-400">
+                                No active unit barcodes found for this batch.
+                              </div>
+                            ) : (
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                {cache!.codes.map((code) => (
+                                  <div
+                                    key={code}
+                                    className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 px-3 py-2"
+                                  >
+                                    <div className="text-xs font-mono text-gray-900 dark:text-gray-100 truncate">
+                                      {code}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => quickPrintSingleBarcode({ barcode: code, productName: s.productName, price: s.price })}
+                                      className="px-2.5 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
+                                      title="Print this single barcode"
+                                    >
+                                      Print 1
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
 
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">

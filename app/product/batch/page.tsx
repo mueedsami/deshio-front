@@ -56,6 +56,22 @@ export default function BatchPage() {
   // ✅ View mode: grouped by SKU (easy for variations) vs flat batches
   const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('grouped');
 
+  // ✅ Pagination + server-side search for flat view
+  const [flatPage, setFlatPage] = useState<number>(1);
+  const [flatPerPage, setFlatPerPage] = useState<number>(50);
+  const [flatPagination, setFlatPagination] = useState<{
+    current_page: number;
+    last_page: number;
+    per_page: number;
+    total: number;
+    from: number;
+    to: number;
+  }>({ current_page: 1, last_page: 1, per_page: 50, total: 0, from: 0, to: 0 });
+
+  // ✅ Client-side pagination for grouped view (after we fetch all matching batches)
+  const [groupPage, setGroupPage] = useState<number>(1);
+  const [groupsPerPage, setGroupsPerPage] = useState<number>(12);
+
   // Read URL parameters when redirected back from product selection
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -74,6 +90,9 @@ export default function BatchPage() {
   }, []);
 
   const filteredBatches = useMemo(() => {
+    // Flat view uses backend pagination + backend search, so don't re-filter client-side.
+    if (viewMode === 'flat') return batches;
+
     const q = batchSearchQuery.trim().toLowerCase();
     if (!q) return batches;
     return batches.filter((b) => {
@@ -82,12 +101,21 @@ export default function BatchPage() {
       const batchNo = String(b.batch_number || '').toLowerCase();
       return productName.includes(q) || productSku.includes(q) || batchNo.includes(q);
     });
-  }, [batches, batchSearchQuery]);
+  }, [batches, batchSearchQuery, viewMode]);
 
   const skuGroups: BatchSkuGroup[] = useMemo(() => {
     // Group from the filtered list so search applies naturally.
     return buildSkuGroups(filteredBatches);
   }, [filteredBatches]);
+
+  const groupLastPage = useMemo(() => {
+    return Math.max(1, Math.ceil((skuGroups.length || 0) / Math.max(1, groupsPerPage)));
+  }, [skuGroups.length, groupsPerPage]);
+
+  const pagedSkuGroups = useMemo(() => {
+    const start = (Math.max(1, groupPage) - 1) * Math.max(1, groupsPerPage);
+    return skuGroups.slice(start, start + Math.max(1, groupsPerPage));
+  }, [skuGroups, groupPage, groupsPerPage]);
 
   const loadInitialData = async () => {
     try {
@@ -103,14 +131,6 @@ export default function BatchPage() {
       if (storesData.length > 0 && !selectedStoreId) {
         setSelectedStoreId(storesData[0].id);
       }
-
-      // Load batches
-      const batchResponse = await batchService.getBatches({
-        sort_by: 'created_at',
-        sort_order: 'desc',
-      });
-      const batchData = batchResponse.data?.data || batchResponse.data || [];
-      setBatches(Array.isArray(batchData) ? batchData : []);
     } catch (err) {
       console.error('Error loading data:', err);
       showToast('Failed to load data', 'error');
@@ -119,6 +139,94 @@ export default function BatchPage() {
       setLoadingMessage('');
     }
   };
+
+  // ---------------------------
+  // ✅ List loaders (Flat: paginated, Grouped: fetch all then client paginate groups)
+  // ---------------------------
+  const loadFlatBatches = async (args?: { page?: number; per_page?: number }) => {
+    const page = Math.max(1, Number(args?.page ?? flatPage) || 1);
+    const per_page = Math.max(1, Math.min(100, Number(args?.per_page ?? flatPerPage) || 50));
+    try {
+      setLoading(true);
+      setLoadingMessage('Loading batches...');
+
+      const search = batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
+
+      const resp = await batchService.getBatches({
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        page,
+        per_page,
+        ...(search ? { search } : {}),
+      });
+
+      const items = resp?.data?.data ?? [];
+      setBatches(Array.isArray(items) ? items : []);
+      setFlatPagination({
+        current_page: Number(resp?.data?.current_page || page),
+        last_page: Number(resp?.data?.last_page || 1),
+        per_page: Number(resp?.data?.per_page || per_page),
+        total: Number(resp?.data?.total || 0),
+        from: Number(resp?.data?.from || 0),
+        to: Number(resp?.data?.to || 0),
+      });
+    } catch (err) {
+      console.error('Error loading flat batches:', err);
+      showToast('Failed to load batches', 'error');
+    } finally {
+      setLoading(false);
+      setLoadingMessage('');
+    }
+  };
+
+  const loadGroupedBatches = async () => {
+    try {
+      setLoading(true);
+      setLoadingMessage('Loading all batches for grouped view...');
+
+      const search = batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
+      const all = await batchService.getBatchesAll(
+        {
+          sort_by: 'created_at',
+          sort_order: 'desc',
+          ...(search ? { search } : {}),
+        },
+        {
+          per_page: 100,
+          // Safety caps (still effectively "all" for most shops)
+          max_items: 50000,
+          max_pages: 800,
+        }
+      );
+      setBatches(Array.isArray(all) ? all : []);
+    } catch (err) {
+      console.error('Error loading grouped batches:', err);
+      showToast('Failed to load batches', 'error');
+    } finally {
+      setLoading(false);
+      setLoadingMessage('');
+    }
+  };
+
+  // Reload list when view / search / pagination changes (debounced for search typing)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (viewMode === 'flat') {
+        loadFlatBatches({ page: flatPage, per_page: flatPerPage });
+      } else {
+        loadGroupedBatches();
+      }
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, batchSearchQuery, flatPage, flatPerPage]);
+
+  // Reset paging when search / view changes
+  useEffect(() => {
+    setFlatPage(1);
+    setGroupPage(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchSearchQuery, viewMode]);
 
   const openProductListForSelection = () => {
     router.push('/product/list?selectMode=true&redirect=/product/batch');
@@ -184,8 +292,13 @@ export default function BatchPage() {
 
       const response = await batchService.createBatch(batchData);
 
-      // Reload batches to get the newly created batch with barcodes
-      await loadInitialData();
+      // Reload list to include newly created batch
+      if (viewMode === 'flat') {
+        setFlatPage(1);
+        await loadFlatBatches({ page: 1, per_page: flatPerPage });
+      } else {
+        await loadGroupedBatches();
+      }
 
       showToast(
         `Batch created successfully! ${response.data?.barcodes_generated ?? ''} barcode(s) generated.`,
@@ -309,7 +422,13 @@ export default function BatchPage() {
         }
       }
 
-      await loadInitialData();
+      // Reload list to include newly created batches
+      if (viewMode === 'flat') {
+        setFlatPage(1);
+        await loadFlatBatches({ page: 1, per_page: flatPerPage });
+      } else {
+        await loadGroupedBatches();
+      }
 
       // Keep only failed rows so user can retry quickly
       setQueuedBatches(failed);
@@ -347,8 +466,17 @@ export default function BatchPage() {
   const handleDeleteBatch = async (batchId: number) => {
     try {
       await batchService.deleteBatch(batchId);
+      // Keep UI snappy, then refresh counts/pagination
       setBatches((prev) => prev.filter((b) => b.id !== batchId));
       showToast('Batch deactivated successfully', 'success');
+
+      if (viewMode === 'flat') {
+        // Reload current page (or previous if this page becomes empty)
+        const nextPage = Math.min(flatPagination.last_page || flatPage, flatPage);
+        await loadFlatBatches({ page: nextPage, per_page: flatPerPage });
+      } else {
+        await loadGroupedBatches();
+      }
     } catch (err: any) {
       console.error('Failed to delete batch:', err);
       const errorMsg = err.response?.data?.message || 'Failed to delete batch';
@@ -502,15 +630,31 @@ export default function BatchPage() {
                   {viewMode === 'grouped' ? 'Products (Grouped by SKU)' : 'Recent Batches'}
                 </h2>
                 <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {viewMode === 'grouped'
-                    ? `${skuGroups.length} product group${skuGroups.length !== 1 ? 's' : ''}`
-                    : `${filteredBatches.length} batch${filteredBatches.length !== 1 ? 'es' : ''}`}
-                  {batchSearchQuery.trim() ? <span className="ml-1">(filtered)</span> : null}
+                  {viewMode === 'grouped' ? (
+                    <>
+                      {skuGroups.length} product group{skuGroups.length !== 1 ? 's' : ''}
+                      {skuGroups.length > groupsPerPage ? (
+                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                          (showing {(Math.max(1, groupPage) - 1) * groupsPerPage + 1}–{Math.min(groupPage * groupsPerPage, skuGroups.length)} of {skuGroups.length})
+                        </span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      {flatPagination.total} batch{flatPagination.total !== 1 ? 'es' : ''}
+                      {flatPagination.total ? (
+                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
+                          (showing {flatPagination.from}–{flatPagination.to})
+                        </span>
+                      ) : null}
+                    </>
+                  )}
+                  {batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null}
                 </span>
               </div>
 
               {/* View toggle */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setViewMode('grouped')}
                   className={`px-3 py-2 rounded-lg text-sm font-medium border transition ${
@@ -531,6 +675,35 @@ export default function BatchPage() {
                 >
                   Flat
                 </button>
+
+                {/* Per-page controls */}
+                {viewMode === 'flat' ? (
+                  <div className="flex items-center gap-2 ml-1">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Per page</span>
+                    <select
+                      value={flatPerPage}
+                      onChange={(e) => setFlatPerPage(Number(e.target.value) || 50)}
+                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    >
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 ml-1">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Groups/page</span>
+                    <select
+                      value={groupsPerPage}
+                      onChange={(e) => setGroupsPerPage(Number(e.target.value) || 12)}
+                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                    >
+                      <option value={6}>6</option>
+                      <option value={12}>12</option>
+                      <option value={24}>24</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
               {/* Search (Product-wise / Batch-wise) */}
@@ -570,13 +743,70 @@ export default function BatchPage() {
                   </p>
                 </div>
               ) : viewMode === 'grouped' ? (
-                skuGroups.map((g) => <GroupedBatchCard key={g.sku || String(g.variants?.[0]?.productId || Math.random())} group={g} />)
+                pagedSkuGroups.map((g) => <GroupedBatchCard key={g.sku || String(g.variants?.[0]?.productId || Math.random())} group={g} />)
               ) : (
                 filteredBatches.map((batch) => (
                   <BatchCard key={batch.id} batch={batch} onDelete={handleDeleteBatch} onEdit={handleEditBatch} />
                 ))
               )}
             </div>
+
+            {/* Pagination controls */}
+            {viewMode === 'flat' && flatPagination.last_page > 1 ? (
+              <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Page <span className="font-semibold text-gray-900 dark:text-white">{flatPagination.current_page}</span> /{' '}
+                  <span className="font-semibold text-gray-900 dark:text-white">{flatPagination.last_page}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFlatPage((p) => Math.max(1, p - 1))}
+                    disabled={flatPagination.current_page <= 1 || loading}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFlatPage((p) => Math.min(flatPagination.last_page || p + 1, p + 1))}
+                    disabled={flatPagination.current_page >= flatPagination.last_page || loading}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {viewMode === 'grouped' && skuGroups.length > groupsPerPage ? (
+              <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  Page <span className="font-semibold text-gray-900 dark:text-white">{Math.min(groupLastPage, Math.max(1, groupPage))}</span> /{' '}
+                  <span className="font-semibold text-gray-900 dark:text-white">{groupLastPage}</span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setGroupPage((p) => Math.max(1, p - 1))}
+                    disabled={groupPage <= 1 || loading}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGroupPage((p) => Math.min(groupLastPage, p + 1))}
+                    disabled={groupPage >= groupLastPage || loading}
+                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </main>
         </div>
       </div>
