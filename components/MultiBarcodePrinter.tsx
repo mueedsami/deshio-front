@@ -41,7 +41,7 @@ async function ensureQZConnection() {
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300;
-const SHIFT_X_MM = 2; // move right by 2mm (per your latest request)
+const SHIFT_X_MM = 0; // move right by 2mm (per your latest request)
 
 function mmToIn(mm: number) {
   return mm / 25.4;
