@@ -41,7 +41,8 @@ async function ensureQZConnection() {
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300;
-const SHIFT_X_MM = 0; // move right by 2mm (per your latest request)
+const TOP_GAP_MM = 0.5; // extra blank gap at the very top
+const SHIFT_X_MM = 0; // keep 0 for perfect centering (BatchPrinter-style)
 
 function mmToIn(mm: number) {
   return mm / 25.4;
@@ -101,6 +102,23 @@ function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: num
   return [line1, line2] as const;
 }
 
+
+function splitByFirstDash(text: string) {
+  const clean = (text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return null;
+
+  // Support common dash variants: -, – (en dash), — (em dash)
+  const m = clean.match(/[-–—]/);
+  if (!m || m.index === undefined) return null;
+
+  const idx = m.index;
+  const left = clean.slice(0, idx).trim();
+  const right = clean.slice(idx + 1).trim();
+  if (!left || !right) return null;
+
+  return [left, right] as const;
+}
+
 // Exported so other pages (e.g., Purchase Order) can one-click print a single label
 // while still using the same pixel-perfect label renderer.
 export async function renderBarcodeLabelBase64(opts: {
@@ -129,6 +147,8 @@ export async function renderBarcodeLabelBase64(opts: {
   ctx.fillRect(0, 0, wPx, hPx);
 
   const pad = Math.round(wPx * 0.04);
+  const topGapPx = Math.round((TOP_GAP_MM / 25.4) * dpi);
+  const topPad = pad + topGapPx;
   const shiftPx = Math.round((SHIFT_X_MM / 25.4) * dpi);
   const centerX = wPx / 2 + shiftPx;
 
@@ -137,31 +157,57 @@ export async function renderBarcodeLabelBase64(opts: {
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`;
-  ctx.fillText("Deshio", centerX, pad);
+  ctx.fillText("Deshio", centerX, topPad);
 
-  // Product name (wrap to 2 lines)
-  const nameY = pad + Math.round(hPx * 0.14);
+  // Product name
+  // Prefer splitting at the FIRST "-" so names like "shirt-red-40" become:
+  // line1: "shirt"  |  line2: "red-40"
+  const nameY = topPad + Math.round(hPx * 0.14);
   const nameMaxW = wPx - pad * 2;
-  let nameFont = Math.round(hPx * 0.09);
-  ctx.font = `700 ${nameFont}px Arial`;
-
-  let [name1, name2] = wrapTwoLines(ctx, (opts.productName || "Product").trim(), nameMaxW);
-  if (name2) {
-    nameFont = Math.round(hPx * 0.082);
-    ctx.font = `700 ${nameFont}px Arial`;
-    ;[name1, name2] = wrapTwoLines(ctx, (opts.productName || "Product").trim(), nameMaxW);
-  }
-
-  ctx.fillText(name1, centerX, nameY);
   const lineGap = Math.max(2, Math.round(hPx * 0.01));
-  let afterNameBottom = nameY + nameFont;
-  if (name2) {
-    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
-    afterNameBottom = nameY + (nameFont + lineGap) * 2;
-  }
-  const afterNameY = afterNameBottom + Math.round(hPx * 0.03);
+  const fullName = (opts.productName || "Product").trim();
 
-  const JsBarcode = (window as any).JsBarcode;
+  let name1 = "";
+  let name2 = "";
+  let afterNameY = 0;
+
+  const dashSplit = splitByFirstDash(fullName);
+  if (dashSplit) {
+    // Always render in 2 lines (slightly smaller font)
+    ;[name1, name2] = dashSplit;
+    const nameFont = Math.round(hPx * 0.082);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    name1 = fitText(ctx, name1, nameMaxW);
+    name2 = fitText(ctx, name2, nameMaxW);
+
+    ctx.fillText(name1, centerX, nameY);
+    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+
+    afterNameY = nameY + (nameFont + lineGap) * 2 + Math.round(hPx * 0.03);
+  } else {
+    // Fallback: word-based wrap (original behavior)
+    let nameFont = Math.round(hPx * 0.09);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    ;[name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    if (name2) {
+      nameFont = Math.round(hPx * 0.082);
+      ctx.font = `700 ${nameFont}px Arial`;
+      ;[name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    }
+
+    ctx.fillText(name1, centerX, nameY);
+
+    let afterNameBottom = nameY + nameFont;
+    if (name2) {
+      ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+      afterNameBottom = nameY + (nameFont + lineGap) * 2;
+    }
+    afterNameY = afterNameBottom + Math.round(hPx * 0.03);
+  }
+
+const JsBarcode = (window as any).JsBarcode;
   const maxBcW = Math.round((wPx - pad * 2) * 0.98);
   const maxBcH = Math.round(hPx * 0.56);
   const bcHeight = Math.round(hPx * 0.28);
@@ -194,7 +240,7 @@ export async function renderBarcodeLabelBase64(opts: {
     break;
   }
 
-  const bcY = Math.max(pad + Math.round(hPx * 0.27), Math.round(afterNameY));
+  const bcY = Math.max(topPad + Math.round(hPx * 0.27), Math.round(afterNameY));
   const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
   const drawW = Math.round(bcCanvas.width * scale);
   const drawH = Math.round(bcCanvas.height * scale);
