@@ -1,4 +1,5 @@
 "use client";
+
 import React, { useState, useEffect } from "react";
 import BarcodeSelectionModal from "./BarcodeSelectionModal";
 import { barcodeTrackingService } from "@/services/barcodeTrackingService";
@@ -34,7 +35,7 @@ async function ensureQZConnection() {
   }
 
   // If already connected, return immediately
-  if (qzConnected && await qz.websocket.isActive()) {
+  if (qzConnected && (await qz.websocket.isActive())) {
     return;
   }
 
@@ -62,11 +63,12 @@ async function ensureQZConnection() {
   return qzConnectionPromise;
 }
 
-
-// Label geometry
+// Label geometry (match MultiBarcodePrinter)
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
+const TOP_GAP_MM = 1; // extra blank gap at the very top (same as Multi)
+const SHIFT_X_MM = 0; // keep 0 for perfect centering (Batch/Multi-style)
 
 function mmToIn(mm: number) {
   return mm / 25.4;
@@ -74,27 +76,73 @@ function mmToIn(mm: number) {
 
 async function ensureJsBarcode() {
   // QzTrayLoader loads JsBarcode globally, but keep a fallback for safety.
-  if (typeof window === 'undefined') return;
+  if (typeof window === "undefined") return;
   if ((window as any).JsBarcode) return;
 
   await new Promise<void>((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js";
     s.async = true;
     s.onload = () => resolve();
-    s.onerror = () => reject(new Error('Failed to load JsBarcode'));
+    s.onerror = () => reject(new Error("Failed to load JsBarcode"));
     document.head.appendChild(s);
   });
 }
 
 function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const ellipsis = '…';
+  const ellipsis = "…";
   if (ctx.measureText(text).width <= maxWidth) return text;
   let t = text;
   while (t.length > 0 && ctx.measureText(t + ellipsis).width > maxWidth) {
     t = t.slice(0, -1);
   }
-  return t.length ? (t + ellipsis) : '';
+  return t.length ? t + ellipsis : "";
+}
+
+function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const clean = (text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return ["", ""] as const;
+  if (ctx.measureText(clean).width <= maxWidth) return [clean, ""] as const;
+
+  const words = clean.split(" ");
+  if (words.length <= 1) {
+    let line1 = clean;
+    while (line1.length > 0 && ctx.measureText(line1).width > maxWidth) {
+      line1 = line1.slice(0, -1);
+    }
+    const rest = clean.slice(line1.length).trim();
+    const line2 = rest ? fitText(ctx, rest, maxWidth) : "";
+    return [line1 || fitText(ctx, clean, maxWidth), line2] as const;
+  }
+
+  let line1 = "";
+  let i = 0;
+  for (; i < words.length; i++) {
+    const test = line1 ? `${line1} ${words[i]}` : words[i];
+    if (ctx.measureText(test).width <= maxWidth) line1 = test;
+    else break;
+  }
+
+  if (!line1) return [fitText(ctx, clean, maxWidth), ""] as const;
+  const line2Raw = words.slice(i).join(" ").trim();
+  const line2 = line2Raw ? fitText(ctx, line2Raw, maxWidth) : "";
+  return [line1, line2] as const;
+}
+
+function splitByFirstDash(text: string) {
+  const clean = (text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return null;
+
+  // Support common dash variants: -, – (en dash), — (em dash)
+  const m = clean.match(/[-–—]/);
+  if (!m || m.index === undefined) return null;
+
+  const idx = m.index;
+  const left = clean.slice(0, idx).trim();
+  const right = clean.slice(idx + 1).trim();
+  if (!left || !right) return null;
+
+  return [left, right] as const;
 }
 
 async function renderLabelBase64(opts: {
@@ -111,59 +159,101 @@ async function renderLabelBase64(opts: {
   const wPx = Math.max(50, Math.round(wIn * dpi));
   const hPx = Math.max(50, Math.round(hIn * dpi));
 
-  const canvas = document.createElement('canvas');
+  const canvas = document.createElement("canvas");
   canvas.width = wPx;
   canvas.height = hPx;
 
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas not supported');
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not supported");
 
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, wPx, hPx);
 
   const pad = Math.round(wPx * 0.04); // ~4%
-  const centerX = wPx / 2;
+  const topGapPx = Math.round((TOP_GAP_MM / 25.4) * dpi);
+  const topPad = pad + topGapPx;
+  const shiftPx = Math.round((SHIFT_X_MM / 25.4) * dpi);
+  const centerX = wPx / 2 + shiftPx;
 
   // Brand
-  ctx.fillStyle = '#000';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`; // ~22px @ 200px
-  ctx.fillText('Deshio', centerX, pad);
+  ctx.fillStyle = "#000";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`;
+  ctx.fillText("Deshio", centerX, topPad);
 
-  // Product name
-  const nameY = pad + Math.round(hPx * 0.14);
-  ctx.font = `700 ${Math.round(hPx * 0.09)}px Arial`; // ~18px
-  const safeName = fitText(ctx, (opts.productName || 'Product').trim(), wPx - pad * 2);
-  ctx.fillText(safeName, centerX, nameY);
+  // Product name (match Multi)
+  const nameY = topPad + Math.round(hPx * 0.14);
+  const nameMaxW = wPx - pad * 2;
+  const lineGap = Math.max(2, Math.round(hPx * 0.01));
+  const fullName = (opts.productName || "Product").trim();
 
-  // Barcode (pixel-perfect): JsBarcode will override canvas.width/height based on content.
-  // So we render, then center it horizontally and scale down ONLY if it would overflow.
+  let name1 = "";
+  let name2 = "";
+  let afterNameY = 0;
+
+  const dashSplit = splitByFirstDash(fullName);
+  if (dashSplit) {
+    // Always render in 2 lines (same as Multi)
+    [name1, name2] = dashSplit;
+
+    const nameFont = Math.round(hPx * 0.082);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    name1 = fitText(ctx, name1, nameMaxW);
+    name2 = fitText(ctx, name2, nameMaxW);
+
+    ctx.fillText(name1, centerX, nameY);
+    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+
+    afterNameY = nameY + (nameFont + lineGap) * 2 + Math.round(hPx * 0.03);
+  } else {
+    // Fallback: word-based wrap (same as your Multi)
+    let nameFont = Math.round(hPx * 0.095);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    if (name2) {
+      nameFont = Math.round(hPx * 0.082);
+      ctx.font = `700 ${nameFont}px Arial`;
+      [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    }
+
+    ctx.fillText(name1, centerX, nameY);
+
+    let afterNameBottom = nameY + nameFont;
+    if (name2) {
+      ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+      afterNameBottom = nameY + (nameFont + lineGap) * 2;
+    }
+    afterNameY = afterNameBottom + Math.round(hPx * 0.03);
+  }
+
+  // Barcode
   const JsBarcode = (window as any).JsBarcode;
 
-  // Slightly larger barcode + number (still safe within 39x25mm)
-  const maxBcW = Math.round((wPx - pad * 2) * 0.97);
+  const maxBcW = Math.round((wPx - pad * 2) * 0.98);
   const maxBcH = Math.round(hPx * 0.56);
   const bcHeight = Math.round(hPx * 0.28);
   const bcFontSize = Math.round(hPx * 0.09);
 
   const renderBarcodeCanvas = (barWidth: number) => {
-    const c = document.createElement('canvas');
+    const c = document.createElement("canvas");
     JsBarcode(c, opts.code, {
-      format: 'CODE128',
+      format: "CODE128",
       width: Math.max(1, Math.floor(barWidth)),
       height: bcHeight,
       displayValue: true,
       fontSize: bcFontSize,
-      fontOptions: 'bold',
+      fontOptions: "bold",
       textMargin: 0,
       margin: 0,
     });
     return c;
   };
 
-  // Pick the largest integer barWidth that fits (keeps prints crisp on thermal printers)
+  // Pick the largest integer barWidth that fits (crisp thermal output)
   let bw = 1;
   let bcCanvas = renderBarcodeCanvas(bw);
   while (bw < 6) {
@@ -176,25 +266,24 @@ async function renderLabelBase64(opts: {
     break;
   }
 
-  const bcY = pad + Math.round(hPx * 0.27);
+  const bcY = Math.max(topPad + Math.round(hPx * 0.27), Math.round(afterNameY));
   const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
   const drawW = Math.round(bcCanvas.width * scale);
   const drawH = Math.round(bcCanvas.height * scale);
-  const bcX = Math.round((wPx - drawW) / 2);
+  const bcX = Math.round((wPx - drawW) / 2 + shiftPx);
 
-  // Keep it crisp on thermal printers
   ctx.imageSmoothingEnabled = false;
   ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
 
   // Price
-  const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString('en-BD')}`;
-  ctx.textBaseline = 'bottom';
+  const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
+  ctx.textBaseline = "bottom";
   ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
   const priceY = hPx - pad;
   ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
 
-  const dataUrl = canvas.toDataURL('image/png');
-  return dataUrl.split(',')[1];
+  const dataUrl = canvas.toDataURL("image/png");
+  return dataUrl.split(",")[1];
 }
 
 export default function BatchPrinter({ batch, product, barcodes: externalBarcodes }: BatchPrinterProps) {
@@ -212,13 +301,13 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
 
     const checkQZ = () => {
       attempts++;
-      
+
       if (typeof window !== "undefined" && (window as any).qz) {
         console.log("✅ QZ Tray library loaded");
         setIsQzLoaded(true);
         return true;
       }
-      
+
       return false;
     };
 
@@ -243,17 +332,13 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     }
   }, [externalBarcodes]);
 
-  // Don't load printer automatically - only when user clicks print
-
   const loadDefaultPrinter = async () => {
     try {
       const qz = (window as any).qz;
       if (!qz) return;
 
-      // Use singleton connection
       await ensureQZConnection();
 
-      // Get default printer
       try {
         const printer = await qz.printers.getDefault();
         console.log("✅ Default printer loaded:", printer);
@@ -261,8 +346,7 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
         setPrinterError(null);
       } catch (err: any) {
         console.error("❌ No default printer found:", err);
-        
-        // Try to get first available printer as fallback
+
         try {
           const printers = await qz.printers.find();
           if (printers && printers.length > 0) {
@@ -285,7 +369,6 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
 
   // Fetch barcodes from backend when modal opens (only if not provided externally)
   const fetchBarcodes = async () => {
-    // If barcodes are already provided from parent, don't fetch
     if (externalBarcodes && externalBarcodes.length > 0) {
       setBarcodes(externalBarcodes);
       return;
@@ -300,15 +383,13 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
     setBarcodeError(null);
 
     try {
-      // Use batch-specific endpoint instead of product endpoint
       const response = await barcodeTrackingService.getBatchBarcodes(batch.id);
-      
+
       if (response.success && response.data.barcodes) {
-        // Extract active barcode strings from the response
         const barcodeCodes = response.data.barcodes
           .filter((b) => b.is_active)
           .map((b) => b.barcode);
-        
+
         if (barcodeCodes.length === 0) {
           setBarcodeError("No active barcodes found for this batch");
         } else {
@@ -328,88 +409,83 @@ export default function BatchPrinter({ batch, product, barcodes: externalBarcode
 
   const handleOpenModal = async () => {
     setIsModalOpen(true);
-    
-    // Load printer when user actually wants to print
+
     if (!defaultPrinter && isQzLoaded) {
       await loadDefaultPrinter();
     }
-    
+
     if (!externalBarcodes || externalBarcodes.length === 0) {
       fetchBarcodes();
     }
   };
 
-  const handleQZPrint = async (
-    selected: string[],
-    quantities: Record<string, number>
-  ) => {
+  const handleQZPrint = async (selected: string[], quantities: Record<string, number>) => {
     const qz = (window as any).qz;
-    
+
     if (!qz) {
       alert("QZ Tray library not loaded. Please refresh the page or install QZ Tray.");
       return;
     }
 
-    // Load printer if not already loaded
     if (!defaultPrinter) {
       console.log("Loading printer before print...");
       await loadDefaultPrinter();
     }
 
-    // Check if printer is available after loading
     if (!defaultPrinter) {
       alert("No printer available. Please check your printer settings and try again.");
       return;
     }
 
     try {
-      // Use singleton connection
       await ensureQZConnection();
 
-// Print as a pixel-perfect image instead of HTML.
-// HTML printing can be affected by OS/browser scaling and may clip on small labels.
-// Pixel printing lets us control exact label dimensions.
-const dpi = DEFAULT_DPI;
-const config = qz.configs.create(defaultPrinter, {
-  units: 'in',
-  size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
-  margins: { top: 0, right: 0, bottom: 0, left: 0 },
-  density: dpi,
-  colorType: 'blackwhite',
-  interpolation: 'nearest-neighbor',
-  scaleContent: false,
-});
-console.log(`Using printer: ${defaultPrinter}`);
+      const dpi = DEFAULT_DPI;
+      const config = qz.configs.create(defaultPrinter, {
+        units: "in",
+        size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
+        density: dpi,
+        colorType: "blackwhite",
+        interpolation: "nearest-neighbor",
+        scaleContent: false,
+      });
 
-const data: any[] = [];
-for (const code of selected) {
-  const qty = quantities[code] || 1;
-  for (let i = 0; i < qty; i++) {
-    const base64 = await renderLabelBase64({
-      code,
-      productName: (product?.name || 'Product').substring(0, 28),
-      price: batch.sellingPrice,
-      dpi,
-    });
-    data.push({
-      type: 'pixel',
-      format: 'image',
-      flavor: 'base64',
-      data: base64,
-    });
-  }
-}
+      console.log(`Using printer: ${defaultPrinter}`);
 
-console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
+      const data: any[] = [];
+      for (const code of selected) {
+        const qty = quantities[code] || 1;
+        for (let i = 0; i < qty; i++) {
+          const base64 = await renderLabelBase64({
+            code,
+            // NOTE: no substring here so dash-split + ellipsis works properly
+            productName: product?.name || "Product",
+            price: batch.sellingPrice,
+            dpi,
+          });
 
-await qz.print(config, data);
+          data.push({
+            type: "pixel",
+            format: "image",
+            flavor: "base64",
+            data: base64,
+          });
+        }
+      }
+
+      console.log(`📄 Printing ${data.length} labels to printer: ${defaultPrinter}`);
+
+      await qz.print(config, data);
       alert(`✅ ${data.length} barcode(s) sent to printer "${defaultPrinter}" successfully!`);
       setIsModalOpen(false);
     } catch (err: any) {
       console.error("❌ Print error:", err);
-      
+
       if (err.message && err.message.includes("Unable to establish connection")) {
-        alert("QZ Tray is not running. Please start QZ Tray and try again.\n\nDownload from: https://qz.io/download/");
+        alert(
+          "QZ Tray is not running. Please start QZ Tray and try again.\n\nDownload from: https://qz.io/download/"
+        );
       } else if (err.message && err.message.includes("printer must be specified")) {
         alert("Printer not properly configured. Reloading printer settings...");
         await loadDefaultPrinter();
@@ -420,12 +496,10 @@ await qz.print(config, data);
   };
 
   const canPrint = isQzLoaded;
-  const buttonText = !isQzLoaded 
-    ? "QZ Tray Not Detected" 
-    : "Print Barcodes";
+  const buttonText = !isQzLoaded ? "QZ Tray Not Detected" : "Print Barcodes";
 
-  const buttonTitle = !isQzLoaded 
-    ? "QZ Tray not detected. Install QZ Tray to enable printing." 
+  const buttonTitle = !isQzLoaded
+    ? "QZ Tray not detected. Install QZ Tray to enable printing."
     : defaultPrinter
     ? `Print barcodes using ${defaultPrinter}`
     : "Print barcodes";
