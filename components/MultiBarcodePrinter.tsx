@@ -41,7 +41,7 @@ async function ensureQZConnection() {
 const LABEL_WIDTH_MM = 39;
 const LABEL_HEIGHT_MM = 25;
 const DEFAULT_DPI = 300;
-const TOP_GAP_MM = 0.5; // extra blank gap at the very top
+const TOP_GAP_MM = 1; // extra blank gap at the very top
 const SHIFT_X_MM = 0; // keep 0 for perfect centering (BatchPrinter-style)
 
 function mmToIn(mm: number) {
@@ -187,7 +187,7 @@ export async function renderBarcodeLabelBase64(opts: {
     afterNameY = nameY + (nameFont + lineGap) * 2 + Math.round(hPx * 0.03);
   } else {
     // Fallback: word-based wrap (original behavior)
-    let nameFont = Math.round(hPx * 0.09);
+    let nameFont = Math.round(hPx * 0.095);
     ctx.font = `700 ${nameFont}px Arial`;
 
     ;[name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
