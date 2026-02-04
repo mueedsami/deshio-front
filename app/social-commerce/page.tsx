@@ -30,7 +30,7 @@ interface DefectItem {
 interface CartProduct {
   id: number | string;
   product_id: number;
-  batch_id: number;
+  batch_id: number | null;
   productName: string;
   quantity: number;
   unit_price: number;
@@ -393,25 +393,91 @@ export default function SocialCommercePage() {
     const bn = String(batch?.batch_number ?? '').toLowerCase();
     return name.includes(needle) || sku.includes(needle) || bn.includes(needle);
   };
+  const buildProductResultsFromBatches = (
+    batches: any[],
+    options?: {
+      productOverrides?: Map<number, any>;
+      relevanceOverrides?: Map<number, { score: number; stage: string }>;
+      defaultStage?: string;
+      defaultScore?: number;
+    }
+  ) => {
+    const byProduct = new Map<number, any>();
+    const productOverrides = options?.productOverrides;
+    const relevanceOverrides = options?.relevanceOverrides;
+    const defaultStage = options?.defaultStage ?? 'local';
+    const defaultScore = options?.defaultScore ?? 0;
 
-  const buildSearchResultItem = (batch: any, prod: any, imageUrl: string, relevance_score: number, search_stage: string) => {
-    const pid = prod?.id ?? batch.product?.id ?? batch.product_id;
-    return {
-      id: pid,
-      name: prod?.name || batch.product?.name || batch.product_name || 'Unknown product',
-      sku: prod?.sku || batch.product?.sku || batch.product_sku || '',
-      batchId: batch.id,
-      batchNumber: batch.batch_number,
-      attributes: {
-        Price: parseSellPrice(batch.sell_price ?? 0),
-        mainImage: imageUrl,
-      },
-      available: batch.quantity,
-      expiryDate: batch.expiry_date,
-      daysUntilExpiry: batch.days_until_expiry,
-      relevance_score: relevance_score || 0,
-      search_stage: search_stage || 'api',
-    };
+    for (const b of batches || []) {
+      const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
+      if (!pid) continue;
+
+      const prod = productOverrides?.get(pid) ?? b?.product ?? {};
+      const name = String(prod?.name ?? b?.product_name ?? 'Unknown product');
+      const sku = String(prod?.sku ?? b?.product_sku ?? '');
+      const imageUrl = getProductCardImage(prod);
+
+      const sellPrice = parseSellPrice(b?.sell_price ?? b?.sellPrice ?? 0);
+      const qty = Math.max(0, Number(b?.quantity ?? 0) || 0);
+
+      const daysRaw = b?.days_until_expiry ?? b?.daysUntilExpiry ?? null;
+      const days = typeof daysRaw === 'number' && Number.isFinite(daysRaw) ? daysRaw : null;
+
+      const rel = relevanceOverrides?.get(pid);
+
+      const existing = byProduct.get(pid);
+      if (!existing) {
+        byProduct.set(pid, {
+          id: pid,
+          name,
+          sku,
+          // ✅ Price used for the order (we keep the MIN sell price across batches by default)
+          attributes: {
+            Price: sellPrice,
+            mainImage: imageUrl,
+          },
+          available: qty, // total stock across ALL batches (summed)
+          minPrice: sellPrice,
+          maxPrice: sellPrice,
+          batchesCount: 1,
+          expiryDate: b?.expiry_date ?? b?.expiryDate ?? null,
+          daysUntilExpiry: days,
+          // keep relevance/stage for sorting + debugging
+          relevance_score: rel?.score ?? Number((prod as any)?.relevance_score ?? defaultScore) ?? defaultScore,
+          search_stage: rel?.stage ?? String((prod as any)?.search_stage ?? defaultStage),
+        });
+      } else {
+        existing.available += qty;
+        existing.batchesCount += 1;
+
+        if (sellPrice < existing.minPrice) {
+          existing.minPrice = sellPrice;
+          existing.attributes.Price = sellPrice;
+        }
+        if (sellPrice > existing.maxPrice) {
+          existing.maxPrice = sellPrice;
+        }
+
+        if (days !== null) {
+          if (existing.daysUntilExpiry === null || days < existing.daysUntilExpiry) {
+            existing.daysUntilExpiry = days;
+            existing.expiryDate = b?.expiry_date ?? b?.expiryDate ?? existing.expiryDate;
+          }
+        }
+      }
+    }
+
+    return Array.from(byProduct.values());
+  };
+
+  const formatPriceRangeLabel = (p: any) => {
+    const minP = Number(p?.minPrice ?? p?.attributes?.Price ?? 0);
+    const maxP = Number(p?.maxPrice ?? p?.attributes?.Price ?? minP);
+    if (Number.isFinite(minP) && Number.isFinite(maxP) && minP !== maxP) {
+      return `${minP} - ${maxP} Tk`;
+    }
+    const v = Number(p?.attributes?.Price ?? minP);
+    return `${Number.isFinite(v) ? v : 0} Tk`;
   };
 
   const calculateAmount = (basePrice: number, qty: number, discPer: number, discTk: number) => {
@@ -575,7 +641,7 @@ export default function SocialCommercePage() {
             id: Date.now(),
             product_id: defect.productId,
             batch_id: defect.batchId,
-            productName: `${defect.productName} [DEFECTIVE]`,
+            productName: `${selectedProduct.name}`,
             quantity: 1,
             unit_price: defect.sellingPrice || 0,
             discount_amount: 0,
@@ -728,9 +794,7 @@ export default function SocialCommercePage() {
             return withinPriceRange(price, min, max);
           });
 
-          const results = filtered.map((b: any) =>
-            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'price')
-          );
+          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'price', defaultScore: 0 });
 
           results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
           setSearchResults(results);
@@ -744,9 +808,7 @@ export default function SocialCommercePage() {
             return withinPriceRange(price, min, max);
           });
 
-          const results = filtered.map((b: any) =>
-            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'local')
-          );
+          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'local', defaultScore: 0 });
 
           results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
           setSearchResults(results);
@@ -774,8 +836,15 @@ export default function SocialCommercePage() {
         }
 
         const productMap = new Map<number, any>();
+        const relevanceMap = new Map<number, { score: number; stage: string }>();
         for (const h of hits) {
-          if (h?.id) productMap.set(Number(h.id), h);
+          if (!h?.id) continue;
+          const pid = Number(h.id);
+          productMap.set(pid, h);
+          relevanceMap.set(pid, {
+            score: Number((h as any)?.relevance_score ?? 0) || 0,
+            stage: String((h as any)?.search_stage ?? 'advanced'),
+          });
         }
 
         const filteredBatches = batches.filter((b: any) => {
@@ -785,12 +854,11 @@ export default function SocialCommercePage() {
           return withinPriceRange(price, min, max);
         });
 
-        const results = filteredBatches.map((b: any) => {
-          const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
-          const prod = productMap.get(pid) ?? b.product;
-          const score = Number((productMap.get(pid) as any)?.relevance_score ?? 0);
-          const stage = String((productMap.get(pid) as any)?.search_stage ?? 'advanced');
-          return buildSearchResultItem(b, prod, getProductCardImage(prod), score, stage);
+        const results = buildProductResultsFromBatches(filteredBatches, {
+          productOverrides: productMap,
+          relevanceOverrides: relevanceMap,
+          defaultStage: 'advanced',
+          defaultScore: 0,
         });
 
         // Sort: best match first, then cheaper batches first
@@ -821,9 +889,7 @@ export default function SocialCommercePage() {
             return withinPriceRange(price, min, max);
           });
 
-          const results = filtered.map((b: any) =>
-            buildSearchResultItem(b, b.product, getProductCardImage(b.product), 0, 'fallback')
-          );
+          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'fallback', defaultScore: 0 });
           setSearchResults(results);
         } catch {
           setSearchResults([]);
@@ -873,7 +939,7 @@ export default function SocialCommercePage() {
     const discTk = parseFloat(discountTk) || 0;
 
     if (qty > selectedProduct.available && !selectedProduct.isDefective) {
-      alert(`Only ${selectedProduct.available} units available for this batch`);
+      alert(`Only ${selectedProduct.available} units available in this store`);
       return;
     }
 
@@ -884,8 +950,8 @@ export default function SocialCommercePage() {
     const newItem: CartProduct = {
       id: Date.now(),
       product_id: selectedProduct.id,
-      batch_id: selectedProduct.batchId,
-      productName: `${selectedProduct.name}${selectedProduct.batchNumber ? ` (Batch: ${selectedProduct.batchNumber})` : ''}`,
+      batch_id: null,
+      productName: `${selectedProduct.name}`,
       quantity: qty,
       unit_price: price,
       discount_amount: discountValue,
@@ -1081,7 +1147,7 @@ export default function SocialCommercePage() {
           .filter((item) => !item.isService)
           .map((item) => ({
             product_id: item.product_id,
-            batch_id: item.batch_id,
+            ...(item.batch_id ? { batch_id: item.batch_id } : {}),
             quantity: item.quantity,
             unit_price: item.unit_price,
             discount_amount: item.discount_amount,
@@ -1655,7 +1721,7 @@ export default function SocialCommercePage() {
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-60 md:max-h-80 overflow-y-auto mb-4 p-1">
                         {searchResults.map((product) => (
                           <div
-                            key={`${product.id}-${product.batchId}`}
+                            key={`${product.id}`}
                             onClick={() => handleProductSelect(product)}
                             className="border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                           >
@@ -1667,13 +1733,13 @@ export default function SocialCommercePage() {
                             <p className="text-xs text-gray-900 dark:text-white font-medium truncate">
                               {product.name}
                             </p>
-                            {product.batchNumber && (
+                            {Number(product.batchesCount ?? 0) > 1 && (
                               <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
-                                Batch: {product.batchNumber}
+                                Batches: {product.batchesCount}
                               </p>
                             )}
                             <p className="text-xs text-gray-600 dark:text-gray-400">
-                              {product.attributes.Price} Tk
+                              {formatPriceRangeLabel(product)}
                             </p>
                             <p className="text-xs text-green-600 dark:text-green-400 mt-1">
                               Available: {product.available}
@@ -1712,13 +1778,13 @@ export default function SocialCommercePage() {
                           </button>
                         </div>
                         <p className="text-sm font-medium text-gray-900 dark:text-white">{selectedProduct.name}</p>
-                        {selectedProduct.batchNumber && (
+                        {Number((selectedProduct as any)?.batchesCount ?? 0) > 1 && (
                           <p className="text-sm text-blue-600 dark:text-blue-400">
-                            Batch: {selectedProduct.batchNumber}
+                            Batches: {(selectedProduct as any)?.batchesCount}
                           </p>
                         )}
                         <p className="text-sm text-gray-600 dark:text-gray-400">
-                          Price: {selectedProduct.attributes.Price} Tk
+                          Price: {formatPriceRangeLabel(selectedProduct)}
                         </p>
                         <p className="text-sm text-green-600 dark:text-green-400">
                           Available: {selectedProduct.available}

@@ -246,14 +246,19 @@ export default function WarehouseFulfillmentPage() {
     }
   };
 
-  const getItemThumbSrc = (productId?: number) => {
-    if (!productId) return '/placeholder-product.png';
-    return productThumbsById[productId] || '/placeholder-product.png';
+  const getItemThumbSrc = (productId?: any) => {
+    const id = Number(productId ?? 0) || 0;
+    if (!id) return '/placeholder-product.png';
+    return productThumbsById[id] || '/placeholder-product.png';
   };
 
   useEffect(() => {
     if (!orderDetails?.items) return;
-    ensureProductThumbs(orderDetails.items.map((it: any) => it.product_id));
+    ensureProductThumbs(
+      orderDetails.items
+        .map((it: any) => Number(it?.product_id ?? it?.product?.id ?? 0) || 0)
+        .filter((id: number) => id > 0)
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderDetails?.id]);
 
@@ -358,6 +363,7 @@ export default function WarehouseFulfillmentPage() {
 
   const handleBarcodeInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && currentBarcode.trim()) {
+      e.preventDefault();
       handleBarcodeScan(currentBarcode.trim());
       setCurrentBarcode('');
     }
@@ -858,7 +864,15 @@ if (!matchingItem) {
                                 <div className="flex-1">
                                   <h3 className="font-medium text-gray-900 dark:text-white">{item.product_name}</h3>
                                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">SKU: {item.product_sku}</p>
-                                {item.batch_number && <p className="text-xs text-gray-500 dark:text-gray-500">Batch: {item.batch_number}</p>}
+                                {(item.batch_number || item.batch_id || item.batchId || item?.batch?.id) ? (
+                                  <p className="text-xs text-gray-500 dark:text-gray-500">
+                                    Batch: {item.batch_number || item?.batch?.batch_number || item.batch_id || item.batchId || item?.batch?.id}
+                                  </p>
+                                ) : (
+                                  <p className="text-xs text-gray-500 dark:text-gray-500">
+                                    Batch: <span className="font-medium">Any</span> (assign on scan)
+                                  </p>
+                                )}
 
                                 {/* ✅ Fixed / Added pricing UI */}
                                 <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
@@ -956,12 +970,15 @@ if (!matchingItem) {
                   {/* Barcode Input */}
                   <div className="p-6 rounded-lg mb-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
                     <label className="block text-sm font-medium mb-2 text-gray-700 dark:text-gray-300">Scan or Enter Barcode</label>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                      Tip: If an item shows <span className="font-medium">Batch: Any</span>, you can scan <span className="font-medium">any barcode</span> for that product. The batch will be assigned automatically from the scanned barcode.
+                    </p>
                     <input
                       ref={barcodeInputRef}
                       type="text"
                       value={currentBarcode}
                       onChange={(e) => setCurrentBarcode(e.target.value)}
-                      onKeyPress={handleBarcodeInput}
+                      onKeyDown={handleBarcodeInput}
                       disabled={!isScanning}
                       placeholder={isScanning ? 'Scan barcode or type manually...' : 'Start scanning first'}
                       className={`w-full px-4 py-3 rounded-lg border-2 text-lg font-mono transition-all ${
