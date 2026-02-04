@@ -67,6 +67,14 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
   const [scanHistory, setScanHistory] = useState<ScanEntry[]>([]);
   const scanInputRef = useRef<HTMLInputElement | null>(null);
 
+  // IMPORTANT: hardware barcode scanners often "type" the next barcode instantly.
+  // If we lock the input while an API call is in-flight, subsequent scans are lost.
+  // So we keep a small in-memory queue and process scans sequentially.
+  const scanQueueRef = useRef<string[]>([]);
+  const scanQueueSetRef = useRef<Set<string>>(new Set());
+  const scanQueueProcessingRef = useRef(false);
+  const [queuedScanCount, setQueuedScanCount] = useState(0);
+
   const scannedSet = useMemo(() => {
     const s = new Set<string>();
     for (const it of scanHistory) s.add(it.barcode);
@@ -99,6 +107,11 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       setScanError(null);
       setScanning(false);
       setScanHistory([]);
+      // reset queued scans (otherwise pending scans from a previous open can leak)
+      scanQueueRef.current = [];
+      scanQueueSetRef.current = new Set();
+      scanQueueProcessingRef.current = false;
+      setQueuedScanCount(0);
     } else if (isOpen && defaultSourceStoreId) {
       setFormData(prev => ({
         ...prev,
@@ -120,6 +133,10 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
     setScanInput('');
     setScanError(null);
     setScanHistory([]);
+    scanQueueRef.current = [];
+    scanQueueSetRef.current = new Set();
+    scanQueueProcessingRef.current = false;
+    setQueuedScanCount(0);
   }, [formData.source_store_id]);
 
   const fetchAvailableBatches = async () => {
@@ -218,27 +235,27 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
     setBatchData(null);
   };
 
-  const handleBarcodeScan = async () => {
-    const value = scanInput.trim();
-    if (!value) return;
+  const scanOneBarcode = async (value: string) => {
+    const code = value.trim();
+    if (!code) return;
 
     if (!formData.source_store_id) {
       setScanError('Select the Source Store first, then scan.');
       return;
     }
 
-    if (scannedSet.has(value)) {
-      setScanError('This barcode is already scanned in this dispatch draft.');
-      return;
-    }
-
     setScanError(null);
-    setScanning(true);
 
     try {
-      const res = await barcodeService.scanBarcode(value);
+      // Double-check duplicates (covers edge cases when scans were queued very fast)
+      if (scannedSet.has(code)) {
+        setScanError('This barcode is already scanned in this dispatch draft.');
+        return;
+      }
+
+      const res = await barcodeService.scanBarcode(code);
       if (!res?.success) {
-        setScanError(res?.message || 'Barcode not found');
+        setScanError(`(${code}) ${res?.message || 'Barcode not found'}`);
         return;
       }
 
@@ -247,17 +264,17 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
       const locationId = data?.current_location?.id;
 
       if (!locationId || locationId !== sourceId) {
-        setScanError('Barcode is not currently at the selected source store.');
+        setScanError(`(${code}) Barcode is not currently at the selected source store.`);
         return;
       }
 
       if (!data?.current_batch?.id) {
-        setScanError('This barcode is not linked to any active batch.');
+        setScanError(`(${code}) This barcode is not linked to any active batch.`);
         return;
       }
 
       if (!data?.is_available) {
-        setScanError('This barcode is not available for dispatch.');
+        setScanError(`(${code}) This barcode is not available for dispatch.`);
         return;
       }
 
@@ -308,7 +325,7 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
 
       setScanHistory((prev) => [
         {
-          barcode: value,
+          barcode: code,
           batch_id: batchId,
           batch_number: batchNumber,
           product_name: productName,
@@ -316,15 +333,57 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
         },
         ...prev,
       ]);
+    } catch (err: any) {
+      setScanError(`(${code}) ${err?.response?.data?.message || err?.message || 'Failed to scan barcode'}`);
+    }
+  };
 
-      setScanInput('');
+  const processScanQueue = async () => {
+    if (scanQueueProcessingRef.current) return;
+    if (scanQueueRef.current.length === 0) return;
+    scanQueueProcessingRef.current = true;
+    setScanning(true);
+
+    try {
+      while (scanQueueRef.current.length > 0) {
+        const next = scanQueueRef.current.shift();
+        if (!next) continue;
+        scanQueueSetRef.current.delete(next);
+        setQueuedScanCount(scanQueueRef.current.length);
+        // eslint-disable-next-line no-await-in-loop
+        await scanOneBarcode(next);
+      }
+    } finally {
+      scanQueueProcessingRef.current = false;
+      setScanning(false);
       // keep the input focused for hardware scanners
       setTimeout(() => scanInputRef.current?.focus(), 0);
-    } catch (err: any) {
-      setScanError(err?.response?.data?.message || err?.message || 'Failed to scan barcode');
-    } finally {
-      setScanning(false);
     }
+  };
+
+  const enqueueBarcodeScan = () => {
+    const value = scanInput.trim();
+    if (!value) return;
+
+    if (!formData.source_store_id) {
+      setScanError('Select the Source Store first, then scan.');
+      return;
+    }
+
+    // Clear the input immediately so the next scan doesn't overwrite the previous one.
+    setScanInput('');
+
+    // Prevent duplicates across already-scanned + queued
+    if (scannedSet.has(value) || scanQueueSetRef.current.has(value)) {
+      setScanError('This barcode is already scanned in this dispatch draft.');
+      return;
+    }
+
+    setScanError(null);
+    scanQueueRef.current.push(value);
+    scanQueueSetRef.current.add(value);
+    setQueuedScanCount(scanQueueRef.current.length);
+    void processScanQueue();
   };
 
   const removeLastScan = () => {
@@ -565,13 +624,17 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                         value={scanInput}
                         onChange={(e) => setScanInput(e.target.value)}
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
+                          // Many hardware scanners are configured to send Enter or Tab as a suffix.
+                          // If Tab is used, the browser would move focus away and subsequent scans go to the wrong field.
+                          if (e.key === 'Enter' || e.key === 'Tab') {
                             e.preventDefault();
-                            void handleBarcodeScan();
+                            enqueueBarcodeScan();
+                            // keep focus pinned here for rapid scanning
+                            setTimeout(() => scanInputRef.current?.focus(), 0);
                           }
                         }}
                         placeholder={formData.source_store_id ? 'Scan barcode and press Enter…' : 'Select source store first'}
-                        disabled={!formData.source_store_id || scanning}
+                        disabled={!formData.source_store_id}
                         className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm disabled:bg-gray-100 dark:disabled:bg-gray-600"
                       />
                     </div>
@@ -579,8 +642,8 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                   <div className="col-span-2">
                     <button
                       type="button"
-                      onClick={handleBarcodeScan}
-                      disabled={!formData.source_store_id || scanning || !scanInput.trim()}
+                      onClick={enqueueBarcodeScan}
+                      disabled={!formData.source_store_id || !scanInput.trim()}
                       className="w-full px-3 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white rounded-lg text-sm flex items-center justify-center"
                       title="Scan & add"
                     >
@@ -613,6 +676,13 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                   <div className="mt-2 p-2 rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 text-xs flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 mt-0.5" />
                     <div>{scanError}</div>
+                  </div>
+                )}
+
+                {(scanning || queuedScanCount > 0) && (
+                  <div className="mt-2 text-[11px] text-gray-600 dark:text-gray-400">
+                    {scanning ? 'Processing scans' : 'Scans queued'}
+                    {queuedScanCount > 0 ? ` • queued: ${queuedScanCount}` : ''}
                   </div>
                 )}
 

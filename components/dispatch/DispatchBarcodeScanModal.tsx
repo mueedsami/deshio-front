@@ -47,6 +47,12 @@ export default function DispatchBarcodeScanModal({
   mode,
 }: Props) {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // Queue scans so staff can scan rapidly even if the API call takes a moment.
+  // This prevents "only first scan registers" issues when scanners send codes back-to-back.
+  const scanQueueRef = useRef<string[]>([]);
+  const scanQueueSetRef = useRef<Set<string>>(new Set());
+  const scanQueueProcessingRef = useRef(false);
+  const [queuedScanCount, setQueuedScanCount] = useState(0);
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
   const [barcode, setBarcode] = useState('');
   const [loading, setLoading] = useState(false);
@@ -116,6 +122,10 @@ export default function DispatchBarcodeScanModal({
     setBarcode('');
     setError(null);
     setOverall(null);
+    scanQueueRef.current = [];
+    scanQueueSetRef.current = new Set();
+    scanQueueProcessingRef.current = false;
+    setQueuedScanCount(0);
     // focus after paint
     setTimeout(() => inputRef.current?.focus(), 50);
 
@@ -132,6 +142,11 @@ export default function DispatchBarcodeScanModal({
   useEffect(() => {
     if (!isOpen || !dispatch || !selectedItemId) return;
     void fetchProgress(selectedItemId);
+    // item changed => clear queued scans to avoid sending a code to the wrong item
+    scanQueueRef.current = [];
+    scanQueueSetRef.current = new Set();
+    scanQueueProcessingRef.current = false;
+    setQueuedScanCount(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, dispatch?.id, selectedItemId, mode]);
 
@@ -177,34 +192,70 @@ export default function DispatchBarcodeScanModal({
     }
   };
 
-  const handleScan = async () => {
+  const scanOneBarcode = async (value: string) => {
     if (!dispatch || !selectedItemId) return;
-    const value = barcode.trim();
-    if (!value) return;
+    const code = value.trim();
+    if (!code) return;
 
+    try {
+      if (mode === 'send') {
+        await dispatchService.scanBarcode(dispatch.id, selectedItemId, code);
+      } else {
+        await dispatchService.receiveBarcode(dispatch.id, selectedItemId, code);
+      }
+    } catch (e: any) {
+      throw new Error(e?.response?.data?.message || 'Scan failed');
+    }
+  };
+
+  const processScanQueue = async () => {
+    if (!dispatch || !selectedItemId) return;
+    if (scanQueueProcessingRef.current) return;
+    if (scanQueueRef.current.length === 0) return;
+    scanQueueProcessingRef.current = true;
     setLoading(true);
     setError(null);
 
     try {
-      if (mode === 'send') {
-        await dispatchService.scanBarcode(dispatch.id, selectedItemId, value);
-      } else {
-        await dispatchService.receiveBarcode(dispatch.id, selectedItemId, value);
+      while (scanQueueRef.current.length > 0) {
+        const next = scanQueueRef.current.shift();
+        if (!next) continue;
+        scanQueueSetRef.current.delete(next);
+        setQueuedScanCount(scanQueueRef.current.length);
+        // eslint-disable-next-line no-await-in-loop
+        await scanOneBarcode(next);
       }
 
       setBarcode('');
       await fetchProgress(selectedItemId);
       onComplete?.();
 
-      // Keep focus for fast scanning
-      setTimeout(() => inputRef.current?.focus(), 0);
+      // In receive mode, auto-refresh overall status after processing a burst
+      if (mode === 'receive') {
+        void checkOverallProgress();
+      }
     } catch (e: any) {
-      setError(e?.response?.data?.message || 'Scan failed');
-      // keep barcode text to let user re-check
+      setError(e?.message || 'Scan failed');
+      // keep focus for quick recovery
       setTimeout(() => inputRef.current?.select(), 0);
     } finally {
+      scanQueueProcessingRef.current = false;
       setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
+  };
+
+  const enqueueScan = () => {
+    if (!dispatch || !selectedItemId) return;
+    const value = barcode.trim();
+    if (!value) return;
+    if (scanQueueSetRef.current.has(value)) return;
+    scanQueueRef.current.push(value);
+    scanQueueSetRef.current.add(value);
+    setQueuedScanCount(scanQueueRef.current.length);
+    // Clear input immediately so the next scan doesn't overwrite
+    setBarcode('');
+    void processScanQueue();
   };
 
   const handleCompleteDelivery = async () => {
@@ -388,19 +439,23 @@ export default function DispatchBarcodeScanModal({
                       value={barcode}
                       onChange={(e) => setBarcode(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
+                        // Scanners commonly use Enter or Tab as suffix. If Tab is used,
+                        // the browser would move focus away and subsequent scans go to the wrong field.
+                        if (e.key === 'Enter' || e.key === 'Tab') {
                           e.preventDefault();
-                          void handleScan();
+                          enqueueScan();
+                          setTimeout(() => inputRef.current?.focus(), 0);
                         }
                       }}
                       placeholder={mode === 'send' ? 'Scan barcode to send…' : 'Scan received barcode…'}
                       className="w-full pl-10 pr-3 py-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      disabled={loading || scanningLocked}
+                      // Keep input enabled even while processing so rapid scans can be queued.
+                      disabled={scanningLocked}
                     />
                   </div>
                   <button
-                    onClick={handleScan}
-                    disabled={loading || scanningLocked || !barcode.trim()}
+                    onClick={enqueueScan}
+                    disabled={scanningLocked || !barcode.trim()}
                     className={`px-4 py-3 rounded-lg text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
                       mode === 'send' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'
                     }`}
@@ -409,6 +464,13 @@ export default function DispatchBarcodeScanModal({
                     {mode === 'send' ? 'Add Scan' : 'Receive'}
                   </button>
                 </div>
+
+                {(loading || queuedScanCount > 0) && (
+                  <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    {loading ? 'Processing scans' : 'Scans queued'}
+                    {queuedScanCount > 0 ? ` • queued: ${queuedScanCount}` : ''}
+                  </div>
+                )}
 
                 {error && (
                   <div className="mt-4 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 text-sm">
