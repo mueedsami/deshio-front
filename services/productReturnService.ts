@@ -45,7 +45,7 @@ export type ReturnStatus =
   | 'pending'
   | 'approved'
   | 'rejected'
-  | 'processed'
+  | 'processing'
   | 'completed'
   | 'refunded';
 

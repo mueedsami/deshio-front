@@ -1634,6 +1634,29 @@ const derivePaymentStatus = (order: any) => {
 
       const newOrderTotal = exchangeData.replacementProducts.reduce((sum, p) => sum + p.unit_price * p.quantity, 0);
 
+
+      // ✅ Avoid hardcoding payment_method_id (IDs can differ per environment)
+      let paymentMethodId = 1;
+      try {
+        const pmRes = await axios.get('/payment-methods/all');
+        const methods: any[] =
+          (pmRes as any)?.data?.data?.payment_methods ||
+          (pmRes as any)?.data?.data ||
+          (pmRes as any)?.data ||
+          [];
+
+        const normalized = (v: any) => String(v ?? '').toLowerCase().trim();
+        const cash =
+          methods.find((m) => normalized(m?.type) === 'cash') ||
+          methods.find((m) => normalized(m?.name).includes('cash')) ||
+          methods.find((m) => normalized(m?.name).includes('ক্যাশ')) ||
+          methods[0];
+
+        paymentMethodId = Number(cash?.id) || 1;
+      } catch (e) {
+        console.warn('Failed to load payment methods, falling back to id=1', e);
+      }
+
       const newOrderData = {
         order_type: selectedOrderForAction.order_type as 'social_commerce' | 'ecommerce',
         store_id: exchangeData.exchangeAtStoreId,
@@ -1644,11 +1667,10 @@ const derivePaymentStatus = (order: any) => {
           quantity: p.quantity,
           unit_price: p.unit_price,
           barcode: p.barcode,
-          barcode_id: p.barcode_id,
-        })),
+})),
         payment: {
-          payment_method_id: 1,
-          amount: newOrderTotal,
+          payment_method_id: paymentMethodId,
+amount: newOrderTotal,
           payment_type: 'full' as const,
         },
         notes: `Exchange from order #${selectedOrderForAction.order_number} | Return: #${returnNumber}`,

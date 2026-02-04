@@ -105,6 +105,38 @@ export default function PurchaseHistoryPage() {
   const [showExchangeModal, setShowExchangeModal] = useState(false);
   const [selectedOrderForAction, setSelectedOrderForAction] = useState<Order | null>(null);
 
+  // ✅ Payment method cache (avoid hardcoding IDs)
+  const [cashPaymentMethodId, setCashPaymentMethodId] = useState<number | null>(null);
+
+  const ensureCashPaymentMethod = async (): Promise<number> => {
+    if (cashPaymentMethodId && Number.isFinite(cashPaymentMethodId)) return cashPaymentMethodId;
+
+    try {
+      const res = await axiosInstance.get('/payment-methods/all');
+      const methods: any[] =
+        (res as any)?.data?.data?.payment_methods ||
+        (res as any)?.data?.data ||
+        (res as any)?.data ||
+        [];
+
+      const normalized = (v: any) => String(v ?? '').toLowerCase().trim();
+
+      const cash =
+        methods.find((m) => normalized(m?.type) === 'cash') ||
+        methods.find((m) => normalized(m?.name).includes('cash')) ||
+        methods.find((m) => normalized(m?.name).includes('ক্যাশ')) ||
+        methods[0];
+
+      const id = Number(cash?.id) || 1;
+      setCashPaymentMethodId(id);
+      return id;
+    } catch (e) {
+      console.warn('Failed to load payment methods, falling back to id=1', e);
+      return 1;
+    }
+  };
+
+
   useEffect(() => {
     const role = localStorage.getItem('userRole') || '';
     const storeId = localStorage.getItem('storeId') || '';
@@ -289,11 +321,23 @@ export default function PurchaseHistoryPage() {
   }) => {
     try {
       if (!selectedOrderForAction) return;
+      // ✅ Store where the return is physically received (important for cross-store returns)
+      const employeeStoreId = Number(userStoreId);
+      const receivedAtStoreIdCandidate =
+        (returnData as any)?.received_at_store_id ??
+        (returnData as any)?.receivedAtStoreId ??
+        (returnData as any)?.return_store_id ??
+        (returnData as any)?.store_id ??
+        (Number.isFinite(employeeStoreId) && employeeStoreId > 0 ? employeeStoreId : selectedOrderForAction.store.id);
+
+      const receivedAtStoreId = Number(receivedAtStoreIdCandidate) || selectedOrderForAction.store.id;
+
 
       console.log('🔄 Processing return with data:', returnData);
 
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
+        received_at_store_id: receivedAtStoreId,
         return_reason: returnData.returnReason,
         return_type: returnData.returnType,
         items: returnData.selectedProducts.map(item => ({
@@ -392,6 +436,19 @@ export default function PurchaseHistoryPage() {
   }) => {
     try {
       if (!selectedOrderForAction) return;
+      // ✅ Store where the exchange/return is physically happening.
+      // Important: backend uses received_at_store_id to decide which store gets the returned inventory.
+      const employeeStoreId = Number(userStoreId);
+      const exchangeStoreIdCandidate =
+        (exchangeData as any)?.received_at_store_id ??
+        (exchangeData as any)?.exchange_store_id ??
+        (exchangeData as any)?.exchangeAtStoreId ??
+        (exchangeData as any)?.exchange_at_store_id ??
+        (exchangeData as any)?.store_id ??
+        (Number.isFinite(employeeStoreId) && employeeStoreId > 0 ? employeeStoreId : selectedOrderForAction.store.id);
+
+      const exchangeStoreId = Number(exchangeStoreIdCandidate) || selectedOrderForAction.store.id;
+
 
       console.log('🔄 Processing exchange with data:', exchangeData);
       console.log('📦 Original order:', selectedOrderForAction.order_number);
@@ -399,6 +456,7 @@ export default function PurchaseHistoryPage() {
       console.log('\n📤 STEP 1: Creating return for old products...');
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
+        received_at_store_id: exchangeStoreId,
         return_reason: 'other',
         return_type: 'customer_return',
         items: exchangeData.removedProducts.map(item => ({
@@ -463,11 +521,13 @@ export default function PurchaseHistoryPage() {
       );
       console.log(`New order total: ৳${newOrderTotal.toLocaleString()}`);
 
+      const paymentMethodId = await ensureCashPaymentMethod();
+
       // ✅ Per guidelines: New order payment = full new order amount
       // Customer has full refund, uses it to "pay" for new items
       const newOrderData = {
         order_type: 'counter' as const,
-        store_id: selectedOrderForAction.store.id,
+        store_id: exchangeStoreId,
         customer_id: selectedOrderForAction.customer?.id,
         items: exchangeData.replacementProducts.map(p => ({
           product_id: p.product_id,
@@ -475,10 +535,10 @@ export default function PurchaseHistoryPage() {
           quantity: p.quantity,
           unit_price: p.unit_price,
           barcode: p.barcode,
-          barcode_id: p.barcode_id,
-        })),
+})),
         payment: {
-          payment_method_id: 1, // Cash
+          payment_method_id: paymentMethodId,
+// Cash
           amount: newOrderTotal, // Full amount of new items
           payment_type: 'full' as const,
         },
