@@ -15,6 +15,273 @@ import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 import BatchPrinter from "@/components/BatchPrinter";
 
+// -----------------------
+// QZ + barcode label rendering (same configuration as BatchPrinter)
+// -----------------------
+
+// Global QZ connection state to prevent multiple connection attempts
+let qzConnectionPromise: Promise<void> | null = null;
+let qzConnected = false;
+
+async function ensureQZConnection() {
+  const qz = (window as any).qz;
+  if (!qz) {
+    throw new Error("QZ Tray not available");
+  }
+
+  // If already connected, return immediately
+  if (qzConnected && (await qz.websocket.isActive())) {
+    return;
+  }
+
+  // If connection is in progress, wait for it
+  if (qzConnectionPromise) {
+    return qzConnectionPromise;
+  }
+
+  // Start new connection
+  qzConnectionPromise = (async () => {
+    try {
+      if (!(await qz.websocket.isActive())) {
+        await qz.websocket.connect();
+        qzConnected = true;
+        console.log("✅ QZ Tray connected");
+      }
+    } catch (error) {
+      console.error("❌ QZ Tray connection failed:", error);
+      throw error;
+    } finally {
+      qzConnectionPromise = null;
+    }
+  })();
+
+  return qzConnectionPromise;
+}
+
+// Label geometry (match BatchPrinter)
+const LABEL_WIDTH_MM = 39;
+const LABEL_HEIGHT_MM = 25;
+const DEFAULT_DPI = 300; // set to 203 for 203dpi printers
+const TOP_GAP_MM = 1; // extra blank gap at the very top
+const SHIFT_X_MM = 0; // keep 0 for perfect centering
+
+function mmToIn(mm: number) {
+  return mm / 25.4;
+}
+
+async function ensureJsBarcode() {
+  // QzTrayLoader loads JsBarcode globally, but keep a fallback for safety.
+  if (typeof window === "undefined") return;
+  if ((window as any).JsBarcode) return;
+
+  await new Promise<void>((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("Failed to load JsBarcode"));
+    document.head.appendChild(s);
+  });
+}
+
+function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) {
+  const ellipsis = "…";
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let t = text;
+  while (t.length > 0 && ctx.measureText(t + ellipsis).width > maxWidth) t = t.slice(0, -1);
+  return t.length ? t + ellipsis : "";
+}
+
+function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): [string, string] {
+  const clean = String(text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return ["", ""];
+  if (ctx.measureText(clean).width <= maxWidth) return [clean, ""];
+
+  const words = clean.split(" ");
+  if (words.length <= 1) {
+    // No spaces; split by characters
+    let line1 = clean;
+    while (line1.length > 0 && ctx.measureText(line1).width > maxWidth) line1 = line1.slice(0, -1);
+    const rest = clean.slice(line1.length).trim();
+    if (!rest) return [fitText(ctx, clean, maxWidth), ""];
+    return [line1, fitText(ctx, rest, maxWidth)];
+  }
+
+  // Build first line word-by-word
+  let line1 = "";
+  let i = 0;
+  for (; i < words.length; i++) {
+    const test = line1 ? `${line1} ${words[i]}` : words[i];
+    if (ctx.measureText(test).width <= maxWidth) {
+      line1 = test;
+    } else {
+      break;
+    }
+  }
+
+  if (!line1) return [fitText(ctx, clean, maxWidth), ""];
+
+  const line2Raw = words.slice(i).join(" ").trim();
+  const line2 = line2Raw ? fitText(ctx, line2Raw, maxWidth) : "";
+  return [line1, line2];
+}
+
+function splitByFirstDash(text: string) {
+  const clean = (text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return null;
+
+  // Support common dash variants: -, – (en dash), — (em dash)
+  const m = clean.match(/[-–—]/);
+  if (!m || m.index === undefined) return null;
+
+  const idx = m.index;
+  const left = clean.slice(0, idx).trim();
+  const right = clean.slice(idx + 1).trim();
+  if (!left || !right) return null;
+
+  return [left, right] as const;
+}
+
+async function renderLabelBase64(opts: { code: string; productName: string; price: number; dpi?: number }) {
+  await ensureJsBarcode();
+
+  const dpi = opts.dpi ?? DEFAULT_DPI;
+  const wIn = mmToIn(LABEL_WIDTH_MM);
+  const hIn = mmToIn(LABEL_HEIGHT_MM);
+  const wPx = Math.max(50, Math.round(wIn * dpi));
+  const hPx = Math.max(50, Math.round(hIn * dpi));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = wPx;
+  canvas.height = hPx;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas not supported");
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, wPx, hPx);
+
+  const pad = Math.round(wPx * 0.04);
+  const topGapPx = Math.round((TOP_GAP_MM / 25.4) * dpi);
+  const shiftPx = Math.round((SHIFT_X_MM / 25.4) * dpi);
+
+  const centerX = wPx / 2 + shiftPx;
+  const topPad = pad + topGapPx;
+
+  // Brand
+  ctx.fillStyle = "#000";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`;
+  ctx.fillText("Deshio", centerX, topPad);
+
+  // Product name (match BatchPrinter)
+  const nameY = topPad + Math.round(hPx * 0.14);
+  const nameMaxW = wPx - pad * 2;
+  const lineGap = Math.max(2, Math.round(hPx * 0.01));
+  const fullName = (opts.productName || "Product").trim();
+
+  let name1 = "";
+  let name2 = "";
+  let afterNameY = 0;
+
+  const dashSplit = splitByFirstDash(fullName);
+  if (dashSplit) {
+    // Always render in 2 lines
+    [name1, name2] = dashSplit;
+
+    const nameFont = Math.round(hPx * 0.082);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    name1 = fitText(ctx, name1, nameMaxW);
+    name2 = fitText(ctx, name2, nameMaxW);
+
+    ctx.fillText(name1, centerX, nameY);
+    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+
+    afterNameY = nameY + (nameFont + lineGap) * 2 + Math.round(hPx * 0.03);
+  } else {
+    // Fallback: word-based wrap
+    let nameFont = Math.round(hPx * 0.095);
+    ctx.font = `700 ${nameFont}px Arial`;
+
+    [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+
+    // If it needs 2 lines, shrink a bit for safety
+    if (name2) {
+      nameFont = Math.round(hPx * 0.082);
+      ctx.font = `700 ${nameFont}px Arial`;
+      [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    }
+
+    ctx.fillText(name1, centerX, nameY);
+    let afterBottom = nameY + nameFont;
+
+    if (name2) {
+      ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+      afterBottom = nameY + (nameFont + lineGap) * 2;
+    }
+
+    afterNameY = afterBottom + Math.round(hPx * 0.03);
+  }
+
+  // Barcode
+  const JsBarcode = (window as any).JsBarcode;
+  const maxBcW = Math.round((wPx - pad * 2) * 0.98);
+  const maxBcH = Math.round(hPx * 0.56);
+  const bcHeight = Math.round(hPx * 0.28);
+  const bcFontSize = Math.round(hPx * 0.09);
+
+  const renderBarcodeCanvas = (barWidth: number) => {
+    const c = document.createElement("canvas");
+    JsBarcode(c, opts.code, {
+      format: "CODE128",
+      width: Math.max(1, Math.floor(barWidth)),
+      height: bcHeight,
+      displayValue: true,
+      fontSize: bcFontSize,
+      fontOptions: "bold",
+      textMargin: 0,
+      margin: 0,
+    });
+    return c;
+  };
+
+  // Pick the largest integer barWidth that fits
+  let bw = 1;
+  let bcCanvas = renderBarcodeCanvas(bw);
+  while (bw < 6) {
+    const next = renderBarcodeCanvas(bw + 1);
+    if (next.width <= maxBcW && next.height <= maxBcH) {
+      bw += 1;
+      bcCanvas = next;
+      continue;
+    }
+    break;
+  }
+
+  const bcY = Math.max(topPad + Math.round(hPx * 0.27), Math.round(afterNameY));
+  const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
+  const drawW = Math.round(bcCanvas.width * scale);
+  const drawH = Math.round(bcCanvas.height * scale);
+  const bcX = Math.round((wPx - drawW) / 2 + shiftPx);
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
+
+  // Price
+  const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
+  ctx.textBaseline = "bottom";
+  ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
+  const priceY = hPx - pad;
+  ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
+
+  const dataUrl = canvas.toDataURL("image/png");
+  return dataUrl.split(",")[1];
+}
+
+
 type LookupTab = 'customer' | 'order' | 'barcode' | 'batch';
 
 type BarcodeHistoryItem = {
@@ -577,207 +844,41 @@ export default function LookupPage() {
 
   // -----------------------
   // QZ single barcode print helper (reprint)
+    // -----------------------
+  // QZ single barcode print helper (reprint) - same config as BatchPrinter
   // -----------------------
-  
-const printSingleBarcodeLabel = async (params: { barcode: string; productName?: string; price?: string | number }) => {
+  const printSingleBarcodeLabel = async (params: { barcode: string; productName?: string; price?: string | number }) => {
     try {
       setError('');
       const qz = (window as any)?.qz;
       if (!qz) throw new Error('QZ Tray not available');
 
-      // Connect if needed
-      if (!(await qz.websocket.isActive())) {
-        await qz.websocket.connect();
-      }
+      await ensureQZConnection();
 
       // Pick default printer (fallback to first available)
       let printer: string | null = null;
       try {
         printer = await qz.printers.getDefault();
-      } catch (e) {
+      } catch (_e) {
         const list = await qz.printers.find();
         if (Array.isArray(list) && list.length) printer = list[0];
       }
       if (!printer) throw new Error('No printer found. Set a default printer and try again.');
 
-      const LABEL_W_MM = 39;
-      const LABEL_H_MM = 25;
-      const DPI = 300; // set 203 if your printer is 203dpi
-      const mmToIn = (mm: number) => mm / 25.4;
+      const dpi = DEFAULT_DPI;
 
-      // Ensure JsBarcode is available (QzTrayLoader loads it globally)
-      const ensureJsBarcode = async () => {
-        if ((window as any).JsBarcode) return;
-        await new Promise<void>((resolve, reject) => {
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js';
-          s.async = true;
-          s.onload = () => resolve();
-          s.onerror = () => reject(new Error('Failed to load JsBarcode'));
-          document.head.appendChild(s);
-        });
-      };
-
-      const fitText = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number) => {
-        const ellipsis = '…';
-        if (ctx.measureText(text).width <= maxWidth) return text;
-        let t = text;
-        while (t.length > 0 && ctx.measureText(t + ellipsis).width > maxWidth) t = t.slice(0, -1);
-        return t.length ? t + ellipsis : '';
-      };
-
-      const wrapTwoLines = (ctx: CanvasRenderingContext2D, text: string, maxWidth: number): [string, string] => {
-        const clean = String(text || '').trim().replace(/\s+/g, ' ');
-        if (!clean) return ['', ''];
-        if (ctx.measureText(clean).width <= maxWidth) return [clean, ''];
-
-        const words = clean.split(' ');
-        if (words.length <= 1) {
-          // No spaces; split by characters
-          let line1 = clean;
-          while (line1.length > 0 && ctx.measureText(line1).width > maxWidth) line1 = line1.slice(0, -1);
-          const rest = clean.slice(line1.length).trim();
-          if (!rest) return [fitText(ctx, clean, maxWidth), ''];
-          return [line1, fitText(ctx, rest, maxWidth)];
-        }
-
-        // Build first line word-by-word
-        let line1 = '';
-        let i = 0;
-        for (; i < words.length; i++) {
-          const test = line1 ? `${line1} ${words[i]}` : words[i];
-          if (ctx.measureText(test).width <= maxWidth) {
-            line1 = test;
-          } else {
-            break;
-          }
-        }
-
-        if (!line1) return [fitText(ctx, clean, maxWidth), ''];
-
-        const line2Raw = words.slice(i).join(' ').trim();
-        const line2 = line2Raw ? fitText(ctx, line2Raw, maxWidth) : '';
-        return [line1, line2];
-      };
-
-
-      const renderLabel = async () => {
-        await ensureJsBarcode();
-
-        const wIn = mmToIn(LABEL_W_MM);
-        const hIn = mmToIn(LABEL_H_MM);
-        const wPx = Math.max(50, Math.round(wIn * DPI));
-        const hPx = Math.max(50, Math.round(hIn * DPI));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = wPx;
-        canvas.height = hPx;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas not supported');
-        ctx.imageSmoothingEnabled = false;
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, wPx, hPx);
-
-        const pad = Math.round(wPx * 0.04);
-        const shiftPx = Math.round((0 / 25.4) * DPI); // shift right by 2mm
-        const cx = wPx / 2 + shiftPx;
-
-        ctx.fillStyle = '#000';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`;
-        ctx.fillText('Deshio', cx, pad);
-
-        // Product name (wrap to 2 lines when long)
-        const nameY = pad + Math.round(hPx * 0.14);
-        const nameMaxW = wPx - pad * 2;
-
-        let nameFont = Math.round(hPx * 0.09);
-        ctx.font = `700 ${nameFont}px Arial`;
-
-        let [name1, name2] = wrapTwoLines(ctx, (params.productName || 'Product').trim(), nameMaxW);
-        if (name2) {
-          nameFont = Math.round(hPx * 0.082);
-          ctx.font = `700 ${nameFont}px Arial`;
-          [name1, name2] = wrapTwoLines(ctx, (params.productName || 'Product').trim(), nameMaxW);
-        }
-
-        ctx.fillText(name1, cx, nameY);
-        const lineGap = Math.max(2, Math.round(hPx * 0.01));
-        let afterNameBottom = nameY + nameFont;
-        if (name2) {
-          ctx.fillText(name2, cx, nameY + nameFont + lineGap);
-          afterNameBottom = nameY + (nameFont + lineGap) * 2;
-        }
-
-        const afterNameY = afterNameBottom + Math.round(hPx * 0.03);
-
-        // Barcode (pixel-perfect): JsBarcode overrides canvas.width/height based on content.
-        // Render it, then center horizontally and scale DOWN only if it would overflow.
-        const JsBarcode = (window as any).JsBarcode;
-
-        // Slightly larger barcode + number (still safe within 39x25mm)
-        const maxBcW = Math.round((wPx - pad * 2) * 0.98);
-        const maxBcH = Math.round(hPx * 0.56);
-        const bcHeight = Math.round(hPx * 0.28);
-        const bcFontSize = Math.round(hPx * 0.09);
-
-        const renderBarcodeCanvas = (barWidth: number) => {
-          const c = document.createElement('canvas');
-          JsBarcode(c, params.barcode, {
-            format: 'CODE128',
-            width: Math.max(1, Math.floor(barWidth)),
-            height: bcHeight,
-            displayValue: true,
-            fontSize: bcFontSize,
-            fontOptions: 'bold',
-            textMargin: 0,
-            margin: 0,
-          });
-          return c;
-        };
-
-        // Pick the largest integer barWidth that fits (keeps prints crisp on thermal printers)
-        let bw = 1;
-        let bcCanvas = renderBarcodeCanvas(bw);
-        while (bw < 6) {
-          const next = renderBarcodeCanvas(bw + 1);
-          if (next.width <= maxBcW && next.height <= maxBcH) {
-            bw += 1;
-            bcCanvas = next;
-            continue;
-          }
-          break;
-        }
-
-        const bcY = Math.max(pad + Math.round(hPx * 0.27), Math.round(afterNameY));
-        const scale = Math.min(1, maxBcW / bcCanvas.width, maxBcH / bcCanvas.height);
-        const drawW = Math.round(bcCanvas.width * scale);
-        const drawH = Math.round(bcCanvas.height * scale);
-        const bcX = Math.round((wPx - drawW) / 2 + shiftPx);
-
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(bcCanvas, bcX, bcY, drawW, drawH);
-
-        const priceNum = safeNum(params.price);
-        const showPrice = Number.isFinite(priceNum) && priceNum > 0;
-        if (showPrice) {
-          ctx.textBaseline = 'bottom';
-          ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
-          const priceText = `Price (VAT Inc.): ৳${Number(priceNum).toLocaleString('en-BD')}`;
-          ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), cx, hPx - pad);
-        }
-
-        return canvas.toDataURL('image/png').split(',')[1];
-      };
-
-      const base64 = await renderLabel();
+      const base64 = await renderLabelBase64({
+        code: params.barcode,
+        productName: (params.productName || 'Product').trim(),
+        price: safeNum(params.price),
+        dpi,
+      });
 
       const config = qz.configs.create(printer, {
         units: 'in',
-        size: { width: mmToIn(LABEL_W_MM), height: mmToIn(LABEL_H_MM) },
+        size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
         margins: { top: 0, right: 0, bottom: 0, left: 0 },
-        density: DPI,
+        density: dpi,
         colorType: 'blackwhite',
         interpolation: 'nearest-neighbor',
         scaleContent: false,
@@ -786,7 +887,15 @@ const printSingleBarcodeLabel = async (params: { barcode: string; productName?: 
       const data: any[] = [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }];
       await qz.print(config, data);
     } catch (err: any) {
-      setError(err?.message || 'Failed to print barcode');
+      console.error('❌ Print error:', err);
+
+      if (err?.message && err.message.includes('Unable to establish connection')) {
+        setError('QZ Tray is not running. Please start QZ Tray and try again.');
+      } else if (err?.message && err.message.includes('printer must be specified')) {
+        setError('Printer not properly configured. Please set a default printer and try again.');
+      } else {
+        setError(err?.message || 'Failed to print barcode');
+      }
     }
   };
 
