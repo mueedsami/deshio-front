@@ -28,6 +28,22 @@ const DispatchStatisticsCards: React.FC<DispatchStatisticsCardsProps> = ({
 
   if (!statistics) return null;
 
+  const parseAmount = (value: string | number | null | undefined): number => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (value == null) return 0;
+
+    const cleaned = String(value).replace(/[^0-9.-]/g, '');
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
+  const formatAmount = (value: string | number | null | undefined): string => {
+    return parseAmount(value).toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    });
+  };
+
   const cards = [
     {
       label: 'Total',
@@ -87,7 +103,7 @@ const DispatchStatisticsCards: React.FC<DispatchStatisticsCardsProps> = ({
     },
     {
       label: 'Value in Transit',
-      value: `৳${parseFloat(statistics.total_value_in_transit).toLocaleString()}`,
+      value: `৳${formatAmount(statistics.total_value_in_transit)}`,
       bgColor: 'bg-indigo-50 dark:bg-indigo-900/20',
       borderColor: 'border-indigo-200 dark:border-indigo-800',
       textColor: 'text-indigo-900 dark:text-indigo-300',

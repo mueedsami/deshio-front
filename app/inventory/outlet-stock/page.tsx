@@ -18,6 +18,23 @@ interface Toast {
   type: 'success' | 'error';
 }
 
+
+const parseAmount = (value: string | number | null | undefined): number => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (value == null) return 0;
+
+  const cleaned = String(value).replace(/[^0-9.-]/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatAmount = (value: string | number | null | undefined): string => {
+  return parseAmount(value).toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+};
+
 export default function DispatchManagementPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -564,7 +581,7 @@ export default function DispatchManagementPage() {
                               )}
                             </td>
                             <td className="px-4 py-2 text-gray-900 dark:text-white">
-                              ৳{parseFloat(item.total_value).toLocaleString()}
+                              ৳{formatAmount(item.total_value)}
                             </td>
                           </tr>
                         ))}
