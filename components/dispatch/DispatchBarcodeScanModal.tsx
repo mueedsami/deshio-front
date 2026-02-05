@@ -38,6 +38,36 @@ function toNum(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function unpackData(payload: any) {
+  if (payload && typeof payload === 'object' && payload.data && typeof payload.data === 'object') {
+    return payload.data;
+  }
+  return payload && typeof payload === 'object' ? payload : {};
+}
+
+function toArray<T = any>(value: any): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (value == null) return [];
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as T[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  if (typeof value === 'object') {
+    const values = Object.values(value as Record<string, unknown>);
+    return values.length ? (values as T[]) : [];
+  }
+
+  return [];
+}
+
 export default function DispatchBarcodeScanModal({
   dispatch,
   isOpen,
@@ -110,6 +140,16 @@ export default function DispatchBarcodeScanModal({
     return !!(stats && stats.total > 0 && stats.remaining <= 0);
   }, [stats]);
 
+  const scannedBarcodeList = useMemo(
+    () => (progress?.kind === 'send' ? toArray<any>((progress as any).scanned_barcodes) : []),
+    [progress]
+  );
+
+  const receivedBarcodeList = useMemo(
+    () => (progress?.kind === 'receive' ? toArray<any>((progress as any).received_barcodes) : []),
+    [progress]
+  );
+
   // When opening: pick first item and focus input
   useEffect(() => {
     if (!isOpen || !dispatch) return;
@@ -156,10 +196,20 @@ export default function DispatchBarcodeScanModal({
     try {
       if (mode === 'send') {
         const res = await dispatchService.getScannedBarcodes(dispatch.id, itemId);
-        setProgress({ kind: 'send', ...res.data } as AnyProgress);
+        const data: any = unpackData(res);
+        setProgress({
+          kind: 'send',
+          ...data,
+          scanned_barcodes: toArray(data.scanned_barcodes),
+        } as AnyProgress);
       } else {
         const res = await dispatchService.getReceivedBarcodes(dispatch.id, itemId);
-        setProgress({ kind: 'receive', ...res.data } as AnyProgress);
+        const data: any = unpackData(res);
+        setProgress({
+          kind: 'receive',
+          ...data,
+          received_barcodes: toArray(data.received_barcodes),
+        } as AnyProgress);
       }
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Failed to load barcode progress');
@@ -177,7 +227,7 @@ export default function DispatchBarcodeScanModal({
         dispatch.items.map((it) => dispatchService.getReceivedBarcodes(dispatch.id, it.id))
       );
       const pending = results.reduce((sum, r) => {
-        const d: any = r.data || {};
+        const d: any = unpackData(r);
         const total = toNum(d.total_sent ?? d.required_quantity ?? d.total ?? 0);
         const received = toNum(d.received_count ?? d.scanned_count ?? 0);
         const pRaw = d.pending_count ?? d.remaining_count ?? d.remaining;
@@ -494,35 +544,35 @@ export default function DispatchBarcodeScanModal({
 
                   <div className="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                     <div className="max-h-64 overflow-y-auto">
-                      {progress && ((progress.kind === 'send' && progress.scanned_barcodes.length === 0) ||
-                        (progress.kind === 'receive' && progress.received_barcodes.length === 0)) ? (
+                      {progress && ((progress.kind === 'send' && scannedBarcodeList.length === 0) ||
+                        (progress.kind === 'receive' && receivedBarcodeList.length === 0)) ? (
                         <div className="p-4 text-sm text-gray-500 dark:text-gray-400">
                           No barcodes scanned yet.
                         </div>
                       ) : (
                         <div className="divide-y divide-gray-200 dark:divide-gray-700">
                           {progress?.kind === 'send' &&
-                            progress.scanned_barcodes.map((b, idx) => (
-                              <div key={b.id} className="p-3 flex items-center justify-between">
+                            scannedBarcodeList.map((b: any, idx) => (
+                              <div key={b?.id ?? `${b?.barcode ?? b ?? 'scan'}-${idx}`} className="p-3 flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <span className="text-xs text-gray-500 dark:text-gray-400 w-6">{idx + 1}.</span>
-                                  <span className="text-sm font-mono text-gray-900 dark:text-white">{b.barcode}</span>
+                                  <span className="text-sm font-mono text-gray-900 dark:text-white">{String(b?.barcode ?? b ?? '')}</span>
                                 </div>
                                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                                  {fmtTime(b.scanned_at)} • {b.scanned_by}
+                                  {fmtTime(String(b?.scanned_at ?? ''))}{b?.scanned_by ? ` • ${b.scanned_by}` : ''}
                                 </div>
                               </div>
                             ))}
 
                           {progress?.kind === 'receive' &&
-                            progress.received_barcodes.map((b, idx) => (
-                              <div key={b.id} className="p-3 flex items-center justify-between">
+                            receivedBarcodeList.map((b: any, idx) => (
+                              <div key={b?.id ?? `${b?.barcode ?? b ?? 'receive'}-${idx}`} className="p-3 flex items-center justify-between">
                                 <div className="flex items-center gap-3">
                                   <span className="text-xs text-gray-500 dark:text-gray-400 w-6">{idx + 1}.</span>
-                                  <span className="text-sm font-mono text-gray-900 dark:text-white">{b.barcode}</span>
+                                  <span className="text-sm font-mono text-gray-900 dark:text-white">{String(b?.barcode ?? b ?? '')}</span>
                                 </div>
                                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                                  {fmtTime(b.received_at)}
+                                  {fmtTime(String(b?.received_at ?? ''))}
                                 </div>
                               </div>
                             ))}

@@ -80,20 +80,11 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
     });
   };
 
-  const parseAmount = (value: string | number | null | undefined): number => {
+  const parseAmount = (value: unknown): number => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-    if (value == null) return 0;
-
-    const cleaned = String(value).replace(/[^0-9.-]/g, '');
-    const parsed = Number(cleaned);
-    return Number.isFinite(parsed) ? parsed : 0;
-  };
-
-  const formatAmount = (value: string | number | null | undefined): string => {
-    return parseAmount(value).toLocaleString('en-US', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    });
+    const normalized = String(value ?? '').replace(/[^\d.-]/g, '');
+    const amount = Number(normalized);
+    return Number.isFinite(amount) ? amount : 0;
   };
 
   // Check if current user/store is the source or destination
@@ -202,7 +193,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                       </div>
                     </td>
                     <td className="py-3 px-4 text-sm font-medium text-gray-900 dark:text-white">
-                      ৳{formatAmount(dispatch.total_value)}
+                      ৳{parseAmount(dispatch.total_value).toLocaleString()}
                     </td>
                     <td className="py-3 px-4">
                       <div className="text-sm text-gray-900 dark:text-white">
