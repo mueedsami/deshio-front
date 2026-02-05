@@ -1613,7 +1613,20 @@ export default function LookupPage() {
         throw new Error('Camera needs HTTPS. Open this page over HTTPS on your phone.');
       }
 
-      const videoEl = barcodeCameraVideoRef.current;
+      // Ensure preview element is mounted before accessing ref
+      setBarcodeCameraOn(true);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      let videoEl = barcodeCameraVideoRef.current;
+      if (!videoEl) {
+        // one more frame for slower devices/layout passes
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
+        videoEl = barcodeCameraVideoRef.current;
+      }
       if (!videoEl) {
         throw new Error('Camera preview is not ready. Please try again.');
       }
