@@ -447,79 +447,9 @@ export default function LookupPage() {
   const scannerBufferRef = useRef<string>('');
   const scannerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // ✅ Mobile camera scan (for phone camera barcode lookup)
-  const barcodeCameraVideoRef = useRef<HTMLVideoElement | null>(null);
-  const barcodeCameraStreamRef = useRef<MediaStream | null>(null);
-  const barcodeCameraDetectorRef = useRef<any>(null);
-  const barcodeCameraRafRef = useRef<number | null>(null);
-  const barcodeCameraActiveRef = useRef(false);
-  const barcodeCameraBusyRef = useRef(false);
-  const [barcodeCameraOn, setBarcodeCameraOn] = useState(false);
-  const [barcodeCameraError, setBarcodeCameraError] = useState('');
-  const [barcodeCameraSupported, setBarcodeCameraSupported] = useState(false);
-
   // Purchase info (best effort): which PO this barcode/batch came from
   const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId: number; poNumber?: string; vendorName?: string } | null>(null);
   const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
-
-  const stopBarcodeCamera = () => {
-    barcodeCameraActiveRef.current = false;
-    barcodeCameraBusyRef.current = false;
-    setBarcodeCameraOn(false);
-
-    if (barcodeCameraRafRef.current != null) {
-      cancelAnimationFrame(barcodeCameraRafRef.current);
-      barcodeCameraRafRef.current = null;
-    }
-
-    const videoEl = barcodeCameraVideoRef.current as any;
-    if (videoEl) {
-      try {
-        videoEl.pause?.();
-      } catch {
-        // ignore
-      }
-      try {
-        videoEl.srcObject = null;
-      } catch {
-        // ignore
-      }
-    }
-
-    if (barcodeCameraStreamRef.current) {
-      try {
-        barcodeCameraStreamRef.current.getTracks().forEach((t) => t.stop());
-      } catch {
-        // ignore
-      }
-      barcodeCameraStreamRef.current = null;
-    }
-
-    barcodeCameraDetectorRef.current = null;
-  };
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const hasCamera = !!navigator?.mediaDevices?.getUserMedia;
-    const hasDetector = !!(window as any).BarcodeDetector;
-    setBarcodeCameraSupported(hasCamera && hasDetector);
-  }, []);
-
-  // Cleanup mobile camera on unmount
-  useEffect(() => {
-    return () => {
-      stopBarcodeCamera();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Stop mobile camera if user leaves Barcode tab
-  useEffect(() => {
-    if (activeTab !== 'barcode') {
-      stopBarcodeCamera();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
 
   // Physical scanner detection for the Barcode tab
   useEffect(() => {
@@ -1566,11 +1496,6 @@ export default function LookupPage() {
       return;
     }
 
-    // keep lookup deterministic: stop camera once a search starts
-    if (barcodeCameraOn) {
-      stopBarcodeCamera();
-    }
-
     setBarcodeLoading(true);
     setError('');
     setBarcodeData(null);
@@ -1589,121 +1514,6 @@ export default function LookupPage() {
       setError(err.message || 'Failed to fetch barcode history');
     } finally {
       setBarcodeLoading(false);
-    }
-  };
-
-  const startBarcodeCamera = async () => {
-    setBarcodeCameraError('');
-
-    try {
-      if (typeof window === 'undefined') return;
-
-      if (barcodeCameraOn) return;
-
-      const hasCamera = !!navigator?.mediaDevices?.getUserMedia;
-      const BarcodeDetectorCtor = (window as any).BarcodeDetector;
-
-      if (!hasCamera || !BarcodeDetectorCtor) {
-        setBarcodeCameraSupported(false);
-        throw new Error('Camera scanning is not supported on this browser.');
-      }
-
-      // Mobile browsers require secure context for camera access (except localhost)
-      if (!window.isSecureContext && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-        throw new Error('Camera needs HTTPS. Open this page over HTTPS on your phone.');
-      }
-
-      // Ensure preview element is mounted before accessing ref
-      setBarcodeCameraOn(true);
-      await new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      });
-
-      let videoEl = barcodeCameraVideoRef.current;
-      if (!videoEl) {
-        // one more frame for slower devices/layout passes
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-        videoEl = barcodeCameraVideoRef.current;
-      }
-      if (!videoEl) {
-        throw new Error('Camera preview is not ready. Please try again.');
-      }
-
-      const detector = new BarcodeDetectorCtor({
-        formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e', 'qr_code'],
-      });
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-        },
-        audio: false,
-      });
-
-      barcodeCameraStreamRef.current = stream;
-      barcodeCameraDetectorRef.current = detector;
-
-      videoEl.srcObject = stream;
-      try {
-        await videoEl.play();
-      } catch {
-        // some browsers auto-play only after user interaction; click already happened, so keep going
-      }
-
-      barcodeCameraActiveRef.current = true;
-      setBarcodeCameraOn(true);
-
-      const scanLoop = async () => {
-        if (!barcodeCameraActiveRef.current) return;
-
-        const v = barcodeCameraVideoRef.current;
-        const d = barcodeCameraDetectorRef.current;
-
-        if (!v || !d) {
-          barcodeCameraRafRef.current = requestAnimationFrame(() => {
-            void scanLoop();
-          });
-          return;
-        }
-
-        if (v.readyState >= 2 && !barcodeCameraBusyRef.current) {
-          barcodeCameraBusyRef.current = true;
-          try {
-            const detected = await d.detect(v);
-            if (Array.isArray(detected) && detected.length > 0) {
-              const raw = detected[0]?.rawValue;
-              const code = String(raw || '').trim();
-
-              if (code) {
-                stopBarcodeCamera();
-                setBarcodeInput(code);
-                setBarcodeData(null);
-                setBarcodePurchaseInfo(null);
-                setError('');
-                await handleSearchBarcode(code);
-                return;
-              }
-            }
-          } catch {
-            // ignore frame-level detector failures and continue scanning
-          } finally {
-            barcodeCameraBusyRef.current = false;
-          }
-        }
-
-        barcodeCameraRafRef.current = requestAnimationFrame(() => {
-          void scanLoop();
-        });
-      };
-
-      barcodeCameraRafRef.current = requestAnimationFrame(() => {
-        void scanLoop();
-      });
-    } catch (e: any) {
-      stopBarcodeCamera();
-      setBarcodeCameraError(e?.message || 'Failed to start mobile camera scanner.');
     }
   };
 
@@ -2426,54 +2236,8 @@ export default function LookupPage() {
                         </button>
                       </div>
                       <p className="mt-2 text-[10px] text-gray-500 dark:text-gray-400 text-center">
-                        Tip: You can scan via physical scanner, or use your phone camera from here.
+                        Tip: You can scan a barcode here using the same scanner behavior as POS (no need to type).
                       </p>
-
-                      <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
-                        {!barcodeCameraOn ? (
-                          <button
-                            onClick={() => {
-                              void startBarcodeCamera();
-                            }}
-                            disabled={barcodeLoading}
-                            className="px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-xs font-medium"
-                          >
-                            Open Mobile Camera
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => stopBarcodeCamera()}
-                            className="px-3 py-1.5 rounded bg-red-600 text-white hover:bg-red-700 transition-colors text-xs font-medium"
-                          >
-                            Stop Camera
-                          </button>
-                        )}
-
-                        <span className="text-[10px] text-gray-500 dark:text-gray-400">
-                          {barcodeCameraSupported
-                            ? 'Use your back camera for faster barcode lookup.'
-                            : 'Camera scan needs a supported browser (Chrome/Edge recommended).'}
-                        </span>
-                      </div>
-
-                      {barcodeCameraOn && (
-                        <div className="mt-3 border border-gray-200 dark:border-gray-800 rounded-md p-2 bg-black/5 dark:bg-white/5">
-                          <video
-                            ref={barcodeCameraVideoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="w-full max-h-72 object-contain rounded"
-                          />
-                          <p className="mt-2 text-[10px] text-gray-500 dark:text-gray-400 text-center">
-                            Align barcode inside the camera view. It will auto-search after detection.
-                          </p>
-                        </div>
-                      )}
-
-                      {barcodeCameraError && (
-                        <p className="mt-2 text-[10px] text-red-600 dark:text-red-400 text-center">{barcodeCameraError}</p>
-                      )}
                     </div>
                   </div>
 
