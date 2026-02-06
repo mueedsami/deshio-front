@@ -486,6 +486,7 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   const [ecCity, setEcCity] = useState('');
   const [ecState, setEcState] = useState('');
   const [ecPostalCode, setEcPostalCode] = useState('');
+  const [ecCountry, setEcCountry] = useState('Bangladesh');
   const [ecLandmark, setEcLandmark] = useState('');
 
   // ✅ Bulk selection + operations (Pathao + Print)
@@ -508,10 +509,10 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     total: number;
     success: number;
     failed: number;
-    status?: 'pending' | 'processing' | 'completed' | 'cancelled';
-    batchCode?: string | null;
-    details: Array<{ orderId: number; orderNumber?: string; status: 'success' | 'failed'; message: string }>;
-  }>({ show: false, current: 0, total: 0, success: 0, failed: 0, status: undefined, batchCode: null, details: [] });
+    batchCode?: string;
+    batchStatus?: 'pending' | 'processing' | 'completed' | 'cancelled' | 'preparing' | 'error';
+    details: Array<{ orderId?: number; orderNumber?: string; status: 'success' | 'failed'; message: string }>;
+  }>({ show: false, current: 0, total: 0, success: 0, failed: 0, batchCode: undefined, batchStatus: 'preparing', details: [] });
 
   // ✅ QZ / printer state
   const [qzConnected, setQzConnected] = useState(false);
@@ -542,18 +543,21 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
 
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
+  const cleanText = (val: any) => (val == null ? '' : String(val)).trim();
 
   const formatShippingAddress = (shipping: any): string => {
     if (!shipping) return '';
     if (typeof shipping === 'string') return shipping;
 
     const s: any = shipping || {};
+    const line1 = s.address_line1 || s.address_line_1 || s.street || s.address || '';
+    const line2 = s.address_line2 || s.address_line_2 || '';
 
     // E-commerce pattern
-    if (s.address_line_1 || s.address_line_2) {
+    if (line1 || line2) {
       const parts: string[] = [];
-      if (s.address_line_1) parts.push(String(s.address_line_1));
-      if (s.address_line_2) parts.push(String(s.address_line_2));
+      if (line1) parts.push(String(line1));
+      if (line2) parts.push(String(line2));
       const cityState = [s.city, s.state].filter(Boolean).join(', ');
       const pc = s.postal_code || s.postalCode || '';
       if (cityState) parts.push(pc ? `${cityState} ${pc}` : cityState);
@@ -650,11 +654,12 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
         setScPostalCode(sa.postal_code || '');
       }
     } else if (orderType === 'ecommerce') {
-      setEcAddress1(sa.address_line_1 || (typeof editableOrder.customer.address === 'string' ? editableOrder.customer.address : '') || '');
-      setEcAddress2(sa.address_line_2 || '');
+      setEcAddress1(sa.address_line1 || sa.address_line_1 || sa.street || (typeof editableOrder.customer.address === 'string' ? editableOrder.customer.address : '') || '');
+      setEcAddress2(sa.address_line2 || sa.address_line_2 || '');
       setEcCity(sa.city || '');
       setEcState(sa.state || '');
       setEcPostalCode(sa.postal_code || '');
+      setEcCountry(sa.country || 'Bangladesh');
       setEcLandmark(sa.landmark || '');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1803,13 +1808,15 @@ amount: newOrderTotal,
     });
   };
 
-  // ✅ Bulk: Send to Pathao (queue-based)
+  // ✅ Bulk: Send to Pathao
   const handleBulkSendToPathao = async () => {
     if (selectedOrders.size === 0) {
       alert('Please select at least one order to send to Pathao.');
       return;
     }
     if (!confirm(`Send ${selectedOrders.size} order(s) to Pathao?`)) return;
+
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
     setIsSendingBulk(true);
     setPathaoProgress({
@@ -1818,15 +1825,18 @@ amount: newOrderTotal,
       total: selectedOrders.size,
       success: 0,
       failed: 0,
-      status: 'pending',
-      batchCode: null,
+      batchCode: undefined,
+      batchStatus: 'preparing',
       details: [],
     });
+
+    let successCount = 0;
+    let failedCount = 0;
 
     try {
       const selectedOrdersList = orders.filter((o) => selectedOrders.has(o.id));
       const shipmentIdsToSend: number[] = [];
-      const precheckFailures: Array<{ orderId: number; orderNumber?: string; status: 'failed'; message: string }> = [];
+      const detailsBuffer: Array<{ orderId?: number; orderNumber?: string; status: 'success' | 'failed'; message: string }> = [];
 
       for (let idx = 0; idx < selectedOrdersList.length; idx++) {
         const order = selectedOrdersList[idx];
@@ -1842,7 +1852,9 @@ amount: newOrderTotal,
 
           if (existingShipment) {
             if (existingShipment.pathao_consignment_id) {
-              precheckFailures.push({ orderId: order.id, orderNumber: order.orderNumber, status: 'failed', message: 'Already sent to Pathao' });
+              failedCount++;
+              detailsBuffer.push({ orderId: order.id, orderNumber: order.orderNumber, status: 'failed', message: 'Already sent to Pathao' });
+              setPathaoProgress((prev) => ({ ...prev, failed: failedCount, details: [...prev.details, detailsBuffer[detailsBuffer.length - 1]] }));
               continue;
             }
             shipmentIdsToSend.push(existingShipment.id);
@@ -1856,91 +1868,167 @@ amount: newOrderTotal,
             shipmentIdsToSend.push(newShipment.id);
           }
         } catch (error: any) {
-          precheckFailures.push({
+          failedCount++;
+          const item = {
             orderId: order.id,
             orderNumber: order.orderNumber,
-            status: 'failed',
+            status: 'failed' as const,
             message: error?.response?.data?.message || error.message || 'Failed',
-          });
+          };
+          detailsBuffer.push(item);
+          setPathaoProgress((prev) => ({ ...prev, failed: failedCount, details: [...prev.details, item] }));
         }
+
+        await wait(250);
       }
 
       if (shipmentIdsToSend.length === 0) {
-        const failedCount = precheckFailures.length;
-        setPathaoProgress((prev) => ({ ...prev, failed: failedCount, details: precheckFailures, status: 'completed' }));
-        alert(`Bulk Send to Pathao Completed!
+        setPathaoProgress((prev) => ({
+          ...prev,
+          current: prev.total,
+          success: successCount,
+          failed: failedCount,
+          batchStatus: 'completed',
+        }));
 
-Success: 0
-Failed: ${failedCount}`);
+        alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
+        setSelectedOrders(new Set());
+        await loadOrders();
         return;
       }
 
-      const startRes: any = await shipmentService.bulkSendToPathao(shipmentIdsToSend);
+      // Start queue batch send (default async mode)
+      const started = await shipmentService.startBulkSendToPathao(shipmentIdsToSend);
 
-      // Backward compatibility for sync/legacy response
-      if (Array.isArray(startRes?.success) || Array.isArray(startRes?.failed)) {
-        const successCount = (startRes?.success || []).length;
-        const failedCount = (startRes?.failed || []).length + precheckFailures.length;
-        const details = [
-          ...precheckFailures,
-          ...(startRes?.success || []).map((item: any) => ({ orderId: 0, orderNumber: item.shipment_number, status: 'success' as const, message: `Consignment ID: ${item.pathao_consignment_id}` })),
-          ...(startRes?.failed || []).map((item: any) => ({ orderId: 0, orderNumber: item.shipment_number, status: 'failed' as const, message: item.reason })),
-        ];
-        setPathaoProgress((prev) => ({ ...prev, current: prev.total, success: successCount, failed: failedCount, details, status: 'completed' }));
-        alert(`Bulk Send to Pathao Completed!
+      // Backward compatible handling if server responds in sync mode
+      if ('success' in started && 'failed' in started) {
+        for (const item of started.success || []) {
+          successCount++;
+          detailsBuffer.push({
+            orderNumber: item.shipment_number,
+            status: 'success',
+            message: `Consignment ID: ${item.pathao_consignment_id}`,
+          });
+        }
 
-Success: ${successCount}
-Failed: ${failedCount}`);
+        for (const item of started.failed || []) {
+          failedCount++;
+          detailsBuffer.push({
+            orderNumber: item.shipment_number,
+            status: 'failed',
+            message: item.reason,
+          });
+        }
+
+        setPathaoProgress((prev) => ({
+          ...prev,
+          current: prev.total,
+          success: successCount,
+          failed: failedCount,
+          batchStatus: 'completed',
+          details: detailsBuffer,
+        }));
       } else {
-        const batchCode = startRes?.batch_code;
+        const batchCode = started.batch_code;
+        const immediateFailures = Array.isArray(started.immediate_failures) ? started.immediate_failures : [];
+
+        if (immediateFailures.length > 0) {
+          failedCount += immediateFailures.length;
+          immediateFailures.forEach((f) => {
+            detailsBuffer.push({
+              orderNumber: f.shipment_number,
+              status: 'failed',
+              message: f.reason,
+            });
+          });
+        }
+
         setPathaoProgress((prev) => ({
           ...prev,
           batchCode,
-          status: 'processing',
-          failed: precheckFailures.length,
-          details: precheckFailures,
+          batchStatus: 'processing',
+          details: [...detailsBuffer],
+          failed: failedCount,
         }));
 
-        if (!batchCode) throw new Error('Batch code not found in response');
+        let summary = await shipmentService.getBulkStatus(batchCode);
 
-        let pollDone = false;
-        while (!pollDone) {
-          const st = await shipmentService.getBulkBatchStatus(batchCode);
+        while (summary.status === 'pending' || summary.status === 'processing') {
+          successCount = summary.success;
+          const queuedFailed = summary.failed;
+          const processedWithPrechecks = failedCount + summary.processed;
+
           setPathaoProgress((prev) => ({
             ...prev,
-            current: Math.max(st.processed || 0, prev.current),
-            total: st.total || prev.total,
-            success: st.success || 0,
-            failed: (st.failed || 0) + precheckFailures.length,
-            status: st.status,
+            batchCode,
+            batchStatus: summary.status,
+            current: Math.min(prev.total, processedWithPrechecks),
+            success: successCount,
+            failed: failedCount + queuedFailed,
           }));
 
-          if (st.status === 'completed' || st.status === 'cancelled') {
-            pollDone = true;
-            const detailsRes = await shipmentService.getBulkBatchDetails(batchCode);
-            const mappedDetails = (detailsRes?.results || []).map((r: any) => ({
-              orderId: 0,
-              orderNumber: r.order_number || r.shipment_number,
-              status: r.success ? 'success' as const : 'failed' as const,
-              message: r.success ? `Consignment ID: ${r.consignment_id || 'N/A'}` : (r.message || 'Failed'),
-            }));
-            setPathaoProgress((prev) => ({ ...prev, details: [...precheckFailures, ...mappedDetails], status: st.status }));
-            alert(`Bulk Send to Pathao ${st.status === 'cancelled' ? 'Cancelled' : 'Completed'}!
-
-Success: ${st.success || 0}
-Failed: ${(st.failed || 0) + precheckFailures.length}`);
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, 2200));
-          }
+          await wait(2000);
+          summary = await shipmentService.getBulkStatus(batchCode);
         }
+
+        // Final status update
+        successCount = summary.success;
+        failedCount = failedCount + summary.failed;
+
+        // Pull per-shipment final details
+        try {
+          const finalDetails = await shipmentService.getBulkStatusDetails(batchCode);
+          for (const item of finalDetails.results || []) {
+            detailsBuffer.push({
+              orderNumber: item.order_number || item.shipment_number,
+              status: item.success ? 'success' : 'failed',
+              message: item.success
+                ? `Consignment ID: ${item.consignment_id || 'N/A'}`
+                : item.message || 'Failed to send',
+            });
+          }
+        } catch (detailsErr) {
+          console.warn('Could not fetch final bulk details:', detailsErr);
+        }
+
+        setPathaoProgress((prev) => ({
+          ...prev,
+          batchCode,
+          batchStatus: summary.status,
+          current: prev.total,
+          success: successCount,
+          failed: failedCount,
+          details: detailsBuffer,
+        }));
       }
 
+      alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
       setSelectedOrders(new Set());
+      // Set courier marker to Pathao in DB (persists after reload + can be filtered)
       try {
-        const ids = selectedOrdersList.map((o) => Number(o?.id)).filter((id) => Number.isFinite(id) && id > 0);
+        const ids = selectedOrdersList
+          .map((o) => Number(o?.id))
+          .filter((id) => Number.isFinite(id) && id > 0);
+
         if (ids.length > 0) {
           const idSet = new Set<number>(ids);
-          await Promise.all(ids.map((id) => orderService.setIntendedCourier(id, 'pathao').catch(() => null)));
+          const concurrency = Math.min(5, ids.length);
+          let idx = 0;
+
+          const worker = async () => {
+            while (idx < ids.length) {
+              const current = ids[idx++];
+              try {
+                await orderService.setIntendedCourier(current, 'pathao');
+              } catch {
+                // ignore per-order failures
+              }
+            }
+          };
+
+          await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+          // optimistic UI update
           setOrders((prev) => prev.map((o) => (idSet.has(o.id) ? { ...o, intendedCourier: 'pathao' } : o)));
         }
       } catch (e) {
@@ -1954,11 +2042,19 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
     } finally {
       setIsSendingBulk(false);
       setTimeout(() => {
-        setPathaoProgress({ show: false, current: 0, total: 0, success: 0, failed: 0, status: undefined, batchCode: null, details: [] });
+        setPathaoProgress({
+          show: false,
+          current: 0,
+          total: 0,
+          success: 0,
+          failed: 0,
+          batchCode: undefined,
+          batchStatus: 'preparing',
+          details: [],
+        });
       }, 2500);
     }
   };
-
 
     const isSocialOrder = (o: Order | any) => {
     const t = String((o as any)?.orderType || (o as any)?.order_type || '').toLowerCase();
@@ -2183,23 +2279,12 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
         return;
       }
 
-      const result = await shipmentService.bulkSendToPathao([shipmentId]);
-      const success = Array.isArray(result?.success) ? result.success : [];
-      const failed = Array.isArray(result?.failed) ? result.failed : [];
-
-      if (success.length > 0) {
-        const item = success[0];
-        alert(
-          `✅ Sent to Pathao successfully!\n\nShipment: ${item.shipment_number ?? ''}\nConsignment ID: ${
-            item.pathao_consignment_id ?? ''
-          }`
-        );
-      } else if (failed.length > 0) {
-        const item = failed[0];
-        alert(`❌ Failed to send to Pathao.\n\nReason: ${item.reason ?? 'Unknown error'}`);
-      } else {
-        alert('Pathao response received, but could not determine success/failure.');
-      }
+      const sent = await shipmentService.sendToPathao(shipmentId);
+      alert(
+        `✅ Sent to Pathao successfully!\n\nShipment: ${sent?.shipment_number ?? shipment?.shipment_number ?? ''}\nConsignment ID: ${
+          sent?.pathao_consignment_id ?? ''
+        }`
+      );
 
       // Set courier marker to Pathao in DB (persists after reload)
       try {
@@ -2642,12 +2727,18 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
 
       // Build shipping_address + customer_address based on order type
       if (orderType === 'social_commerce') {
+        const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+        const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+        const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+
         if (scIsInternational) {
           shipping_address = {
             ...shipping_address,
             name: customerName ?? shipping_address.name ?? '',
             phone: customerPhone ?? shipping_address.phone ?? '',
             street: scInternationalStreet,
+            address_line1: scInternationalStreet,
+            address_line_1: scInternationalStreet,
             city: scCity,
             state: scState || undefined,
             country: scCountry,
@@ -2666,15 +2757,15 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
               name: customerName ?? shipping_address.name ?? '',
               phone: customerPhone ?? shipping_address.phone ?? '',
               street: scStreetAddress,
+              address_line1: scStreetAddress,
+              address_line_1: scStreetAddress,
+              city: shipping_address.city || cityObj?.city_name || scCity || 'Dhaka',
+              country: shipping_address.country || 'Bangladesh',
               postal_code: scPostalCode || undefined,
             };
 
             customer_address_text = `${scStreetAddress}${scPostalCode ? ` - ${scPostalCode}` : ''}`;
           } else {
-            const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
-            const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
-            const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
-
             const cityIdNum = pathaoCityId ? Number(pathaoCityId) : undefined;
             const zoneIdNum = pathaoZoneId ? Number(pathaoZoneId) : undefined;
             const areaIdNum = pathaoAreaId ? Number(pathaoAreaId) : undefined;
@@ -2684,8 +2775,11 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
               name: customerName ?? shipping_address.name ?? '',
               phone: customerPhone ?? shipping_address.phone ?? '',
               street: scStreetAddress,
+              address_line1: scStreetAddress,
+              address_line_1: scStreetAddress,
               area: areaObj?.area_name || shipping_address.area || '',
               city: cityObj?.city_name || shipping_address.city || '',
+              country: shipping_address.country || 'Bangladesh',
               pathao_city_id: cityIdNum,
               pathao_zone_id: zoneIdNum,
               pathao_area_id: areaIdNum,
@@ -2702,16 +2796,52 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
           name: customerName ?? shipping_address.name ?? '',
           phone: customerPhone ?? shipping_address.phone ?? '',
           email: customerEmail ?? shipping_address.email ?? undefined,
+          address_line1: ecAddress1,
           address_line_1: ecAddress1,
+          address_line2: ecAddress2 || undefined,
           address_line_2: ecAddress2 || undefined,
           city: ecCity,
           state: ecState,
           postal_code: ecPostalCode,
+          country: ecCountry || shipping_address.country || 'Bangladesh',
           landmark: ecLandmark || undefined,
         };
 
         const parts = [ecAddress1, ecAddress2, ecCity, ecState].filter(Boolean);
         customer_address_text = parts.join(', ') + (ecPostalCode ? ` ${ecPostalCode}` : '');
+      }
+
+      // Canonicalize shipping payload to match backend validation rules
+      if (shipping_address && typeof shipping_address === 'object' && Object.keys(shipping_address).length > 0) {
+        const normalizedLine1 = cleanText(
+          shipping_address.address_line1 ||
+            shipping_address.address_line_1 ||
+            shipping_address.street ||
+            shipping_address.address ||
+            customer_address_text
+        );
+
+        const normalizedCity = cleanText(
+          shipping_address.city ||
+            (orderType === 'ecommerce' ? ecCity : scCity) ||
+            pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId))?.city_name ||
+            'Dhaka'
+        );
+
+        const normalizedCountry = cleanText(
+          shipping_address.country ||
+            (orderType === 'ecommerce' ? ecCountry : scCountry) ||
+            'Bangladesh'
+        );
+
+        if (normalizedLine1) {
+          shipping_address.address_line1 = normalizedLine1;
+          shipping_address.address_line_1 = shipping_address.address_line_1 || normalizedLine1;
+          shipping_address.street = shipping_address.street || normalizedLine1;
+        }
+
+        shipping_address.city = normalizedCity;
+        shipping_address.country = normalizedCountry;
       }
 
       const payloadBase: any = {
@@ -3080,10 +3210,6 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
                       <Package className="w-3 h-3" />
                       Pathao {pathaoProgress.current}/{pathaoProgress.total}
                     </p>
-                    <p className="text-[10px] text-gray-500">
-                      {pathaoProgress.batchCode ? `Batch: ${pathaoProgress.batchCode} • ` : ''}
-                      {pathaoProgress.status ? `Status: ${pathaoProgress.status}` : ''}
-                    </p>
                     <div className="flex items-center gap-2">
                       <div className="flex items-center gap-0.5">
                         <CheckCircle className="w-3 h-3 text-black dark:text-white" />
@@ -3103,6 +3229,12 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
                       }}
                     />
                   </div>
+                  {pathaoProgress.batchCode ? (
+                    <p className="mt-1 text-[10px] text-gray-600 dark:text-gray-400">
+                      Batch: <span className="font-mono">{pathaoProgress.batchCode}</span>
+                      {pathaoProgress.batchStatus ? ` • ${pathaoProgress.batchStatus}` : ''}
+                    </p>
+                  ) : null}
                 </div>
               )}
 
@@ -4600,6 +4732,15 @@ Failed: ${(st.failed || 0) + precheckFailures.length}`);
                           type="text"
                           value={ecPostalCode}
                           onChange={(e) => setEcPostalCode(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Country*</label>
+                        <input
+                          type="text"
+                          value={ecCountry}
+                          onChange={(e) => setEcCountry(e.target.value)}
                           className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
                         />
                       </div>
