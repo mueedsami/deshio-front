@@ -49,6 +49,47 @@ export interface PathaoArea {
   area_name: string;
 }
 
+
+
+export interface BulkPathaoQueueStartResponse {
+  batch_code: string;
+  batch_id: number;
+  queued_count: number;
+  immediate_failures: Array<{
+    shipment_id?: number;
+    shipment_number?: string;
+    message?: string;
+    reason?: string;
+  }>;
+  status_url?: string;
+}
+
+export interface BulkPathaoBatchStatus {
+  batch_code: string;
+  status: 'pending' | 'processing' | 'completed' | 'cancelled';
+  total: number;
+  processed: number;
+  success: number;
+  failed: number;
+  pending: number;
+  progress: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface BulkPathaoBatchDetails {
+  summary: BulkPathaoBatchStatus;
+  results: Array<{
+    shipment_id: number;
+    shipment_number?: string;
+    order_number?: string;
+    success: boolean;
+    message?: string;
+    consignment_id?: string | null;
+    processed_at?: string;
+  }>;
+}
+
 export interface ShipmentStatistics {
   total_shipments: number;
   pending_shipments: number;
@@ -107,36 +148,79 @@ class ShipmentService {
   }
 
   /**
-   * Bulk send multiple shipments to Pathao
+   * Bulk send multiple shipments to Pathao (queue-based by default)
    * @param shipmentIds - Array of shipment IDs
-   * @returns Results with success and failed lists
+   * @param options - Optional mode flags (sync=true for immediate small-batch mode)
    */
-  async bulkSendToPathao(shipmentIds: number[]): Promise<{
-    success: Array<{
-      shipment_id: number;
-      shipment_number: string;
-      pathao_consignment_id: string;
-    }>;
-    failed: Array<{
-      shipment_id: number;
-      shipment_number: string;
-      reason: string;
-    }>;
-  }> {
+  async bulkSendToPathao(
+    shipmentIds: number[],
+    options?: { sync?: boolean }
+  ): Promise<
+    | {
+        success: Array<{
+          shipment_id: number;
+          shipment_number: string;
+          pathao_consignment_id: string;
+        }>;
+        failed: Array<{
+          shipment_id: number;
+          shipment_number: string;
+          reason: string;
+        }>;
+      }
+    | BulkPathaoQueueStartResponse
+  > {
     try {
       const response = await axiosInstance.post('/shipments/bulk-send-to-pathao', {
-        shipment_ids: shipmentIds
+        shipment_ids: shipmentIds,
+        ...(options?.sync ? { sync: true } : {}),
       });
       const result = response.data;
-      
+
       if (!result.success) {
         throw new Error(result.message || 'Failed to bulk send to Pathao');
       }
-      
+
       return result.data;
     } catch (error: any) {
       console.error('Bulk send to Pathao error:', error);
       throw new Error(error.response?.data?.message || 'Failed to bulk send to Pathao');
+    }
+  }
+
+  async getBulkBatchStatus(batchCode: string): Promise<BulkPathaoBatchStatus> {
+    try {
+      const response = await axiosInstance.get(`/shipments/bulk-status/${encodeURIComponent(batchCode)}`);
+      const result = response.data;
+      if (!result.success) throw new Error(result.message || 'Failed to fetch bulk batch status');
+      return result.data;
+    } catch (error: any) {
+      console.error('Get bulk batch status error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to fetch bulk batch status');
+    }
+  }
+
+  async getBulkBatchDetails(batchCode: string): Promise<BulkPathaoBatchDetails> {
+    try {
+      const response = await axiosInstance.get(`/shipments/bulk-status/${encodeURIComponent(batchCode)}/details`);
+      const result = response.data;
+      if (!result.success) throw new Error(result.message || 'Failed to fetch bulk batch details');
+      return result.data;
+    } catch (error: any) {
+      console.error('Get bulk batch details error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to fetch bulk batch details');
+    }
+  }
+
+  async cancelBulkBatch(batchCode: string): Promise<{ success: boolean; message?: string }> {
+    try {
+      const response = await axiosInstance.post(`/shipments/bulk-status/${encodeURIComponent(batchCode)}/cancel`);
+      const result = response.data;
+      if (!result.success) throw new Error(result.message || 'Failed to cancel batch');
+      return { success: true, message: result.message };
+    } catch (error: any) {
+      console.error('Cancel bulk batch error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to cancel batch');
     }
   }
 
