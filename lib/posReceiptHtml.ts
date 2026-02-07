@@ -153,11 +153,25 @@ function posReceiptBody(order: any) {
   const rows = (r.items || [])
     .map((it) => {
       const name = it.variant ? `${it.name} (${it.variant})` : it.name;
+      const qtyNum = Number(it.qty || 0);
+
+      // Unit Value = product/service unit price.
+      // Amount = Qty × Unit Value.
+      // Any discount is shown separately in the totals section.
+      const hasUnitPrice = Number(it.unitPrice || 0) > 0;
+      const displayUnitValue = hasUnitPrice
+        ? Number(it.unitPrice || 0)
+        : qtyNum > 0
+        ? Number(it.lineTotal || 0) / qtyNum
+        : Number(it.lineTotal || 0);
+
+      const displayAmount = qtyNum > 0 ? displayUnitValue * qtyNum : Number(it.lineTotal || 0);
+
       return `<tr>
         <td class="left">${escapeHtml(name)}</td>
         <td class="center">${escapeHtml(String(it.qty))}</td>
-        <td class="right">${escapeHtml(money(it.unitPrice))}</td>
-        <td class="right">${escapeHtml(money(it.lineTotal))}</td>
+        <td class="right">${escapeHtml(money(displayUnitValue))}</td>
+        <td class="right">${escapeHtml(money(displayAmount))}</td>
       </tr>`;
     })
     .join('');
@@ -242,7 +256,7 @@ function posReceiptBody(order: any) {
         <tr>
           <th class="left">Description</th>
           <th class="center">Qty</th>
-          <th class="right">MRP</th>
+          <th class="right">Unit Value</th>
           <th class="right">Amount</th>
         </tr>
       </thead>
@@ -256,7 +270,7 @@ function posReceiptBody(order: any) {
     <table class="totals">
       <tbody>
         <tr><td>Subtotal</td><td class="right">${escapeHtml(money(subtotal))}</td></tr>
-        <tr><td>VAT${vatRate > 0 ? ` (${escapeHtml(String(vatRate))}%)` : ''}</td><td class="right">${escapeHtml(money(vat))}</td></tr>
+        <tr><td>VAT</td><td class="right">Inclusive</td></tr>
         <tr><td>Discount</td><td class="right">-${escapeHtml(money(discount))}</td></tr>
         ${shipping > 0 ? `<tr><td>Shipping</td><td class="right">${escapeHtml(money(shipping))}</td></tr>` : ''}
         <tr class="strong"><td>Net Amount</td><td class="right">${escapeHtml(money(netAmount))}</td></tr>
