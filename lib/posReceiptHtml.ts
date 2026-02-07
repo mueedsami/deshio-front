@@ -1,5 +1,5 @@
 // lib/posReceiptHtml.ts
-// Detailed POS receipt (RISE-style), now with VAT-inclusive breakdown support and service lines.
+// POS receipt template used by POS and Purchase History prints.
 
 import { normalizeOrderForReceipt, type ReceiptOrder } from '@/lib/receipt';
 
@@ -13,7 +13,7 @@ function escapeHtml(s: string) {
 }
 
 function money(n: any, currency?: string) {
-  const symbol = currency && String(currency).trim() ? String(currency).trim() : '৳';
+  const symbol = currency && String(currency).trim() ? String(currency).trim() : '';
   const x = Number(n || 0);
   const formatted = x.toLocaleString(undefined, {
     minimumFractionDigits: 2,
@@ -70,7 +70,7 @@ function normalizeMethodLabel(raw: unknown): 'CASH' | 'CARD' | 'BKASH' | 'NAGAD'
   if (m.includes('card') || m.includes('visa') || m.includes('master')) return 'CARD';
   if (m.includes('bkash') || m.includes('b-kash') || m.includes('b kash')) return 'BKASH';
   if (m.includes('nagad')) return 'NAGAD';
-  if (m.includes('mobile') || m.includes('wallet') || m.includes('mfs')) return 'BKASH'; // POS often maps BKASH/NAGAD under mobile wallet
+  if (m.includes('mobile') || m.includes('wallet') || m.includes('mfs')) return 'BKASH';
 
   return '';
 }
@@ -113,7 +113,6 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
     return added;
   };
 
-  // 1) explicit breakdown objects/fields first (to avoid double counting)
   let explicitAdded = 0;
   explicitAdded += addKnownKeys(order?.payment_breakdown);
   explicitAdded += addKnownKeys(order?.payments_breakdown);
@@ -126,7 +125,6 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
 
   explicitAdded += addKnownKeys(order);
 
-  // 2) If explicit breakdown not present, use payment history array
   if (explicitAdded <= 0 && Array.isArray(order?.payments)) {
     for (const p of order.payments) {
       const amount = p?.amount;
@@ -137,16 +135,13 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
     }
   }
 
-  // 3) If still empty, fallback to single payment object/string
   const knownTotal = out.CASH + out.CARD + out.BKASH + out.NAGAD + out.OTHERS.reduce((s, x) => s + x.amount, 0);
 
   if (knownTotal <= 0) {
     const methodRaw =
       order?.payment_method || order?.paymentMethod || order?.payments?.method || order?.payment?.method;
     const label = normalizeMethodLabel(methodRaw);
-    if (label) {
-      add(label, paidFallback, methodRaw);
-    }
+    if (label) add(label, paidFallback, methodRaw);
   }
 
   return out;
@@ -155,7 +150,6 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
 function posReceiptBody(order: any) {
   const r: ReceiptOrder = normalizeOrderForReceipt(order);
 
-  // Memo rows (products + services)
   const rows = (r.items || [])
     .map((it) => {
       const name = it.variant ? `${it.name} (${it.variant})` : it.name;
@@ -168,7 +162,6 @@ function posReceiptBody(order: any) {
     })
     .join('');
 
-  // Totals / breakdown
   const subtotal = Number(r.totals?.subtotal ?? 0);
   const discount = Number(r.totals?.discount ?? 0);
   const shipping = Number(r.totals?.shipping ?? 0);
@@ -177,13 +170,11 @@ function posReceiptBody(order: any) {
   const due = Number(r.totals?.due ?? 0);
   const change = Number(r.totals?.change ?? 0);
 
-  // VAT-inclusive handling:
-  // - Prefer explicit tax from normalized totals
-  // - If missing, infer from included VAT rate (if available): VAT = net * rate / (100 + rate)
+  // Prices are VAT inclusive: extract VAT from inclusive total when explicit tax is unavailable.
   const vatRate = detectVatRate(order);
   const explicitVat = Number(r.totals?.tax ?? 0);
-  const inferredVatBase = Math.max(0, netAmount - Math.max(0, shipping));
-  const vat = explicitVat > 0 ? explicitVat : inferInclusiveVat(inferredVatBase, vatRate);
+  const vatBase = Math.max(0, netAmount - Math.max(0, shipping));
+  const vat = explicitVat > 0 ? explicitVat : inferInclusiveVat(vatBase, vatRate);
 
   const paymentMap = extractPaymentBreakdown(order, paid);
   const paymentRows = [
@@ -191,14 +182,12 @@ function posReceiptBody(order: any) {
     { label: 'Card', amount: paymentMap.CARD },
     { label: 'Bkash', amount: paymentMap.BKASH },
     ...(paymentMap.NAGAD > 0 ? [{ label: 'Nagad', amount: paymentMap.NAGAD }] : []),
-  ];
+  ].filter((p) => p.amount > 0);
 
-  // If there are no recognized method amounts but payment exists, keep one fallback row
-  const paymentTotal = paymentRows.reduce((s, p) => s + p.amount, 0);
   const hasOtherPayments = paymentMap.OTHERS.length > 0;
 
   const paymentInfoHtml =
-    paymentTotal > 0 || hasOtherPayments
+    paymentRows.length > 0 || hasOtherPayments
       ? `
       <div class="payment-box">
         <div class="sec-title">Payment Info</div>
@@ -220,24 +209,24 @@ function posReceiptBody(order: any) {
       : `
       <div class="payment-box">
         <div class="sec-title">Payment Info</div>
-        <div class="small muted">Cash/Card/Bkash split not available for this receipt.</div>
+        <div class="small muted">No payment-method split available on this order.</div>
       </div>`;
 
   return `
     <div class="top-center">
-      <div class="brand">RISE</div>
-      <div class="tagline">THINK PINK, THINK RISE</div>
-      <div class="addr">House 26, Road 4, Block F, Banani, Dhaka 1213</div>
-      <div class="hotline">Hotline : 01712-923 185</div>
+      <div class="brand">DESHIO</div>
+      <div class="tagline">Deshio-দেশীয়</div>
+      <div class="addr">House: 4, Road: 1, Dhaka Housing, Adabor, Mohammadpur, Dhaka-1207.</div>
+      <div class="hotline">Mobile: 01711-585400</div>
+      <div class="hotline">BIN : 007243936-0402</div>
       <div class="underline"></div>
-      <div class="section-title">Sales Receipt (Invoice)</div>
       <div class="order-no">Order No : ${escapeHtml(String(r.orderNo || r.id || '—'))}</div>
     </div>
 
     <div class="meta">
       <div><span class="lbl">Date &amp; Time:</span> ${escapeHtml(r.dateTime || new Date().toLocaleString())}</div>
       <div><span class="lbl">Customer Name:</span> ${escapeHtml(r.customerName || 'Walk-in Customer')}</div>
-      <div><span class="lbl">Phone:</span> ${escapeHtml(r.customerPhone || 'N/A')}</div>
+      <div><span class="lbl">Phone:</span> ${escapeHtml(r.customerPhone || 'WALK-IN')}</div>
       ${r.salesBy ? `<div><span class="lbl">Sales By:</span> ${escapeHtml(r.salesBy)}</div>` : ''}
       ${Array.isArray(r.customerAddressLines) && r.customerAddressLines.length > 0
         ? `<div><span class="lbl">Address:</span> ${escapeHtml(r.customerAddressLines.join(', '))}</div>`
@@ -253,7 +242,7 @@ function posReceiptBody(order: any) {
         <tr>
           <th class="left">Description</th>
           <th class="center">Qty</th>
-          <th class="right">Price</th>
+          <th class="right">MRP</th>
           <th class="right">Amount</th>
         </tr>
       </thead>
@@ -267,7 +256,7 @@ function posReceiptBody(order: any) {
     <table class="totals">
       <tbody>
         <tr><td>Subtotal</td><td class="right">${escapeHtml(money(subtotal))}</td></tr>
-        <tr><td>Vat${vatRate > 0 ? ` (${escapeHtml(String(vatRate))}%)` : ''}</td><td class="right">${escapeHtml(money(vat))}</td></tr>
+        <tr><td>VAT${vatRate > 0 ? ` (${escapeHtml(String(vatRate))}%)` : ''}</td><td class="right">${escapeHtml(money(vat))}</td></tr>
         <tr><td>Discount</td><td class="right">-${escapeHtml(money(discount))}</td></tr>
         ${shipping > 0 ? `<tr><td>Shipping</td><td class="right">${escapeHtml(money(shipping))}</td></tr>` : ''}
         <tr class="strong"><td>Net Amount</td><td class="right">${escapeHtml(money(netAmount))}</td></tr>
@@ -282,7 +271,7 @@ function posReceiptBody(order: any) {
     ${r.notes ? `<div class="note">Note: ${escapeHtml(r.notes)}</div>` : ''}
 
     <div class="footer">
-      Thank You For Shopping From RISE
+      Thank you for shopping at Deshio.
     </div>
     <div class="credits">Software solution from mADestic Digital</div>
   `;
@@ -300,10 +289,10 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     html, body { margin:0; padding:0; background:#fff; }
 
     body {
-      font-family: Calibri, Arial, sans-serif;
+      font-family: Calibri, Arial, Helvetica, sans-serif;
       color:#111;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       line-height: 1.4;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
@@ -313,7 +302,7 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
 
     .top-center { text-align:center; }
     .brand {
-      font-size: 22px;
+      font-size: 24px;
       font-weight: 800;
       letter-spacing: .5px;
       margin-bottom: 2px;
@@ -323,14 +312,14 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
       font-weight: 700;
       margin: 1px 0;
     }
-    .section-title { margin-top: 2px; }
+
     .underline {
       border-top: 1px solid #222;
       margin: 6px 0 4px;
     }
 
     .meta { font-size: 13px; margin: 6px 0; }
-    .meta .lbl { font-weight: 700; }
+    .meta .lbl { font-weight: 800; }
     .meta > div { margin: 2px 0; }
 
     .dash {
@@ -349,7 +338,7 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     .items th, .items td {
       padding: 4px 0;
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 700;
       vertical-align: top;
       border-bottom: 1px dotted #cfcfcf;
     }
@@ -381,12 +370,12 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     }
 
     .payment-details td {
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 700;
       padding: 2px 0;
     }
 
-    .small { font-size: 11px; }
+    .small { font-size: 12px; }
     .muted { color: #444; }
 
     .note {

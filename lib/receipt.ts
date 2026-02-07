@@ -79,13 +79,7 @@ function normalizeText(v: unknown): string {
 
 function looksLikeService(it: any): boolean {
   const t = normalizeText(it?.item_type || it?.type);
-  return Boolean(
-    it?.service_id ||
-      it?.serviceId ||
-      it?.is_service ||
-      it?.isService ||
-      t === 'service'
-  );
+  return Boolean(it?.service_id || it?.serviceId || it?.is_service || it?.isService || t === 'service');
 }
 
 function changeFromNotes(notes: string): number {
@@ -104,21 +98,15 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const id = order?.id ?? order?.order_id ?? '';
 
   const orderNo =
-    safeString(order?.order_number) ||
-    safeString(order?.orderNumber) ||
-    safeString(order?.order_no) ||
-    (id ? String(id) : '');
+    safeString(order?.order_number) || safeString(order?.orderNumber) || safeString(order?.order_no) || (id ? String(id) : '');
 
-  const dateTime =
-    formatDateTime(order?.order_date || order?.created_at || order?.createdAt || order?.date);
+  const dateTime = formatDateTime(order?.order_date || order?.created_at || order?.createdAt || order?.date);
 
   // Store
-  const storeName =
-    safeString(order?.store?.name) || safeString(order?.store) || safeString(order?.storeName);
+  const storeName = safeString(order?.store?.name) || safeString(order?.store) || safeString(order?.storeName);
 
   // Salesperson
-  const salesBy =
-    safeString(order?.salesBy) || safeString(order?.salesman?.name) || safeString(order?.created_by?.name);
+  const salesBy = safeString(order?.salesBy) || safeString(order?.salesman?.name) || safeString(order?.created_by?.name);
 
   // Customer
   const customerName = safeString(order?.customer?.name) || safeString(order?.customerName);
@@ -139,15 +127,12 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
 
   const shippingAddress = order?.shipping_address || order?.shippingAddress;
   if (shippingAddress && typeof shippingAddress === 'object') {
-    // common keys: address, area, city, district, division, postal_code
     if (shippingAddress.address) addrLines.push(safeString(shippingAddress.address));
     const areaLine = [shippingAddress.area, shippingAddress.zone].filter(Boolean).join(', ');
     if (areaLine) addrLines.push(areaLine);
     const cityLine = [shippingAddress.city, shippingAddress.district].filter(Boolean).join(', ');
     if (cityLine) addrLines.push(cityLine);
-    const divLine = [shippingAddress.division, shippingAddress.postal_code || shippingAddress.postalCode]
-      .filter(Boolean)
-      .join(' - ');
+    const divLine = [shippingAddress.division, shippingAddress.postal_code || shippingAddress.postalCode].filter(Boolean).join(' - ');
     if (divLine) addrLines.push(divLine);
   }
 
@@ -158,14 +143,14 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
 
   // Items (products + services)
   const items: ReceiptItem[] = [];
+  const seenLines = new Set<string>();
 
   const pushItem = (src: any, kind: 'product' | 'service') => {
-    const qty = Number(src?.quantity ?? src?.qty ?? 0) || 0;
+    const qtyRaw = Number(src?.quantity ?? src?.qty ?? 0) || 0;
     const unitPrice = parseMoney(src?.unit_price ?? src?.price ?? src?.unitPrice ?? src?.base_price);
     const discount = parseMoney(src?.discount_amount ?? src?.discount ?? 0);
-    const computed = Math.max(0, qty * unitPrice - discount);
-    const lineTotal =
-      parseMoney(src?.total_amount ?? src?.amount ?? src?.lineTotal) || computed;
+    const computed = Math.max(0, qtyRaw * unitPrice - discount);
+    const lineTotal = parseMoney(src?.total_amount ?? src?.amount ?? src?.lineTotal) || computed;
 
     const barcodes = Array.isArray(src?.barcodes)
       ? (src.barcodes as string[])
@@ -183,14 +168,18 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
         ? safeString(src?.category || src?.service_category || src?.service?.category || '')
         : safeString(src?.size || src?.variant || '');
 
-    // Show line even if qty is 0 only when there is amount/price (some backends omit quantity for services)
-    const safeQty = qty > 0 ? qty : lineTotal > 0 || unitPrice > 0 ? 1 : 0;
-    if (!name && safeQty <= 0 && lineTotal <= 0) return;
+    // Some service rows come with qty=0 but valid amount.
+    const qty = qtyRaw > 0 ? qtyRaw : lineTotal > 0 || unitPrice > 0 ? 1 : 0;
+    if (!name && qty <= 0 && lineTotal <= 0) return;
+
+    const dedupeKey = `${kind}|${name}|${variant}|${qty}|${unitPrice}|${lineTotal}`;
+    if (seenLines.has(dedupeKey)) return;
+    seenLines.add(dedupeKey);
 
     items.push({
       name: name || (kind === 'service' ? 'Service' : 'Item'),
       variant,
-      qty: safeQty,
+      qty,
       unitPrice,
       discount,
       lineTotal,
@@ -198,43 +187,23 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     });
   };
 
-  // Social-commerce style: order.products
   if (Array.isArray(order?.products)) {
     for (const p of order.products) {
       pushItem(p, looksLikeService(p) ? 'service' : 'product');
     }
   }
 
-  // Backend/order style: order.items (may include both products and services)
   if (Array.isArray(order?.items)) {
     for (const it of order.items) {
       pushItem(it, looksLikeService(it) ? 'service' : 'product');
     }
   }
 
-  // Some APIs return service rows in a separate array
   const rawServices: any[] =
-    (order?.services ??
-      order?.service_items ??
-      order?.order_services ??
-      order?.orderServices ??
-      order?.serviceItems ??
-      []) as any[];
+    (order?.services ?? order?.service_items ?? order?.order_services ?? order?.orderServices ?? order?.serviceItems ?? []) as any[];
 
   if (Array.isArray(rawServices) && rawServices.length > 0) {
-    // avoid duplicating service rows already included in order.items
-    const seenServiceRowIds = new Set<string>();
-    if (Array.isArray(order?.items)) {
-      for (const it of order.items) {
-        if (!looksLikeService(it)) continue;
-        const rid = it?.id ?? it?.order_service_id ?? it?.orderServiceId ?? it?.pivot?.id;
-        if (rid != null) seenServiceRowIds.add(String(rid));
-      }
-    }
-
     for (const s of rawServices) {
-      const rid = s?.id ?? s?.order_service_id ?? s?.orderServiceId ?? s?.pivot?.id;
-      if (rid != null && seenServiceRowIds.has(String(rid))) continue;
       pushItem(s, 'service');
     }
   }
@@ -285,9 +254,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     parseMoney(order?.payments?.totalPaid) ||
     parseMoney(order?.paid_amount) ||
     parseMoney(order?.amounts?.paid) ||
-    (Array.isArray(order?.payments)
-      ? (order.payments as any[]).reduce((s, p) => s + parseMoney(p?.amount), 0)
-      : 0);
+    (Array.isArray(order?.payments) ? (order.payments as any[]).reduce((s, p) => s + parseMoney(p?.amount), 0) : 0);
 
   const due =
     parseMoney(order?.payments?.due) ||
@@ -297,12 +264,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
 
   const notes = safeString(order?.notes);
 
-  const explicitChange =
-    parseMoney(order?.change_amount) ||
-    parseMoney(order?.changeAmount) ||
-    parseMoney(order?.change) ||
-    0;
-
+  const explicitChange = parseMoney(order?.change_amount) || parseMoney(order?.changeAmount) || parseMoney(order?.change) || 0;
   const noteChange = changeFromNotes(notes);
   const overpayChange = Math.max(0, paid - total);
   const change = Math.max(explicitChange, noteChange, overpayChange);

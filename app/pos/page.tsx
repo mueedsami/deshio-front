@@ -933,16 +933,16 @@ export default function POSPage() {
                 ));
 
             const serviceFallbackFromCart = cart
-              .filter((c: any) => c?.type === 'service')
+              .filter((c: any) => c?.isService || c?.type === 'service')
               .map((c: any) => ({
                 id: c.id,
                 service_id: c.serviceId,
                 service_name: c.productName,
-                quantity: c.quantity,
+                quantity: c.qty ?? c.quantity ?? 1,
                 unit_price: c.price,
-                discount_amount: c.discount,
+                discount_amount: c.discount ?? 0,
                 total_amount: c.amount,
-                category: c.category,
+                category: c.serviceCategory ?? c.category,
               }));
 
             const printableOrder = {
