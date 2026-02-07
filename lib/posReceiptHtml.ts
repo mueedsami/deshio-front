@@ -37,22 +37,29 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
   <title>${escapeHtml(title)}</title>
   <style>
     @page { size: 80mm auto; margin: 6mm; }
-    body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; color:#111; }
-    .center { text-align:center; }
-    .muted { color:#444; }
-    .tiny { font-size: 10px; }
-    .small { font-size: 11px; }
-    .h { font-size: 20px; font-weight: 800; letter-spacing: 1px; margin: 0; }
-    .line { border-top: 1px dashed #999; margin: 8px 0; }
-    table { width:100%; border-collapse: collapse; font-size: 11px; }
-    th { text-align:left; border-bottom: 1px solid #ddd; padding: 4px 0; }
-    td { padding: 3px 0; vertical-align: top; }
-    .right { text-align:right; }
+    body {
+      font-family: Calibri, Arial, Helvetica, sans-serif;
+      color: #111;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
+      margin: 0;
+    }
+    .center { text-align: center; }
+    .muted { color: #333; }
+    .tiny { font-size: 12px; }
+    .small { font-size: 13px; }
+    .h { font-size: 24px; font-weight: 800; letter-spacing: 0.7px; margin: 0; }
+    .line { border-top: 1px dashed #999; margin: 10px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th { text-align: left; border-bottom: 1px solid #ddd; padding: 5px 0; font-weight: 800; }
+    td { padding: 4px 0; vertical-align: top; }
+    .right { text-align: right; }
     .nowrap { white-space: nowrap; }
-    .totals td { padding: 2px 0; }
+    .totals td { padding: 3px 0; }
     .totals .label { width: 60%; }
-    .totals .val { width: 40%; text-align:right; }
-    .footer { margin-top: 10px; font-size: 10px; text-align: center; color:#333; }
+    .totals .val { width: 40%; text-align: right; }
+    .footer { margin-top: 10px; font-size: 12px; text-align: center; color: #333; font-weight: 700; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
 </head>
