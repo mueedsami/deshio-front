@@ -137,6 +137,32 @@ export interface PurchaseOrderStatistics {
   recent_orders: PurchaseOrder[];
 }
 
+
+
+export interface DeleteBlocker {
+  type: string;
+  message: string;
+  details?: any;
+}
+
+export interface CanDeletePurchaseOrderData {
+  can_delete: boolean;
+  po_number: string;
+  vendor_name?: string;
+  status: string;
+  total_amount: string | number;
+  items_count: number;
+  blockers: DeleteBlocker[];
+}
+
+export interface HardDeletePurchaseOrderData {
+  id: number;
+  po_number: string;
+  vendor_name?: string;
+  total_amount: string | number;
+  status: string;
+  items_count: number;
+}
 class PurchaseOrderService {
   private readonly baseURL = '/purchase-orders';
 
@@ -287,6 +313,28 @@ class PurchaseOrderService {
     const response: AxiosResponse<ApiResponse<void>> = await axiosInstance.post(
       `${this.baseURL}/${id}/cancel`,
       { reason }
+    );
+    return response.data;
+  }
+
+
+
+  /**
+   * Check if purchase order can be permanently deleted
+   */
+  async canDelete(id: number): Promise<ApiResponse<CanDeletePurchaseOrderData>> {
+    const response: AxiosResponse<ApiResponse<CanDeletePurchaseOrderData>> = await axiosInstance.get(
+      `${this.baseURL}/${id}/can-delete`
+    );
+    return response.data;
+  }
+
+  /**
+   * Permanently delete purchase order (hard delete)
+   */
+  async hardDelete(id: number): Promise<ApiResponse<HardDeletePurchaseOrderData>> {
+    const response: AxiosResponse<ApiResponse<HardDeletePurchaseOrderData>> = await axiosInstance.delete(
+      `${this.baseURL}/${id}`
     );
     return response.data;
   }
