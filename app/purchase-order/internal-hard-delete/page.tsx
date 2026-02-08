@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   AlertCircle,
@@ -17,6 +17,8 @@ import purchaseOrderService, {
   CanDeletePurchaseOrderData,
   PurchaseOrder,
 } from '@/services/purchase-order.service';
+
+export const dynamic = 'force-dynamic';
 
 const formatCurrency = (value: any): string => {
   if (value === null || value === undefined || value === '') return '0.00';
@@ -65,7 +67,7 @@ const statusColor = (status?: string) => {
   }
 };
 
-export default function PurchaseOrderHardDeletePage() {
+function PurchaseOrderHardDeleteClientPage() {
   const searchParams = useSearchParams();
 
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -457,5 +459,14 @@ export default function PurchaseOrderHardDeletePage() {
         </main>
       </div>
     </div>
+  );
+}
+
+
+export default function PurchaseOrderHardDeletePage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading...</div>}>
+      <PurchaseOrderHardDeleteClientPage />
+    </Suspense>
   );
 }
