@@ -15,10 +15,16 @@ function escapeHtml(s: string) {
 function money(n: any, currency?: string) {
   const symbol = currency && String(currency).trim() ? String(currency).trim() : '';
   const x = Number(n || 0);
-  const formatted = x.toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
+
+  // Keep thousands separators, but remove trailing .00 everywhere.
+  // Examples: 2000.00 -> 2,000 | 1999.50 -> 1,999.50
+  const fixed = x.toFixed(2);
+  const [intPartRaw, decPart] = fixed.split('.');
+  const intPart = Number(intPartRaw).toLocaleString(undefined, {
+    maximumFractionDigits: 0,
   });
+  const formatted = decPart === '00' ? intPart : `${intPart}.${decPart}`;
+
   return `${symbol}${formatted}`;
 }
 
@@ -113,17 +119,32 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
     return added;
   };
 
+  // IMPORTANT: payment shapes often duplicate the same values across
+  // payment_breakdown/payment/paymentInfo/root keys.
+  // Use precedence (first non-empty source) instead of summing all sources.
+  const rootPaymentSlice = {
+    cash: order?.cash ?? order?.cash_paid ?? order?.cashPaid,
+    card: order?.card ?? order?.card_paid ?? order?.cardPaid,
+    bkash: order?.bkash ?? order?.bkash_paid ?? order?.bkashPaid,
+    nagad: order?.nagad ?? order?.nagad_paid ?? order?.nagadPaid,
+  };
+
+  const candidateObjects = [
+    order?.payment_breakdown,
+    order?.payments_breakdown,
+    order?.paymentInfo,
+    order?.payment,
+    rootPaymentSlice,
+  ];
+
   let explicitAdded = 0;
-  explicitAdded += addKnownKeys(order?.payment_breakdown);
-  explicitAdded += addKnownKeys(order?.payments_breakdown);
-  explicitAdded += addKnownKeys(order?.paymentInfo);
-
-  const directLikeObj = order?.payment;
-  if (directLikeObj && typeof directLikeObj === 'object' && !Array.isArray(directLikeObj)) {
-    explicitAdded += addKnownKeys(directLikeObj);
+  for (const obj of candidateObjects) {
+    const added = addKnownKeys(obj);
+    if (added > 0) {
+      explicitAdded = added;
+      break;
+    }
   }
-
-  explicitAdded += addKnownKeys(order);
 
   if (explicitAdded <= 0 && Array.isArray(order?.payments)) {
     for (const p of order.payments) {
@@ -256,7 +277,7 @@ function posReceiptBody(order: any) {
         <tr>
           <th class="left">Description</th>
           <th class="center">Qty</th>
-          <th class="right">Unit Value</th>
+          <th class="right">Price</th>
           <th class="right">Amount</th>
         </tr>
       </thead>
