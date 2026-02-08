@@ -284,6 +284,10 @@ function posReceiptBody(order: any) {
 
     ${r.notes ? `<div class="note">Note: ${escapeHtml(r.notes)}</div>` : ''}
 
+    <div class="policy">
+      Items sold cannot be returned but may only be exchanged in their unworn condition with tags and original receipt within 7 days. Discount &amp; Offer items cannot be exchanged.
+    </div>
+
     <div class="footer">
       Thank you for shopping at Deshio.
     </div>
@@ -396,6 +400,14 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
       margin-top: 8px;
       font-size: 12px;
       font-weight: 700;
+    }
+
+    .policy {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.45;
     }
 
     .footer {
