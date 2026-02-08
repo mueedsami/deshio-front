@@ -9,7 +9,7 @@ import customerService, { Customer, CustomerOrder } from '@/services/customerSer
 import orderService from '@/services/orderService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
-import lookupService from '@/services/lookupService';
+import lookupService, { LookupProductData } from '@/services/lookupService';
 import purchaseOrderService from '@/services/purchase-order.service';
 import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
@@ -447,8 +447,9 @@ export default function LookupPage() {
   const scannerBufferRef = useRef<string>('');
   const scannerTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Purchase info (best effort): which PO this barcode/batch came from
-  const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId: number; poNumber?: string; vendorName?: string } | null>(null);
+  // Purchase info (lookup/product + fallback): PO & vendor details for this barcode
+  const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId?: number; poNumber?: string; vendorName?: string } | null>(null);
+  const [barcodeLookupData, setBarcodeLookupData] = useState<LookupProductData | null>(null);
   const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
 
   // Physical scanner detection for the Barcode tab
@@ -470,6 +471,7 @@ export default function LookupPage() {
       setBarcodeInput(code);
       setBarcodeData(null);
       setBarcodePurchaseInfo(null);
+      setBarcodeLookupData(null);
       setError('');
 
       // Use override so we don't depend on state timing
@@ -1468,22 +1470,72 @@ export default function LookupPage() {
     return m2;
   };
 
-  const resolveBarcodePurchaseInfo = async (data: any) => {
-    const poId = extractPurchaseOrderIdFromBarcode(data);
-    if (!poId) {
-      setBarcodePurchaseInfo(null);
-      return;
+  const resolveBarcodePurchaseInfo = async (barcode: string, historyData?: any) => {
+    setBarcodePurchaseLoading(true);
+
+    try {
+      // Primary source: enhanced lookup endpoint (includes purchase_order + vendor)
+      const lookupRes = await lookupService.getProductByBarcode(barcode);
+      const lk: any = lookupRes?.data || null;
+
+      if (lookupRes?.success && lk) {
+        setBarcodeLookupData(lk);
+
+        const po: any = lk?.purchase_order || null;
+        const vendor: any = lk?.vendor || lk?.product?.vendor || null;
+
+        const poIdRaw =
+          po?.id ??
+          lk?.purchase_order_id ??
+          lk?.purchaseOrderId ??
+          lk?.purchase_order_origin?.id ??
+          null;
+
+        const poId = typeof poIdRaw === 'number' ? poIdRaw : Number.isFinite(Number(poIdRaw)) ? Number(poIdRaw) : undefined;
+
+        const poNumber =
+          po?.po_number ||
+          po?.poNumber ||
+          lk?.purchase_order_origin?.po_number ||
+          lk?.purchase_order_origin?.poNumber ||
+          undefined;
+
+        const vendorName =
+          vendor?.company_name || vendor?.companyName || vendor?.name || po?.vendor?.company_name || po?.vendor?.name || undefined;
+
+        const hasPO = Boolean(lk?.summary?.has_purchase_order ?? po ?? poId ?? poNumber);
+        const hasVendor = Boolean(lk?.summary?.has_vendor_info ?? vendor ?? vendorName);
+
+        if (hasPO || hasVendor || poId || poNumber || vendorName) {
+          setBarcodePurchaseInfo({ poId, poNumber, vendorName });
+          setBarcodePurchaseLoading(false);
+          return;
+        }
+      }
+    } catch {
+      // no-op: fallback below
     }
 
-    setBarcodePurchaseLoading(true);
+    // Fallback path: infer PO from barcode history and call PO API
     try {
+      if (!historyData) {
+        setBarcodePurchaseInfo(null);
+        return;
+      }
+
+      const poId = extractPurchaseOrderIdFromBarcode(historyData);
+      if (!poId) {
+        setBarcodePurchaseInfo(null);
+        return;
+      }
+
       const res = await purchaseOrderService.getById(poId);
-      const po: any = res?.data || res; // api wrapper differences
+      const po: any = res?.data || res;
       const poNumber = po?.po_number || po?.poNumber || po?.order_number || po?.orderNumber;
       const vendorName = po?.vendor?.name || po?.vendor_name || po?.vendorName;
       setBarcodePurchaseInfo({ poId, poNumber, vendorName });
     } catch {
-      setBarcodePurchaseInfo({ poId });
+      setBarcodePurchaseInfo(null);
     } finally {
       setBarcodePurchaseLoading(false);
     }
@@ -1500,6 +1552,7 @@ export default function LookupPage() {
     setError('');
     setBarcodeData(null);
     setBarcodePurchaseInfo(null);
+    setBarcodeLookupData(null);
 
     try {
       const res = await barcodeTrackingService.getBarcodeHistory(code);
@@ -1509,7 +1562,7 @@ export default function LookupPage() {
       }
       const enriched = await enrichBarcodeHistoryWithBatchPrices(res.data as any);
       setBarcodeData(enriched as any);
-      await resolveBarcodePurchaseInfo(enriched as any);
+      await resolveBarcodePurchaseInfo(code, enriched as any);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch barcode history');
     } finally {
@@ -1701,7 +1754,8 @@ export default function LookupPage() {
     }
     if (tab === 'barcode') {
       setBarcodeData(null);
-    setBarcodePurchaseInfo(null);
+      setBarcodePurchaseInfo(null);
+      setBarcodeLookupData(null);
     }
     if (tab === 'batch') {
       setBatchData(null);
@@ -1744,6 +1798,10 @@ export default function LookupPage() {
   };
 
   const barcodeSaleInfo = getBarcodeSaleInfo(barcodeData);
+  const barcodePO: any = barcodeLookupData?.purchase_order || null;
+  const barcodeVendor: any = barcodeLookupData?.vendor || barcodeLookupData?.product?.vendor || null;
+  const barcodePOOrigin: any = barcodeLookupData?.purchase_order_origin || null;
+  const barcodeSummary: any = barcodeLookupData?.summary || null;
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -2302,25 +2360,167 @@ export default function LookupPage() {
                           </div>
                         )}
 
-                        {/* PURCHASE ORDER / VENDOR (NEW) */}
+                        {/* PURCHASE ORDER / VENDOR */}
                         <div className="mt-3 border border-gray-200 dark:border-gray-800 rounded p-2 bg-white dark:bg-gray-900/20">
                           <div className="flex items-center justify-between gap-2">
-                            <p className="text-[9px] text-gray-500 uppercase font-medium">Purchase</p>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Procurement</p>
                             {barcodePurchaseLoading && (
                               <span className="text-[9px] text-gray-500 dark:text-gray-400">loading…</span>
                             )}
                           </div>
-                          <p className="text-[10px] text-black dark:text-white mt-1">
-                            Purchase Order:{' '}
-                            <span className="font-semibold">
-                              {barcodePurchaseInfo?.poNumber ||
-                                (barcodePurchaseInfo?.poId ? `#${barcodePurchaseInfo.poId}` : '—')}
-                            </span>
-                          </p>
-                          <p className="text-[10px] text-black dark:text-white">
-                            Vendor:{' '}
-                            <span className="font-semibold">{barcodePurchaseInfo?.vendorName || '—'}</span>
-                          </p>
+
+                          <div className="mt-1 grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Purchase Order</p>
+                              <p className="text-[10px] text-black dark:text-white">
+                                <span className="font-semibold">
+                                  {barcodePO?.po_number ||
+                                    barcodePOOrigin?.po_number ||
+                                    barcodePurchaseInfo?.poNumber ||
+                                    (barcodePO?.id ? `#${barcodePO.id}` : barcodePurchaseInfo?.poId ? `#${barcodePurchaseInfo.poId}` : '—')}
+                                </span>
+                              </p>
+                              <div className="mt-1 text-[10px] text-black dark:text-white space-y-0.5">
+                                <p>
+                                  Status:{' '}
+                                  <span className="font-semibold">
+                                    {barcodePO?.status || (barcodeSummary?.has_purchase_order ? 'Linked' : '—')}
+                                  </span>
+                                </p>
+                                <p>
+                                  Payment:{' '}
+                                  <span className="font-semibold">{barcodePO?.payment_status || '—'}</span>
+                                </p>
+                                <p>
+                                  Order Date:{' '}
+                                  <span className="font-semibold">{formatDate(barcodePO?.order_date)}</span>
+                                </p>
+                                <p>
+                                  Expected Delivery:{' '}
+                                  <span className="font-semibold">{formatDate(barcodePO?.expected_delivery_date)}</span>
+                                </p>
+                                <p>
+                                  Received Store:{' '}
+                                  <span className="font-semibold">{barcodePO?.store?.name || '—'}</span>
+                                </p>
+                                <p>
+                                  Created By:{' '}
+                                  <span className="font-semibold">{barcodePO?.created_by?.name || barcodePO?.createdBy?.name || '—'}</span>
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Vendor</p>
+                              <p className="text-[10px] text-black dark:text-white">
+                                <span className="font-semibold">
+                                  {barcodeVendor?.company_name || barcodeVendor?.companyName || barcodeVendor?.name || barcodePurchaseInfo?.vendorName || '—'}
+                                </span>
+                              </p>
+                              <div className="mt-1 text-[10px] text-black dark:text-white space-y-0.5">
+                                <p>
+                                  Contact:{' '}
+                                  <span className="font-semibold">{barcodeVendor?.name || '—'}</span>
+                                </p>
+                                <p>
+                                  Phone:{' '}
+                                  <span className="font-semibold">{barcodeVendor?.phone || '—'}</span>
+                                </p>
+                                <p>
+                                  Email:{' '}
+                                  <span className="font-semibold">{barcodeVendor?.email || '—'}</span>
+                                </p>
+                                <p>
+                                  Payment Terms:{' '}
+                                  <span className="font-semibold">{barcodeVendor?.payment_terms || barcodeVendor?.paymentTerms || '—'}</span>
+                                </p>
+                                <p>
+                                  Status:{' '}
+                                  <span className="font-semibold">{barcodeVendor?.status || (barcodeSummary?.has_vendor_info ? 'Linked' : '—')}</span>
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {(barcodePO || barcodeSummary?.has_purchase_order) && (
+                            <div className="mt-2 border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">PO Financials</p>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-black dark:text-white">
+                                <p>
+                                  Total:{' '}
+                                  <span className="font-semibold">{barcodePO?.total_amount != null ? formatCurrency(barcodePO.total_amount) : '—'}</span>
+                                </p>
+                                <p>
+                                  Paid:{' '}
+                                  <span className="font-semibold">{barcodePO?.paid_amount != null ? formatCurrency(barcodePO.paid_amount) : '—'}</span>
+                                </p>
+                                <p>
+                                  Outstanding:{' '}
+                                  <span className="font-semibold">
+                                    {barcodePO?.outstanding_amount != null ? formatCurrency(barcodePO.outstanding_amount) : '—'}
+                                  </span>
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {(barcodePO?.item_details || barcodePO?.itemDetails) && (
+                            <div className="mt-2 border border-gray-200 dark:border-gray-800 rounded p-2">
+                              <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">This Product In PO</p>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[10px] text-black dark:text-white">
+                                <p>
+                                  Ordered:{' '}
+                                  <span className="font-semibold">
+                                    {(barcodePO?.item_details?.quantity_ordered ?? barcodePO?.itemDetails?.quantity_ordered ?? barcodePO?.itemDetails?.quantityOrdered) ?? '—'}
+                                  </span>
+                                </p>
+                                <p>
+                                  Received:{' '}
+                                  <span className="font-semibold">
+                                    {(barcodePO?.item_details?.quantity_received ?? barcodePO?.itemDetails?.quantity_received ?? barcodePO?.itemDetails?.quantityReceived) ?? '—'}
+                                  </span>
+                                </p>
+                                <p>
+                                  Receive Status:{' '}
+                                  <span className="font-semibold">
+                                    {barcodePO?.item_details?.receive_status || barcodePO?.itemDetails?.receive_status || barcodePO?.itemDetails?.receiveStatus || '—'}
+                                  </span>
+                                </p>
+                                <p>
+                                  Unit Cost:{' '}
+                                  <span className="font-semibold">
+                                    {(barcodePO?.item_details?.unit_cost ?? barcodePO?.itemDetails?.unit_cost ?? barcodePO?.itemDetails?.unitCost) != null
+                                      ? formatCurrency(barcodePO?.item_details?.unit_cost ?? barcodePO?.itemDetails?.unit_cost ?? barcodePO?.itemDetails?.unitCost)
+                                      : '—'}
+                                  </span>
+                                </p>
+                                <p>
+                                  Unit Sell:{' '}
+                                  <span className="font-semibold">
+                                    {(barcodePO?.item_details?.unit_sell_price ?? barcodePO?.itemDetails?.unit_sell_price ?? barcodePO?.itemDetails?.unitSellPrice) != null
+                                      ? formatCurrency(
+                                          barcodePO?.item_details?.unit_sell_price ?? barcodePO?.itemDetails?.unit_sell_price ?? barcodePO?.itemDetails?.unitSellPrice
+                                        )
+                                      : '—'}
+                                  </span>
+                                </p>
+                                <p>
+                                  Total Cost:{' '}
+                                  <span className="font-semibold">
+                                    {(barcodePO?.item_details?.total_cost ?? barcodePO?.itemDetails?.total_cost ?? barcodePO?.itemDetails?.totalCost) != null
+                                      ? formatCurrency(barcodePO?.item_details?.total_cost ?? barcodePO?.itemDetails?.total_cost ?? barcodePO?.itemDetails?.totalCost)
+                                      : '—'}
+                                  </span>
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {!barcodePO && !barcodeVendor && !barcodeSummary?.has_purchase_order && !barcodeSummary?.has_vendor_info && !barcodePurchaseInfo && (
+                            <p className="mt-2 text-[10px] text-gray-500 dark:text-gray-400">
+                              No purchase order/vendor info linked to this barcode.
+                            </p>
+                          )}
                         </div>
 
                         {/* SOLD / ORDER INFO (works even if movement history is empty, if backend sends meta) */}
