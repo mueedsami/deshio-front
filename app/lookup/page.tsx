@@ -11,6 +11,7 @@ import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
 import lookupService, { LookupProductData } from '@/services/lookupService';
 import purchaseOrderService from '@/services/purchase-order.service';
+import productImageService from '@/services/productImageService';
 import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 import BatchPrinter from "@/components/BatchPrinter";
@@ -451,6 +452,29 @@ export default function LookupPage() {
   const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId?: number; poNumber?: string; vendorName?: string } | null>(null);
   const [barcodeLookupData, setBarcodeLookupData] = useState<LookupProductData | null>(null);
   const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
+  const [barcodeProductImageUrl, setBarcodeProductImageUrl] = useState<string | null>(null);
+  const [barcodeImagePreviewOpen, setBarcodeImagePreviewOpen] = useState(false);
+  const [barcodeImagePreviewUrl, setBarcodeImagePreviewUrl] = useState<string | null>(null);
+
+  const closeBarcodeImagePreview = () => {
+    setBarcodeImagePreviewOpen(false);
+    setBarcodeImagePreviewUrl(null);
+  };
+
+  const openBarcodeImagePreview = (url: string) => {
+    if (!url) return;
+    setBarcodeImagePreviewUrl(url);
+    setBarcodeImagePreviewOpen(true);
+  };
+
+  useEffect(() => {
+    if (!barcodeImagePreviewOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeBarcodeImagePreview();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [barcodeImagePreviewOpen]);
 
   // Physical scanner detection for the Barcode tab
   useEffect(() => {
@@ -472,6 +496,8 @@ export default function LookupPage() {
       setBarcodeData(null);
       setBarcodePurchaseInfo(null);
       setBarcodeLookupData(null);
+      setBarcodeProductImageUrl(null);
+      closeBarcodeImagePreview();
       setError('');
 
       // Use override so we don't depend on state timing
@@ -633,6 +659,60 @@ export default function LookupPage() {
       hour: '2-digit',
       minute: '2-digit',
     });
+  };
+
+  const parseId = (v: any): number | null => {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
+    if (typeof v === 'string' && v.trim()) {
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  };
+
+  const apiOrigin = (() => {
+    const base = (process.env.NEXT_PUBLIC_API_URL || '').trim();
+    if (!base) return '';
+    return base.replace(/\/api\/?$/, '');
+  })();
+
+  const toAbsoluteAssetUrl = (raw: any): string | null => {
+    if (!raw || typeof raw !== 'string') return null;
+    const v = raw.trim();
+    if (!v) return null;
+    if (/^https?:\/\//i.test(v)) return v;
+    if (v.startsWith('//')) return `https:${v}`;
+    if (!apiOrigin) return v;
+    if (v.startsWith('/')) return `${apiOrigin}${v}`;
+    return `${apiOrigin}/${v}`;
+  };
+
+  const extractProductImageFromLookup = (lk: any): string | null => {
+    const p = lk?.product || {};
+    const primary = p?.primary_image || p?.primaryImage || lk?.primary_image || lk?.primaryImage || {};
+    const images =
+      (Array.isArray(p?.images) ? p.images : null) ||
+      (Array.isArray(lk?.images) ? lk.images : null) ||
+      (Array.isArray(p?.product_images) ? p.product_images : null) ||
+      [];
+
+    const candidate =
+      p?.image_url ||
+      p?.imageUrl ||
+      p?.thumbnail ||
+      p?.thumbnail_url ||
+      p?.photo ||
+      p?.picture ||
+      primary?.image_url ||
+      primary?.imageUrl ||
+      primary?.url ||
+      images?.[0]?.image_url ||
+      images?.[0]?.imageUrl ||
+      images?.[0]?.url ||
+      images?.[0]?.path ||
+      null;
+
+    return toAbsoluteAssetUrl(candidate);
   };
 
   const formatOrderType = (order: CustomerOrder) => {
@@ -1473,72 +1553,218 @@ export default function LookupPage() {
   const resolveBarcodePurchaseInfo = async (barcode: string, historyData?: any) => {
     setBarcodePurchaseLoading(true);
 
+    let mergedLookup: any = null;
+    let po: any = null;
+    let vendor: any = null;
+    let poOrigin: any = null;
+    let poId: number | null = null;
+    let poNumber: string | undefined;
+    let vendorName: string | undefined;
+    let resolvedImageUrl: string | null = null;
+
     try {
       // Primary source: enhanced lookup endpoint (includes purchase_order + vendor)
       const lookupRes = await lookupService.getProductByBarcode(barcode);
-      const lk: any = lookupRes?.data || null;
+      const lkRaw: any = lookupRes?.data || null;
+      const lk: any = lkRaw?.data && typeof lkRaw?.data === 'object' ? lkRaw.data : lkRaw;
 
-      if (lookupRes?.success && lk) {
+      if (lookupRes?.success && lk && typeof lk === 'object') {
+        mergedLookup = lk;
         setBarcodeLookupData(lk);
 
-        const po: any = lk?.purchase_order || null;
-        const vendor: any = lk?.vendor || lk?.product?.vendor || null;
+        resolvedImageUrl = extractProductImageFromLookup(lk);
 
-        const poIdRaw =
-          po?.id ??
-          lk?.purchase_order_id ??
-          lk?.purchaseOrderId ??
-          lk?.purchase_order_origin?.id ??
+        po =
+          lk?.purchase_order ||
+          lk?.purchaseOrder ||
+          lk?.po ||
+          lk?.procurement?.purchase_order ||
+          lk?.procurement?.purchaseOrder ||
           null;
 
-        const poId = typeof poIdRaw === 'number' ? poIdRaw : Number.isFinite(Number(poIdRaw)) ? Number(poIdRaw) : undefined;
+        vendor =
+          lk?.vendor ||
+          lk?.vendor_info ||
+          lk?.vendorInfo ||
+          lk?.procurement?.vendor ||
+          lk?.procurement?.vendor_info ||
+          lk?.product?.vendor ||
+          po?.vendor ||
+          null;
 
-        const poNumber =
+        poOrigin = lk?.purchase_order_origin || lk?.purchaseOrderOrigin || lk?.po_origin || null;
+
+        poId =
+          parseId(po?.id) ||
+          parseId(po?.purchase_order_id) ||
+          parseId(lk?.purchase_order_id) ||
+          parseId(lk?.purchaseOrderId) ||
+          parseId(poOrigin?.id) ||
+          parseId(poOrigin?.po_id) ||
+          parseId(poOrigin?.purchase_order_id) ||
+          null;
+
+        poNumber =
           po?.po_number ||
           po?.poNumber ||
-          lk?.purchase_order_origin?.po_number ||
-          lk?.purchase_order_origin?.poNumber ||
+          po?.order_number ||
+          po?.orderNumber ||
+          poOrigin?.po_number ||
+          poOrigin?.poNumber ||
           undefined;
 
-        const vendorName =
-          vendor?.company_name || vendor?.companyName || vendor?.name || po?.vendor?.company_name || po?.vendor?.name || undefined;
+        vendorName =
+          vendor?.company_name ||
+          vendor?.companyName ||
+          vendor?.name ||
+          po?.vendor?.company_name ||
+          po?.vendor?.companyName ||
+          po?.vendor?.name ||
+          undefined;
+      }
+    } catch {
+      // continue to fallback path
+    }
 
-        const hasPO = Boolean(lk?.summary?.has_purchase_order ?? po ?? poId ?? poNumber);
-        const hasVendor = Boolean(lk?.summary?.has_vendor_info ?? vendor ?? vendorName);
+    // Fallback 1: infer PO from barcode history, then fetch PO detail
+    if (!poId && historyData) {
+      poId = extractPurchaseOrderIdFromBarcode(historyData);
+    }
 
-        if (hasPO || hasVendor || poId || poNumber || vendorName) {
-          setBarcodePurchaseInfo({ poId, poNumber, vendorName });
-          setBarcodePurchaseLoading(false);
-          return;
+    // Fallback 2: infer PO from /batches/{id} when barcode history doesn't expose PO fields
+    if (!poId && historyData) {
+      try {
+        const batchId =
+          parseId(historyData?.current_location?.batch?.id) ||
+          parseId(historyData?.current_location?.batch_id) ||
+          parseId(historyData?.batch?.id) ||
+          null;
+
+        if (batchId) {
+          const br = await batchService.getBatch(batchId);
+          const b: any = br?.data;
+          const batchPo = b?.purchase_order || b?.purchaseOrder || b?.po || null;
+          const batchVendor = b?.vendor || b?.vendor_info || batchPo?.vendor || null;
+
+          poId =
+            parseId(batchPo?.id) ||
+            parseId(b?.purchase_order_id) ||
+            parseId(b?.purchaseOrderId) ||
+            parseId(b?.po_id) ||
+            poId;
+
+          if (!po && batchPo) po = batchPo;
+          if (!vendor && batchVendor) vendor = batchVendor;
+
+          if (!poNumber) {
+            poNumber = batchPo?.po_number || batchPo?.poNumber || undefined;
+          }
+          if (!vendorName) {
+            vendorName =
+              batchVendor?.company_name || batchVendor?.companyName || batchVendor?.name || vendorName;
+          }
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    // Fallback 3: fetch PO by ID for richer details + vendor
+    if (poId && (!po || !vendor || !poNumber || !vendorName)) {
+      try {
+        const res = await purchaseOrderService.getById(poId);
+        const fullPo: any = res?.data || res;
+        if (fullPo) {
+          po = po || fullPo;
+          vendor = vendor || fullPo?.vendor || null;
+          poNumber = poNumber || fullPo?.po_number || fullPo?.poNumber || fullPo?.order_number || fullPo?.orderNumber;
+          vendorName =
+            vendorName ||
+            fullPo?.vendor?.company_name ||
+            fullPo?.vendor?.companyName ||
+            fullPo?.vendor?.name ||
+            fullPo?.vendor_name ||
+            fullPo?.vendorName;
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    // Merge enhanced procurement details into lookup payload for UI section
+    if (mergedLookup || po || vendor) {
+      const base = mergedLookup || {};
+      const summary = {
+        ...(base?.summary || {}),
+        has_purchase_order: Boolean(base?.summary?.has_purchase_order ?? po ?? poId ?? poNumber),
+        has_vendor_info: Boolean(base?.summary?.has_vendor_info ?? vendor ?? vendorName),
+      };
+
+      const merged = {
+        ...base,
+        ...(po ? { purchase_order: po } : {}),
+        ...(vendor ? { vendor } : {}),
+        ...(poOrigin ? { purchase_order_origin: poOrigin } : {}),
+        summary,
+      };
+
+      setBarcodeLookupData(merged);
+    }
+
+    // Resolve product image (lookup payload first, then dedicated image endpoints)
+    if (!resolvedImageUrl) {
+      const productId =
+        parseId(mergedLookup?.product?.id) ||
+        parseId(historyData?.product?.id) ||
+        parseId(historyData?.current_location?.product_id) ||
+        null;
+
+      if (productId) {
+        try {
+          const imgRes: any = await productImageService.getPrimaryImage(productId);
+          const primary = imgRes?.data || imgRes?.image || imgRes;
+          const img =
+            primary?.image_url ||
+            primary?.imageUrl ||
+            primary?.url ||
+            primary?.path ||
+            null;
+          resolvedImageUrl = toAbsoluteAssetUrl(img);
+        } catch {
+          // ignore
+        }
+
+        if (!resolvedImageUrl) {
+          try {
+            const listRes: any = await productImageService.getProductImages(productId);
+            const list =
+              listRes?.data?.images ||
+              listRes?.data ||
+              listRes?.images ||
+              (Array.isArray(listRes) ? listRes : []);
+            const first = Array.isArray(list) && list.length > 0 ? list[0] : null;
+            const img = first?.image_url || first?.imageUrl || first?.url || first?.path || null;
+            resolvedImageUrl = toAbsoluteAssetUrl(img);
+          } catch {
+            // ignore
+          }
         }
       }
-    } catch {
-      // no-op: fallback below
     }
 
-    // Fallback path: infer PO from barcode history and call PO API
-    try {
-      if (!historyData) {
-        setBarcodePurchaseInfo(null);
-        return;
-      }
+    setBarcodeProductImageUrl(resolvedImageUrl || null);
 
-      const poId = extractPurchaseOrderIdFromBarcode(historyData);
-      if (!poId) {
-        setBarcodePurchaseInfo(null);
-        return;
-      }
-
-      const res = await purchaseOrderService.getById(poId);
-      const po: any = res?.data || res;
-      const poNumber = po?.po_number || po?.poNumber || po?.order_number || po?.orderNumber;
-      const vendorName = po?.vendor?.name || po?.vendor_name || po?.vendorName;
-      setBarcodePurchaseInfo({ poId, poNumber, vendorName });
-    } catch {
+    if (po || vendor || poId || poNumber || vendorName) {
+      setBarcodePurchaseInfo({
+        ...(poId ? { poId } : {}),
+        ...(poNumber ? { poNumber } : {}),
+        ...(vendorName ? { vendorName } : {}),
+      });
+    } else {
       setBarcodePurchaseInfo(null);
-    } finally {
-      setBarcodePurchaseLoading(false);
     }
+
+    setBarcodePurchaseLoading(false);
   };
 
   const handleSearchBarcode = async (codeOverride?: string) => {
@@ -1553,6 +1779,8 @@ export default function LookupPage() {
     setBarcodeData(null);
     setBarcodePurchaseInfo(null);
     setBarcodeLookupData(null);
+    setBarcodeProductImageUrl(null);
+    closeBarcodeImagePreview();
 
     try {
       const res = await barcodeTrackingService.getBarcodeHistory(code);
@@ -1756,6 +1984,8 @@ export default function LookupPage() {
       setBarcodeData(null);
       setBarcodePurchaseInfo(null);
       setBarcodeLookupData(null);
+      setBarcodeProductImageUrl(null);
+      closeBarcodeImagePreview();
     }
     if (tab === 'batch') {
       setBatchData(null);
@@ -1798,9 +2028,24 @@ export default function LookupPage() {
   };
 
   const barcodeSaleInfo = getBarcodeSaleInfo(barcodeData);
-  const barcodePO: any = barcodeLookupData?.purchase_order || null;
-  const barcodeVendor: any = barcodeLookupData?.vendor || barcodeLookupData?.product?.vendor || null;
-  const barcodePOOrigin: any = barcodeLookupData?.purchase_order_origin || null;
+  const barcodePO: any =
+    barcodeLookupData?.purchase_order ||
+    (barcodeLookupData as any)?.purchaseOrder ||
+    (barcodeLookupData as any)?.po ||
+    (barcodeLookupData as any)?.procurement?.purchase_order ||
+    null;
+  const barcodeVendor: any =
+    barcodeLookupData?.vendor ||
+    (barcodeLookupData as any)?.vendor_info ||
+    (barcodeLookupData as any)?.vendorInfo ||
+    barcodeLookupData?.product?.vendor ||
+    barcodePO?.vendor ||
+    null;
+  const barcodePOOrigin: any =
+    barcodeLookupData?.purchase_order_origin ||
+    (barcodeLookupData as any)?.purchaseOrderOrigin ||
+    (barcodeLookupData as any)?.po_origin ||
+    null;
   const barcodeSummary: any = barcodeLookupData?.summary || null;
 
   return (
@@ -2214,7 +2459,10 @@ export default function LookupPage() {
                                                   setActiveTab('barcode');
                                                   setBarcodeInput(code);
                                                   setBarcodeData(null);
-    setBarcodePurchaseInfo(null);
+                                                  setBarcodePurchaseInfo(null);
+                                                  setBarcodeLookupData(null);
+                                                  setBarcodeProductImageUrl(null);
+                                                  closeBarcodeImagePreview();
                                                   setError('');
                                                   setTimeout(() => handleSearchBarcode(), 0);
                                                 }}
@@ -2312,9 +2560,42 @@ export default function LookupPage() {
                               Barcode: <span className="font-semibold">{barcodeData.barcode}</span>
                             </p>
                           </div>
-                          <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
-                            {barcodeData.total_movements} movements
-                          </span>
+                          <div className="flex items-start gap-2">
+                            {(() => {
+                              const fallbackFromHistory =
+                                toAbsoluteAssetUrl((barcodeData as any)?.product?.image_url) ||
+                                toAbsoluteAssetUrl((barcodeData as any)?.product?.imageUrl) ||
+                                toAbsoluteAssetUrl((barcodeData as any)?.product?.thumbnail) ||
+                                null;
+                              const finalImage = barcodeProductImageUrl || fallbackFromHistory;
+
+                              return finalImage ? (
+                              <button
+                                type="button"
+                                onClick={() => openBarcodeImagePreview(finalImage)}
+                                className="group relative"
+                                title="Click to preview image"
+                              >
+                                <img
+                                  src={finalImage}
+                                  alt={barcodeData?.product?.name || 'Product image'}
+                                  className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 object-cover"
+                                  loading="lazy"
+                                />
+                                <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[8px] text-gray-500 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                  View
+                                </span>
+                              </button>
+                              ) : (
+                              <div className="w-12 h-12 rounded border border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] text-gray-400 dark:text-gray-500">
+                                No image
+                              </div>
+                              );
+                            })()}
+                            <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                              {barcodeData.total_movements} movements
+                            </span>
+                          </div>
                         </div>
 
                         {/* Current location */}
@@ -3073,6 +3354,36 @@ export default function LookupPage() {
                 </>
               )}
             </div>
+
+            {/* Barcode Product Image Preview Modal */}
+            {barcodeImagePreviewOpen && barcodeImagePreviewUrl && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/70" onClick={closeBarcodeImagePreview} />
+                <div className="relative w-full max-w-4xl bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-black dark:text-white">Product Image</p>
+                      <p className="text-[10px] text-gray-600 dark:text-gray-400">{barcodeData?.product?.name || 'Barcode product'}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeBarcodeImagePreview}
+                      className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90"
+                    >
+                      Close
+                    </button>
+                  </div>
+
+                  <div className="p-3 bg-gray-50 dark:bg-gray-950 flex items-center justify-center max-h-[80vh] overflow-auto">
+                    <img
+                      src={barcodeImagePreviewUrl}
+                      alt={barcodeData?.product?.name || 'Product image'}
+                      className="max-w-full max-h-[72vh] object-contain rounded"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </main>
         </div>
       </div>
