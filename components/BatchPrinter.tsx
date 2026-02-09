@@ -129,20 +129,13 @@ function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: num
   return [line1, line2] as const;
 }
 
-function splitByFirstDash(text: string) {
+function normalizeLabelName(text: string) {
   const clean = (text || "").trim().replace(/\s+/g, " ");
-  if (!clean) return null;
+  if (!clean) return "";
 
-  // Support common dash variants: -, – (en dash), — (em dash)
-  const m = clean.match(/[-–—]/);
-  if (!m || m.index === undefined) return null;
-
-  const idx = m.index;
-  const left = clean.slice(0, idx).trim();
-  const right = clean.slice(idx + 1).trim();
-  if (!left || !right) return null;
-
-  return [left, right] as const;
+  // Normalize separators so wrap logic can break naturally on spaces
+  // Example: "Mueed-ta-40" -> "Mueed - ta - 40"
+  return clean.replace(/\s*[-–—]\s*/g, " - ");
 }
 
 async function renderLabelBase64(opts: {
@@ -187,48 +180,33 @@ async function renderLabelBase64(opts: {
   const nameY = topPad + Math.round(hPx * 0.14);
   const nameMaxW = wPx - pad * 2;
   const lineGap = Math.max(2, Math.round(hPx * 0.01));
-  const fullName = (opts.productName || "Product").trim();
+  const fullName = normalizeLabelName(opts.productName || "Product");
 
   let name1 = "";
   let name2 = "";
   let afterNameY = 0;
 
-  const dashSplit = splitByFirstDash(fullName);
-  if (dashSplit) {
-    // Always render in 2 lines (same as Multi)
-    [name1, name2] = dashSplit;
+  let nameFont = Math.round(hPx * 0.095);
+  ctx.font = `700 ${nameFont}px Arial`;
 
-    const nameFont = Math.round(hPx * 0.082);
+  [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+
+  // If it needs 2 lines, shrink font for safety
+  if (name2) {
+    nameFont = Math.round(hPx * 0.082);
     ctx.font = `700 ${nameFont}px Arial`;
-
-    name1 = fitText(ctx, name1, nameMaxW);
-    name2 = fitText(ctx, name2, nameMaxW);
-
-    ctx.fillText(name1, centerX, nameY);
-    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
-
-    afterNameY = nameY + (nameFont + lineGap) * 2 + Math.round(hPx * 0.03);
-  } else {
-    // Fallback: word-based wrap (same as your Multi)
-    let nameFont = Math.round(hPx * 0.095);
-    ctx.font = `700 ${nameFont}px Arial`;
-
     [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
-    if (name2) {
-      nameFont = Math.round(hPx * 0.082);
-      ctx.font = `700 ${nameFont}px Arial`;
-      [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
-    }
-
-    ctx.fillText(name1, centerX, nameY);
-
-    let afterNameBottom = nameY + nameFont;
-    if (name2) {
-      ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
-      afterNameBottom = nameY + (nameFont + lineGap) * 2;
-    }
-    afterNameY = afterNameBottom + Math.round(hPx * 0.03);
   }
+
+  ctx.fillText(name1, centerX, nameY);
+
+  let afterNameBottom = nameY + nameFont;
+  if (name2) {
+    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
+    afterNameBottom = nameY + (nameFont + lineGap) * 2;
+  }
+
+  afterNameY = afterNameBottom + Math.round(hPx * 0.03);
 
   // Barcode
   const JsBarcode = (window as any).JsBarcode;
