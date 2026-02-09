@@ -256,7 +256,9 @@ async function renderLabelBase64(opts: {
   // Price
   const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
   ctx.textBaseline = "bottom";
-  ctx.font = `800 ${Math.round(hPx * 0.085)}px Arial`;
+  const priceFontSize = Math.round(hPx * 0.082);
+  // Use a mono-style numeric font stack for clearer digit differentiation (e.g., 6 vs 8)
+  ctx.font = `700 ${priceFontSize}px "Consolas", "Lucida Console", "DejaVu Sans Mono", "Courier New", monospace`;
   const priceY = hPx - pad;
   ctx.fillText(fitText(ctx, priceText, wPx - pad * 2), centerX, priceY);
 
