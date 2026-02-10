@@ -696,9 +696,9 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                         Latest first
                       </div>
                     </div>
-                    <div className="max-h-28 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
-                      {scanHistory.slice(0, 10).map((s, idx) => (
-                        <div key={s.barcode} className="px-3 py-2">
+                    <div className="max-h-40 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
+                      {scanHistory.map((s, idx) => (
+                        <div key={`${s.barcode}-${idx}`} className="px-3 py-2">
                           <div className="text-xs font-mono text-gray-900 dark:text-white truncate">
                             {idx + 1}. {s.barcode}
                           </div>
@@ -707,11 +707,6 @@ const CreateDispatchModal: React.FC<CreateDispatchModalProps> = ({
                           </div>
                         </div>
                       ))}
-                      {scanHistory.length > 10 && (
-                        <div className="px-3 py-2 text-[11px] text-gray-500 dark:text-gray-400">
-                          +{scanHistory.length - 10} more…
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}

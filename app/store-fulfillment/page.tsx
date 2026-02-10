@@ -107,8 +107,7 @@ export default function StoreFulfillmentPage() {
             const details = await storeFulfillmentService.getOrderDetails(orderId);
             const items = details?.order?.items || [];
             const preview = items
-              .slice(0, 3)
-              .map((it: any) => `${it.product_name}${it.quantity ? ` x${it.quantity}` : ''}`)
+              .map((it: any) => `${it.product_name}${it.quantity ? ` ×${it.quantity}` : ''}`)
               .filter(Boolean);
 
             if (!cancelled) {
@@ -502,7 +501,7 @@ export default function StoreFulfillmentPage() {
                       const progress = order.fulfillment_progress;
                       const isNew = order.status === 'assigned_to_store';
                       const totalItems = (progress?.total_items ?? order.items?.length ?? 0) as number;
-                      const preview = orderPreviews[order.id] || (order.items?.length ? order.items.slice(0, 3).map((it: any) => {
+                      const preview = orderPreviews[order.id] || (order.items?.length ? order.items.map((it: any) => {
                         const qty = typeof it.quantity === 'number' ? it.quantity : parseFloat(String(it.quantity || 0));
                         const name = it.product_name || it.product?.name || 'Item';
                         return qty > 1 ? `${name} ×${qty}` : `${name}`;
@@ -534,20 +533,17 @@ export default function StoreFulfillmentPage() {
 
                               {/* Primary products preview */}
                               {preview.length > 0 ? (
-                                <div className="flex flex-wrap gap-2 mt-2">
-                                  {preview.map((label, idx) => (
-                                    <span
-                                      key={`${order.id}-prev-${idx}`}
-                                      className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
-                                    >
-                                      {label}
-                                    </span>
-                                  ))}
-                                  {(progress?.total_items ?? order.items?.length ?? 0) > preview.length && (
-                                    <span className="text-xs text-gray-500 dark:text-gray-400 self-center">
-                                      +{(progress?.total_items ?? order.items?.length ?? 0) - preview.length} more
-                                    </span>
-                                  )}
+                                <div className="mt-2 max-h-28 overflow-y-auto pr-1 custom-scrollbar">
+                                  <div className="flex flex-wrap gap-2">
+                                    {preview.map((label, idx) => (
+                                      <span
+                                        key={`${order.id}-prev-${idx}`}
+                                        className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-200"
+                                      >
+                                        {label}
+                                      </span>
+                                    ))}
+                                  </div>
                                 </div>
                               ) : (
                                 <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">

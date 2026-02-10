@@ -348,8 +348,8 @@ export default function DispatchBarcodeScanModal({
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-0">
           {/* Left: Items */}
-          <div className="lg:col-span-1 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-700">
-            <div className="p-6">
+          <div className="lg:col-span-1 border-b lg:border-b-0 lg:border-r border-gray-200 dark:border-gray-700 min-h-0">
+            <div className="p-6 h-full flex flex-col min-h-0">
               <div className="flex items-center gap-2 text-sm font-semibold text-gray-900 dark:text-white mb-3">
                 <Package className="w-4 h-4" /> Items
               </div>
@@ -358,7 +358,7 @@ export default function DispatchBarcodeScanModal({
                   No items found in this dispatch.
                 </div>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
                   {items.map((it) => {
                     const active = it.id === selectedItemId;
                     const hint = mode === 'send'

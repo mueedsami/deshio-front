@@ -320,20 +320,17 @@ export default function StoreAssignmentPage() {
                             <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                               👤 {order.customer?.name} • 📱 {order.customer?.phone}
                             </p>
-                            <div className="flex flex-wrap gap-2 mt-3">
-                              {order.items_summary?.slice(0, 3).map((item, idx) => (
-                                <span
-                                  key={idx}
-                                  className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-                                >
-                                  {item.product_name} (×{item.quantity})
-                                </span>
-                              ))}
-                              {(order.items_summary?.length || 0) > 3 && (
-                                <span className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                                  +{(order.items_summary?.length || 0) - 3} more
-                                </span>
-                              )}
+                            <div className="mt-3 max-h-24 overflow-y-auto pr-1">
+                              <div className="flex flex-wrap gap-2">
+                                {order.items_summary?.map((item, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                  >
+                                    {item.product_name} (×{item.quantity})
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           </div>
                           <div className="text-right ml-4">
