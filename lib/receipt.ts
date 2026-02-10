@@ -145,6 +145,62 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const items: ReceiptItem[] = [];
   const seenLines = new Set<string>();
 
+  const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
+
+  const emitItem = (args: {
+    src: any;
+    kind: 'product' | 'service';
+    name: string;
+    variant: string;
+    qty: number;
+    unitPrice: number;
+    lineTotal: number;
+    discount: number;
+    barcodes: string[];
+  }) => {
+    const { src, kind, name, variant, qty, unitPrice, lineTotal, discount, barcodes } = args;
+
+    // IMPORTANT:
+    // Keep same-product lines separate when barcode is different
+    // (e.g., 2 pieces of the same SKU scanned as 2 unique barcodes).
+    // This prevents receipts from hiding one line while subtotal still includes it.
+    const stableId = safeString(
+      src?.id ??
+        src?.item_id ??
+        src?.order_item_id ??
+        src?.orderItemId ??
+        src?.line_id ??
+        src?.lineId ??
+        src?.product_barcode_id ??
+        src?.barcode_id ??
+        src?.barcodeId
+    );
+
+    const barcodeSig = barcodes.length > 0 ? [...barcodes].sort().join('|') : '';
+    const batchSig = safeString(src?.batch_number ?? src?.batchNo ?? src?.batch ?? src?.batch_id ?? src?.product_batch_id);
+    const skuSig = safeString(src?.sku ?? src?.product_sku ?? src?.productSku);
+
+    // If a row has a stable id but also barcode(s), include barcode in dedupe key.
+    // Otherwise split rows coming from one aggregated line (qty 2, barcode A+B)
+    // can collapse back into one line.
+    const dedupeKey = stableId
+      ? `${kind}|id:${stableId}|bc:${barcodeSig || '-'}|batch:${batchSig}|sku:${skuSig}`
+      : `${kind}|${name}|${variant}|${qty}|${unitPrice}|${lineTotal}|bc:${barcodeSig}|batch:${batchSig}|sku:${skuSig}`;
+
+    if (seenLines.has(dedupeKey)) return;
+    seenLines.add(dedupeKey);
+
+    items.push({
+      name: name || (kind === 'service' ? 'Service' : 'Item'),
+      variant,
+      qty,
+      unitPrice,
+      discount,
+      lineTotal,
+      barcodes: barcodes.length ? barcodes : undefined,
+    });
+  };
+
   const pushItem = (src: any, kind: 'product' | 'service') => {
     const qtyRaw = Number(src?.quantity ?? src?.qty ?? 0) || 0;
     const unitPrice = parseMoney(src?.unit_price ?? src?.price ?? src?.unitPrice ?? src?.base_price);
@@ -152,11 +208,15 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     const computed = Math.max(0, qtyRaw * unitPrice - discount);
     const lineTotal = parseMoney(src?.total_amount ?? src?.amount ?? src?.lineTotal) || computed;
 
-    const barcodes = Array.isArray(src?.barcodes)
+    const rawBarcodes = Array.isArray(src?.barcodes)
       ? (src.barcodes as string[])
       : src?.barcode
       ? [String(src.barcode)]
-      : undefined;
+      : [];
+
+    const barcodes = rawBarcodes
+      .map((b) => String(b || '').trim())
+      .filter(Boolean);
 
     const name =
       kind === 'service'
@@ -172,17 +232,45 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     const qty = qtyRaw > 0 ? qtyRaw : lineTotal > 0 || unitPrice > 0 ? 1 : 0;
     if (!name && qty <= 0 && lineTotal <= 0) return;
 
-    const dedupeKey = `${kind}|${name}|${variant}|${qty}|${unitPrice}|${lineTotal}`;
-    if (seenLines.has(dedupeKey)) return;
-    seenLines.add(dedupeKey);
+    // Option 1 behavior (preferred):
+    // If backend gives one aggregated row with multiple barcodes and qty matches,
+    // split into one line per barcode (qty 1 each).
+    const qtyInt = Number.isInteger(qty) ? qty : Math.round(qty);
+    const canSplitPerBarcode = qtyInt > 1 && barcodes.length === qtyInt;
 
-    items.push({
-      name: name || (kind === 'service' ? 'Service' : 'Item'),
+    if (canSplitPerBarcode) {
+      // Keep financial totals consistent with original row.
+      const perUnitLine = qtyInt > 0 ? round2(lineTotal / qtyInt) : round2(unitPrice);
+      let remaining = round2(lineTotal);
+
+      barcodes.forEach((bc, idx) => {
+        const thisLine = idx === barcodes.length - 1 ? round2(remaining) : perUnitLine;
+        remaining = round2(remaining - thisLine);
+
+        emitItem({
+          src,
+          kind,
+          name,
+          variant,
+          qty: 1,
+          unitPrice,
+          lineTotal: thisLine,
+          discount: 0,
+          barcodes: [bc],
+        });
+      });
+      return;
+    }
+
+    emitItem({
+      src,
+      kind,
+      name,
       variant,
       qty,
       unitPrice,
-      discount,
       lineTotal,
+      discount,
       barcodes,
     });
   };
