@@ -569,6 +569,13 @@ export default function POSPage() {
   const due = total - totalPaid;
   const change = !isInstallment && totalPaid > total ? totalPaid - total : 0;
 
+  // 🚫 Business rule: POS should not allow due sales from frontend
+  // Small tolerance to avoid floating-point edge cases (e.g., 0.01)
+  const SALE_DUE_TOLERANCE = 0.009;
+  const outstandingAmount = Math.max(0, due);
+  const isUnderpaid = !isInstallment && outstandingAmount > SALE_DUE_TOLERANCE;
+  const canCompleteSale = !isProcessing && cart.length > 0 && !isUnderpaid;
+
   // ============ ORDER SUBMISSION ============
 
   const handleSell = async () => {
@@ -586,14 +593,23 @@ export default function POSPage() {
       return;
     }
 
+    // 🚫 Block due sales on POS (non-installment)
+    if (!isInstallment && isUnderpaid) {
+      showToast(
+        `Full payment required. Please collect at least ৳${total.toFixed(2)} (short by ৳${outstandingAmount.toFixed(2)}).`,
+        'error'
+      );
+      return;
+    }
+
     // ✅ Confirmation
     if (isInstallment) {
       const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
       const msg = `Installment/EMI: ${n} × ৳${installmentAmount.toFixed(2)}. First installment will be collected now. Continue?`;
       if (!confirm(msg)) return;
     } else {
-      // ✅ FIXED: Only warn if there's actual unpaid balance (not overpayment)
-      if (due > 0 && !confirm(`Outstanding amount: ৳${due.toFixed(2)}. Continue?`)) {
+      // Due sales are blocked; optional confirmation only when change needs to be returned.
+      if (change > 0 && !confirm(`Change to return: ৳${change.toFixed(2)}. Continue?`)) {
         return;
       }
     }
@@ -883,13 +899,13 @@ export default function POSPage() {
             await paymentService.process(order.id, {
               payment_method_id: paymentSplits[0].payment_method_id,
               amount: paymentSplits[0].amount,
-              payment_type: (due <= 0 ? 'full' : 'partial') as 'full' | 'partial',
+              payment_type: 'full' as 'full' | 'partial',
               auto_complete: true,
             });
           } else if (paymentSplits.length > 1) {
             await paymentService.processSplit(order.id, {
               total_amount: splitsTotal, // ✅ FIXED: Use actual splits total
-              payment_type: due <= 0 ? 'full' : 'partial',
+              payment_type: 'full',
               auto_complete: true,
               splits: paymentSplits,
             });
@@ -2014,6 +2030,12 @@ export default function POSPage() {
                           ৳{Math.max(0, due).toFixed(2)}
                         </span>
                       </div>
+
+                      {!isInstallment && isUnderpaid && (
+                        <p className="mt-2 text-xs font-semibold text-red-600 dark:text-red-400">
+                          Full payment required before sale. Short by ৳{outstandingAmount.toFixed(2)}.
+                        </p>
+                      )}
                     </div>
 
                     <div className="mt-4 flex items-center justify-between gap-3">
@@ -2040,10 +2062,16 @@ export default function POSPage() {
 
                     <button
                       onClick={handleSell}
-                      disabled={isProcessing || cart.length === 0}
+                      disabled={!canCompleteSale}
                       className="w-full py-2.5 bg-gray-900 hover:bg-gray-800 dark:bg-white dark:hover:bg-gray-100 text-white dark:text-gray-900 rounded-md text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isProcessing ? 'Processing...' : isInstallment ? 'Complete Sale (Installment)' : 'Complete Sale'}
+                      {isProcessing
+                        ? 'Processing...'
+                        : isUnderpaid
+                          ? `Pay ৳${outstandingAmount.toFixed(2)} more`
+                          : isInstallment
+                            ? 'Complete Sale (Installment)'
+                            : 'Complete Sale'}
                     </button>
                   </div>
                 </div>

@@ -232,35 +232,9 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     const qty = qtyRaw > 0 ? qtyRaw : lineTotal > 0 || unitPrice > 0 ? 1 : 0;
     if (!name && qty <= 0 && lineTotal <= 0) return;
 
-    // Option 1 behavior (preferred):
-    // If backend gives one aggregated row with multiple barcodes and qty matches,
-    // split into one line per barcode (qty 1 each).
-    const qtyInt = Number.isInteger(qty) ? qty : Math.round(qty);
-    const canSplitPerBarcode = qtyInt > 1 && barcodes.length === qtyInt;
-
-    if (canSplitPerBarcode) {
-      // Keep financial totals consistent with original row.
-      const perUnitLine = qtyInt > 0 ? round2(lineTotal / qtyInt) : round2(unitPrice);
-      let remaining = round2(lineTotal);
-
-      barcodes.forEach((bc, idx) => {
-        const thisLine = idx === barcodes.length - 1 ? round2(remaining) : perUnitLine;
-        remaining = round2(remaining - thisLine);
-
-        emitItem({
-          src,
-          kind,
-          name,
-          variant,
-          qty: 1,
-          unitPrice,
-          lineTotal: thisLine,
-          discount: 0,
-          barcodes: [bc],
-        });
-      });
-      return;
-    }
+    // Keep original row as-is here.
+    // We aggregate similar rows after collection so receipt stays clean:
+    // same product + same price -> one row with higher qty.
 
     emitItem({
       src,
@@ -296,9 +270,58 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     }
   }
 
+  // Merge rows for cleaner receipt display:
+  // If same product/service name + same variant + same unit price,
+  // show one row with combined qty and amount.
+  const mergeKeyOf = (it: ReceiptItem) => {
+    const n = normalizeText(it.name);
+    const v = normalizeText(it.variant || '');
+    const p = round2(parseMoney(it.unitPrice));
+    return `${n}|${v}|${p}`;
+  };
+
+  const mergedMap = new Map<string, ReceiptItem>();
+  for (const it of items) {
+    const key = mergeKeyOf(it);
+    const existing = mergedMap.get(key);
+    if (!existing) {
+      mergedMap.set(key, {
+        ...it,
+        qty: Number(it.qty) || 0,
+        lineTotal: round2(parseMoney(it.lineTotal)),
+        discount: round2(parseMoney(it.discount || 0)),
+        barcodes: it.barcodes ? [...it.barcodes] : undefined,
+      });
+      continue;
+    }
+
+    existing.qty = round2((Number(existing.qty) || 0) + (Number(it.qty) || 0));
+    existing.lineTotal = round2(parseMoney(existing.lineTotal) + parseMoney(it.lineTotal));
+    existing.discount = round2(parseMoney(existing.discount || 0) + parseMoney(it.discount || 0));
+
+    const mergedBC = uniqNonEmpty([...(existing.barcodes || []), ...((it.barcodes || []) as string[])]);
+    existing.barcodes = mergedBC.length ? mergedBC : undefined;
+  }
+
+  const mergedItems = Array.from(mergedMap.values()).map((it) => {
+    const qty = Number(it.qty) || 0;
+    const line = round2(parseMoney(it.lineTotal));
+    const unit = qty > 0 ? round2(line / qty) : round2(parseMoney(it.unitPrice));
+    return {
+      ...it,
+      qty,
+      unitPrice: unit,
+      lineTotal: line,
+      discount: round2(parseMoney(it.discount || 0)),
+    };
+  });
+
+  // Keep original declaration name used below
+  const finalItems = mergedItems;
+
   // Totals
-  const itemsSubtotal = items.reduce((s, i) => s + i.lineTotal, 0);
-  const itemsDiscount = items.reduce((s, i) => s + parseMoney(i.discount), 0);
+  const itemsSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
+  const itemsDiscount = finalItems.reduce((s, i) => s + parseMoney(i.discount), 0);
 
   const subtotalRaw =
     parseMoney(order?.amounts?.subtotal) ||
@@ -366,7 +389,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     customerName,
     customerPhone,
     customerAddressLines,
-    items,
+    items: finalItems,
     totals: {
       subtotal,
       discount,
