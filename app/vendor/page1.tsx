@@ -49,7 +49,6 @@ const formatCurrency = (value: any): string => {
   return isNaN(numValue) ? '0.00' : numValue.toFixed(2);
 };
 
-
 const Modal = ({
   isOpen,
   onClose,
@@ -1504,6 +1503,7 @@ export default function VendorPaymentPage() {
                 type="date"
                 value={purchaseForm.expected_delivery_date}
                 onChange={(e) => setPurchaseForm({ ...purchaseForm, expected_delivery_date: e.target.value })}
+                min={new Date().toISOString().split('T')[0]}
                 className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
