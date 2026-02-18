@@ -1,10 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { ExternalLink, Link as LinkIcon } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+
+export const dynamic = 'force-dynamic';
 
 const getApiUrlBase = () => {
   const raw = process.env.NEXT_PUBLIC_API_URL || '';
@@ -17,6 +19,14 @@ const getWebBaseUrl = () => {
 };
 
 export default function PurchaseOrderBackendAdminPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-gray-500">Loading...</div>}>
+      <PurchaseOrderBackendAdminClientPage />
+    </Suspense>
+  );
+}
+
+function PurchaseOrderBackendAdminClientPage() {
   const searchParams = useSearchParams();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [darkMode, setDarkMode] = useState(false);
@@ -143,12 +153,7 @@ export default function PurchaseOrderBackendAdminPage() {
               <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-4 border border-gray-200 dark:border-gray-700">
                 <h2 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Preview (iframe)</h2>
                 <div className="rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 h-[520px]">
-                  <iframe
-                    key={resolvedUrl}
-                    src={resolvedUrl}
-                    className="w-full h-full"
-                    title="Backend admin"
-                  />
+                  <iframe key={resolvedUrl} src={resolvedUrl} className="w-full h-full" title="Backend admin" />
                 </div>
               </div>
             </div>
