@@ -1350,6 +1350,11 @@ export default function InventoryReportsPage() {
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                     <h3 className="font-semibold text-gray-900 dark:text-white">Sales CSV</h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order-level export (customer, products, delivery, payment, status).</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Columns: Creation Date, Invoice Number, Customer Name, Customer Phone, Customer Address, Product Name And QTY, Product Specification,
+                      Product Attribute, Sub Total Price, Discount, Price After Discount, Delivery Charge, Total Price, Paid Amount, Vat Amount,
+                      Total Without Vat, Due Amount, Delivery Partner, Delivery Area, Payment Method, Order Status.
+                    </p>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => doPreview('sales')}
