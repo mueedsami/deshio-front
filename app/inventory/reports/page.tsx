@@ -176,7 +176,7 @@ export default function InventoryReportsPage() {
   const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
   const [csvPaymentToday, setCsvPaymentToday] = useState(false); // Payment Breakdown CSV only
   const [csvPaymentOrderType, setCsvPaymentOrderType] = useState(''); // Payment Breakdown CSV only
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean }>({
+  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean; payment: boolean }>({
     category: false,
     sales: false,
     stock: false,
@@ -1419,8 +1419,77 @@ export default function InventoryReportsPage() {
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-gray-900 dark:text-white">Payment Breakdown CSV</h3>
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                          Payment method-wise breakdown (Cash / Mobile Banking / Bank). Supports Today-only, order type, store, status, and date range.
+                        </p>
+                      </div>
+                      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">Completed payments only</div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                      <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                        <input
+                          type="checkbox"
+                          checked={csvPaymentToday}
+                          onChange={(e) => setCsvPaymentToday(e.target.checked)}
+                          className="w-4 h-4"
+                        />
+                        Today only
+                      </label>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Order Type (optional)</label>
+                        <select
+                          value={csvPaymentOrderType}
+                          onChange={(e) => setCsvPaymentOrderType(e.target.value)}
+                          className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                        >
+                          <option value="">All types</option>
+                          <option value="counter">counter (POS)</option>
+                          <option value="ecommerce">ecommerce</option>
+                          <option value="social_commerce">social_commerce</option>
+                          <option value="service">service</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => doPreview('payment')}
+                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        disabled={csvBusy.payment}
+                        onClick={doDownloadPaymentBreakdown}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvBusy.payment ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Payment Breakdown columns</h4>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                      Date, Invoice Number, Store/Branch, Customer Name, Customer Phone, Customer Address, Product Name, Quantity, Cash Paid,
+                      Bkash/Mobile Banking Paid, Bank Paid, Due, System (Online/POS), Order Status.
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                      Tip: If <span className="font-semibold">Today only</span> is enabled, date_from/date_to are ignored.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-                  Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span> (applies to Category Sales, Sales, Booking).
+                  Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span>. Applies to:
+                  <span className="font-semibold"> Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>,
+                  <span className="font-semibold"> Payment Breakdown</span> (unless Today only is enabled).
                 </div>
               </div>
             </div>
