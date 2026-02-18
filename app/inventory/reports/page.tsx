@@ -174,11 +174,14 @@ export default function InventoryReportsPage() {
   const [csvCategoryId, setCsvCategoryId] = useState(''); // Stock CSV only
   const [csvProductId, setCsvProductId] = useState(''); // Stock/Booking CSV only
   const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
+  const [csvPaymentToday, setCsvPaymentToday] = useState(false); // Payment Breakdown CSV only
+  const [csvPaymentOrderType, setCsvPaymentOrderType] = useState(''); // Payment Breakdown CSV only
   const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean }>({
     category: false,
     sales: false,
     stock: false,
     booking: false,
+    payment: false,
   });
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewTitle, setPreviewTitle] = useState('');
@@ -325,6 +328,24 @@ export default function InventoryReportsPage() {
     return q;
   };
 
+
+  const buildPaymentBreakdownQuery = () => {
+    const q = new URLSearchParams();
+
+    // today=true overrides date_from/date_to
+    if (csvPaymentToday) {
+      q.set('today', 'true');
+    } else {
+      if (dateFrom) q.set('date_from', dateFrom);
+      if (dateTo) q.set('date_to', dateTo);
+    }
+
+    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
+    if (csvPaymentOrderType.trim()) q.set('order_type', csvPaymentOrderType.trim());
+    if (csvStatus.trim()) q.set('status', csvStatus.trim());
+
+    return q;
+  };
   const getAuthHeader = () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -412,7 +433,19 @@ export default function InventoryReportsPage() {
     }
   };
 
-  const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking') => {
+
+  const doDownloadPaymentBreakdown = async () => {
+    setCsvBusy((s) => ({ ...s, payment: true }));
+    setPreviewError('');
+    try {
+      await downloadCsv('/api/reporting/csv/payment-breakdown', buildPaymentBreakdownQuery());
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download CSV');
+    } finally {
+      setCsvBusy((s) => ({ ...s, payment: false }));
+    }
+  };
+  const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking' | 'payment') => {
     setPreviewError('');
     try {
       const endpoint =
@@ -422,7 +455,9 @@ export default function InventoryReportsPage() {
             ? '/api/reporting/csv/sales'
             : type === 'stock'
               ? '/api/reporting/csv/stock'
-              : '/api/reporting/csv/booking';
+              : type === 'booking'
+                ? '/api/reporting/csv/booking'
+                : '/api/reporting/csv/payment-breakdown';
 
       const q =
         type === 'category'
@@ -431,7 +466,9 @@ export default function InventoryReportsPage() {
             ? buildSalesQuery()
             : type === 'stock'
               ? buildStockQuery()
-              : buildBookingQuery();
+              : type === 'booking'
+                ? buildBookingQuery()
+                : buildPaymentBreakdownQuery();
 
       const { header, body } = await previewCsv(endpoint, q);
       setPreviewTitle(
@@ -441,7 +478,9 @@ export default function InventoryReportsPage() {
             ? 'Sales CSV'
             : type === 'stock'
               ? 'Stock CSV'
-              : 'Booking CSV'
+              : type === 'booking'
+                ? 'Booking CSV'
+                : 'Payment Breakdown CSV'
       );
       setPreviewHeader(header);
       setPreviewBody(body);
@@ -1276,7 +1315,7 @@ export default function InventoryReportsPage() {
                   </div>
                   <div className="flex items-end">
                     <div className="text-xs text-gray-500 dark:text-gray-400">
-                      Date range applies to: <span className="font-semibold">Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>
+                      Date range applies to: <span className="font-semibold">Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>, <span className="font-semibold">Payment Breakdown</span>
                     </div>
                   </div>
                 </div>
