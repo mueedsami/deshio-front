@@ -8,10 +8,10 @@ import { useAuth } from '@/contexts/AuthContext';
 interface HeaderProps {
   darkMode: boolean;
   setDarkMode: (value: boolean) => void;
-  toggleSidebar: () => void;
+  toggleSidebar?: () => void;
 }
 
-export default function Header({ darkMode, setDarkMode, toggleSidebar }: HeaderProps) {
+export default function Header({ darkMode, setDarkMode, toggleSidebar = () => {} }: HeaderProps) {
   const { user, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();

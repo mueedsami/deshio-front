@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
+import { X, Plus, Eye, Check, Package, FileText, ExternalLink, Loader2, AlertCircle, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import Link from 'next/link';
 import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
 import { renderBarcodeLabelBase64 } from '@/components/MultiBarcodePrinter';
 import { barcodeTrackingService } from '@/services/barcodeTrackingService';
@@ -19,6 +20,17 @@ import { productService, Product } from '@/services/productService';
 const getApiBaseUrl = () => {
   const raw = process.env.NEXT_PUBLIC_API_URL || '';
   return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
+};
+
+// For PDF endpoints we need the API base WITH /api
+const getApiUrlBaseWithApi = () => {
+  const raw = process.env.NEXT_PUBLIC_API_URL || '';
+  return raw.replace(/\/$/, '');
+};
+
+const getWebBaseUrl = () => {
+  const api = getApiUrlBaseWithApi();
+  return api.replace(/\/api\/?$/, '');
 };
 
 const toPublicImageUrl = (imagePath?: string | null) => {
@@ -231,6 +243,22 @@ export default function PurchaseOrdersPage() {
 
     return out;
   }, [selectedPO]);
+
+  // ─────────────────────────────────────────────────────────
+  // PDF + Blade quick access
+  // ─────────────────────────────────────────────────────────
+  const openPoPdf = (poId: number, inline: boolean = true) => {
+    const api = getApiUrlBaseWithApi();
+    if (!api || !poId) return;
+    const url = `${api}/purchase-orders/${poId}/pdf${inline ? '?inline=true' : ''}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const openBladePurchaseOrders = () => {
+    const web = getWebBaseUrl();
+    if (!web) return;
+    window.open(`${web}/admin/purchase-orders`, '_blank', 'noopener,noreferrer');
+  };
 
   // ✅ Per-batch / per-barcode printing UI helpers (inside PO details modal)
   const [expandedBatchIds, setExpandedBatchIds] = useState<Record<number, boolean>>({});
@@ -886,10 +914,39 @@ export default function PurchaseOrdersPage() {
         )}
 
         <main className="p-6">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
               Purchase Orders
             </h1>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/purchase-order/reports"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-black text-white hover:bg-gray-900 text-sm"
+                title="Generate PO summary PDF report"
+              >
+                <FileText className="w-4 h-4" />
+                PO Reports (PDF)
+              </Link>
+
+              <Link
+                href="/purchase-order/backend-admin"
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm"
+                title="Open helper page for backend Blade access"
+              >
+                <ExternalLink className="w-4 h-4" />
+                PO Backend (Blade)
+              </Link>
+
+              <button
+                onClick={openBladePurchaseOrders}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm"
+                title="Open Blade purchase order list (delete actions are here)"
+              >
+                <ExternalLink className="w-4 h-4" />
+                PO Delete (Blade)
+              </button>
+            </div>
           </div>
 
           {/* Filters */}
@@ -1026,6 +1083,15 @@ export default function PurchaseOrdersPage() {
                         >
                           <Eye className="w-4 h-4" />
                           View
+                        </button>
+
+                        <button
+                          onClick={() => openPoPdf(po.id, true)}
+                          className="flex items-center gap-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
+                          title="Open PO PDF (inline)"
+                        >
+                          <FileText className="w-4 h-4" />
+                          PDF
                         </button>
                         {po.status === 'draft' && (
                           <button

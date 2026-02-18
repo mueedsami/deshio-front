@@ -18,7 +18,7 @@ import {
   Search,
   History,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 // ──────────────────────────────
 // Perfect discriminated union
 // ──────────────────────────────
@@ -38,13 +38,25 @@ type MenuItem =
 // Props
 // ──────────────────────────────
 interface SidebarProps {
-  isOpen: boolean;
-  setIsOpen: (open: boolean) => void;
+  // Controlled usage (most pages)
+  isOpen?: boolean;
+  setIsOpen?: (open: boolean) => void;
+
+  // Compatibility with some legacy pages
+  toggleSidebar?: () => void;
+  darkMode?: boolean;
 }
 
-export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
+export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }: SidebarProps) {
   const pathname = usePathname();
+  const [internalOpen, setInternalOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+
+  const isOpen = typeof isOpenProp === 'boolean' ? isOpenProp : internalOpen;
+  const setIsOpen = (open: boolean) => {
+    if (typeof setIsOpenProp === 'function') return setIsOpenProp(open);
+    setInternalOpen(open);
+  };
 
   const toggleSubMenu = (label: string) => {
     setOpenMenu((prev) => (prev === label ? null : label));
@@ -65,6 +77,10 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       subMenu: [
         { label: 'Vendor Payment', href: '/vendor' },
         { label: 'Purchase Order', href: '/purchase-order' },
+        { label: 'PO Reports (PDF)', href: '/purchase-order/reports' },
+        { label: 'PO Delete (Blade)', href: '/purchase-order/backend-admin?path=/admin/purchase-orders' },
+        { label: 'PO Backend (Blade)', href: '/purchase-order/backend-admin' },
+        { label: 'PO Hard Delete (Internal)', href: '/purchase-order/internal-hard-delete' },
       ],
     },
     { icon: Store, label: 'Store', href: '/store' },
@@ -113,6 +129,19 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
     { icon: CreditCard, label: 'Accounting', href: '/accounting' },
     { icon: CreditCard, label: 'Employee Management', href: '/employees' },
   ];
+
+  // Auto-expand the active submenu so users can immediately see relevant options
+  useEffect(() => {
+    if (openMenu) return;
+    const hrefPath = (href: string) => href.split('?')[0];
+    const activeParent = menuItems.find(
+      (it) =>
+        'subMenu' in it &&
+        it.subMenu.some((sub) => hrefPath(sub.href) === hrefPath(pathname || ''))
+    );
+    if (activeParent && activeParent.label) setOpenMenu(activeParent.label);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   return (
     <>

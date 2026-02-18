@@ -233,10 +233,14 @@ function PurchaseOrderHardDeleteClientPage() {
     <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
       {alert && <Alert type={alert.type} message={alert.message} />}
 
-      <Sidebar isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen} />
+      <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <Header darkMode={darkMode} setDarkMode={setDarkMode} setIsSidebarOpen={setIsSidebarOpen} />
+        <Header
+          darkMode={darkMode}
+          setDarkMode={setDarkMode}
+          toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+        />
 
         <main className="flex-1 overflow-y-auto p-6">
           <div className="mb-6">
