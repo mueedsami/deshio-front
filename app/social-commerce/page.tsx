@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Search, X, Globe, AlertCircle } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Eye, FileText } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -127,6 +127,18 @@ export default function SocialCommercePage() {
   const [customerCheckError, setCustomerCheckError] = useState<string | null>(null);
   const [lastPrefilledOrderId, setLastPrefilledOrderId] = useState<number | null>(null);
 
+  // 🔎 Order preview (from Last 5 Orders)
+  const [orderPreviewOpen, setOrderPreviewOpen] = useState(false);
+  const [orderPreviewId, setOrderPreviewId] = useState<number | null>(null);
+  const [orderPreviewLoading, setOrderPreviewLoading] = useState(false);
+  const [orderPreviewError, setOrderPreviewError] = useState<string | null>(null);
+  const [orderPreview, setOrderPreview] = useState<any | null>(null);
+  const orderPreviewReqRef = useRef(0);
+
+  // 🖼️ Product image preview (before selecting)
+  const [productPreviewOpen, setProductPreviewOpen] = useState(false);
+  const [productPreview, setProductPreview] = useState<any | null>(null);
+
   // ✅ Reuse lookup hook for consistent phone lookup behavior (debounced)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
 
@@ -217,6 +229,100 @@ export default function SocialCommercePage() {
   const getProductCardImage = (p: any): string => {
     return normalizeImageUrl(pickProductImage(p));
   };
+
+  const normalizeOrderItemsForPreview = (order: any) => {
+    const rawItems =
+      order?.items ??
+      order?.order_items ??
+      order?.orderItems ??
+      order?.products ??
+      order?.lines ??
+      order?.order_lines ??
+      [];
+    const arr = Array.isArray(rawItems) ? rawItems : [];
+
+    return arr
+      .map((it: any) => {
+        if (!it) return null;
+        const name =
+          it?.product_name ||
+          it?.productName ||
+          it?.name ||
+          it?.product?.name ||
+          it?.product?.title ||
+          it?.title ||
+          'Unnamed product';
+
+        const quantity =
+          typeof it?.quantity === 'number'
+            ? it.quantity
+            : typeof it?.qty === 'number'
+            ? it.qty
+            : Number(String(it?.quantity ?? it?.qty ?? 0).replace(/[^0-9.-]/g, '')) || 0;
+
+        const unit_price =
+          Number(String(it?.unit_price ?? it?.price ?? it?.unitPrice ?? 0).replace(/[^0-9.-]/g, '')) || 0;
+        const discount_amount =
+          Number(String(it?.discount_amount ?? it?.discount ?? it?.discountAmount ?? 0).replace(/[^0-9.-]/g, '')) ||
+          0;
+        const total_amount =
+          Number(String(it?.total_amount ?? it?.total ?? it?.line_total ?? it?.amount ?? 0).replace(/[^0-9.-]/g, '')) ||
+          0;
+
+        return {
+          id: it?.id ?? it?.order_item_id ?? it?.orderItemId,
+          name: String(name),
+          quantity,
+          unit_price,
+          discount_amount,
+          total_amount,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const openOrderPreview = async (orderId: number) => {
+    if (!orderId) return;
+    setOrderPreviewOpen(true);
+    setOrderPreviewId(orderId);
+    setOrderPreview(null);
+    setOrderPreviewError(null);
+    setOrderPreviewLoading(true);
+
+    const reqId = ++orderPreviewReqRef.current;
+    try {
+      const res = await axios.get(`/orders/${orderId}`);
+      if (reqId !== orderPreviewReqRef.current) return;
+      const body: any = res.data;
+      const order = body?.data ?? body;
+      setOrderPreview(order);
+    } catch (e: any) {
+      if (reqId !== orderPreviewReqRef.current) return;
+      setOrderPreviewError(e?.response?.data?.message || 'Failed to load order details');
+    } finally {
+      if (reqId === orderPreviewReqRef.current) setOrderPreviewLoading(false);
+    }
+  };
+
+  const closeOrderPreview = () => {
+    setOrderPreviewOpen(false);
+    setOrderPreviewId(null);
+    setOrderPreview(null);
+    setOrderPreviewError(null);
+    setOrderPreviewLoading(false);
+  };
+
+  const openProductPreview = (product: any) => {
+    setProductPreview(product);
+    setProductPreviewOpen(true);
+  };
+
+  const closeProductPreview = () => {
+    setProductPreviewOpen(false);
+    setProductPreview(null);
+  };
+
+  const orderPreviewItems = orderPreview ? normalizeOrderItemsForPreview(orderPreview) : [];
 
 
   const fetchStores = async () => {
@@ -1350,9 +1456,24 @@ export default function SocialCommercePage() {
                                                 {o.order_number ? `Order ${o.order_number}` : `Order ID ${o.id}`}
                                               </span>
                                             </p>
-                                            <p className="text-[11px] text-gray-600 dark:text-gray-200 whitespace-nowrap">
-                                              {formatOrderDateTime(o.order_date)}
-                                            </p>
+                                            <div className="flex items-center gap-2 whitespace-nowrap">
+                                              <button
+                                                type="button"
+                                                onClick={(e) => {
+                                                  e.preventDefault();
+                                                  e.stopPropagation();
+                                                  openOrderPreview(o.id);
+                                                }}
+                                                className="inline-flex items-center gap-1 rounded border border-amber-300 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-900 hover:bg-amber-200 dark:border-amber-700/50 dark:bg-amber-900/30 dark:text-amber-100 dark:hover:bg-amber-900/45"
+                                                title="View full order"
+                                              >
+                                                <FileText className="h-3.5 w-3.5" />
+                                                View
+                                              </button>
+                                              <p className="text-[11px] text-gray-600 dark:text-gray-200">
+                                                {formatOrderDateTime(o.order_date)}
+                                              </p>
+                                            </div>
                                           </div>
 
                                           <div className="mt-1 flex items-start justify-between gap-3">
@@ -1723,8 +1844,20 @@ export default function SocialCommercePage() {
                           <div
                             key={`${product.id}`}
                             onClick={() => handleProductSelect(product)}
-                            className="border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                            className="relative border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                           >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openProductPreview(product);
+                              }}
+                              className="absolute right-2 top-2 z-10 inline-flex items-center justify-center rounded bg-white/90 p-1.5 text-gray-800 shadow-sm ring-1 ring-gray-200 hover:bg-white dark:bg-gray-900/80 dark:text-gray-100 dark:ring-gray-700"
+                              title="Preview image"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
                             <img
                               src={product.attributes.mainImage}
                               alt={product.name}
@@ -1949,6 +2082,237 @@ export default function SocialCommercePage() {
               </div>
             </div>
           </main>
+
+          {/* 🔎 Order Preview (from Last 5 Orders) */}
+          {orderPreviewOpen && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4">
+              <div
+                className="absolute inset-0 bg-black/50"
+                onClick={closeOrderPreview}
+                aria-hidden="true"
+              />
+
+              <div className="relative w-full max-w-3xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+                <div className="flex items-start justify-between gap-4 border-b border-gray-200 p-4 dark:border-gray-700">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">Order details</p>
+                    <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">
+                      {orderPreviewId ? `Order ID: ${orderPreviewId}` : ''}
+                      {orderPreview?.order_number ? ` • Order ${orderPreview.order_number}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeOrderPreview}
+                    className="rounded p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+                    title="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="max-h-[80vh] overflow-auto p-4">
+                  {orderPreviewLoading && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-transparent dark:border-gray-600" />
+                      Loading order…
+                    </div>
+                  )}
+
+                  {!orderPreviewLoading && orderPreviewError && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/15 dark:text-red-200">
+                      {orderPreviewError}
+                    </div>
+                  )}
+
+                  {!orderPreviewLoading && !orderPreviewError && orderPreview && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-100">
+                          <p className="font-semibold">Customer</p>
+                          <p className="mt-1">
+                            {orderPreview?.customer?.name || orderPreview?.customer_name || '—'}
+                          </p>
+                          <p className="text-gray-600 dark:text-gray-300">
+                            {orderPreview?.customer?.phone || orderPreview?.customer_phone || '—'}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-100">
+                          <p className="font-semibold">Summary</p>
+                          <div className="mt-1 space-y-0.5 text-gray-700 dark:text-gray-200">
+                            <p>
+                              Date:{' '}
+                              <span className="font-medium text-gray-900 dark:text-white">
+                                {formatOrderDateTime(orderPreview?.order_date || orderPreview?.created_at)}
+                              </span>
+                            </p>
+                            <p>
+                              Status:{' '}
+                              <span className="font-medium text-gray-900 dark:text-white">
+                                {orderPreview?.status || '—'}
+                              </span>
+                            </p>
+                            <p>
+                              Payment:{' '}
+                              <span className="font-medium text-gray-900 dark:text-white">
+                                {orderPreview?.payment_status || orderPreview?.paymentStatus || '—'}
+                              </span>
+                            </p>
+                            <p>
+                              Total:{' '}
+                              <span className="font-bold text-gray-900 dark:text-white">
+                                {formatBDT(orderPreview?.total_amount ?? orderPreview?.total ?? orderPreview?.grand_total ?? 0)}
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 dark:border-gray-700">
+                        <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-900/30">
+                          <p className="text-xs font-semibold text-gray-900 dark:text-white">Items</p>
+                          <p className="text-xs text-gray-600 dark:text-gray-300">
+                            {orderPreviewItems.length} item{orderPreviewItems.length === 1 ? '' : 's'}
+                          </p>
+                        </div>
+                        {orderPreviewItems.length === 0 ? (
+                          <div className="p-3 text-sm text-gray-600 dark:text-gray-300">No items found.</div>
+                        ) : (
+                          <div className="max-h-64 overflow-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="sticky top-0 bg-white dark:bg-gray-800">
+                                <tr className="border-b border-gray-200 dark:border-gray-700">
+                                  <th className="px-3 py-2 font-semibold text-gray-700 dark:text-gray-200">Product</th>
+                                  <th className="px-3 py-2 font-semibold text-gray-700 dark:text-gray-200">Qty</th>
+                                  <th className="px-3 py-2 font-semibold text-gray-700 dark:text-gray-200">Unit</th>
+                                  <th className="px-3 py-2 font-semibold text-gray-700 dark:text-gray-200">Disc</th>
+                                  <th className="px-3 py-2 font-semibold text-gray-700 dark:text-gray-200">Total</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {orderPreviewItems.map((it: any, i: number) => (
+                                  <tr key={String(it?.id ?? i)} className="border-b border-gray-100 dark:border-gray-700/50">
+                                    <td className="px-3 py-2 text-gray-900 dark:text-white">{it.name}</td>
+                                    <td className="px-3 py-2 text-gray-900 dark:text-white">{it.quantity}</td>
+                                    <td className="px-3 py-2 text-gray-900 dark:text-white">{formatBDT(it.unit_price)}</td>
+                                    <td className="px-3 py-2 text-gray-900 dark:text-white">{formatBDT(it.discount_amount)}</td>
+                                    <td className="px-3 py-2 text-gray-900 dark:text-white">{formatBDT(it.total_amount)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+
+                      {(orderPreview?.shipping_address || orderPreview?.delivery_address) && (
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-900/30 dark:text-gray-100">
+                          <p className="font-semibold">Shipping address</p>
+                          <p className="mt-1 text-gray-700 dark:text-gray-200">
+                            {String(
+                              (orderPreview?.shipping_address?.street ||
+                                orderPreview?.shipping_address?.address ||
+                                orderPreview?.delivery_address?.street ||
+                                orderPreview?.delivery_address?.address ||
+                                '')
+                            ) || '—'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 🖼️ Product Image Preview (before selecting) */}
+          {productPreviewOpen && productPreview && (
+            <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4">
+              <div
+                className="absolute inset-0 bg-black/50"
+                onClick={closeProductPreview}
+                aria-hidden="true"
+              />
+
+              <div className="relative w-full max-w-xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+                <div className="flex items-start justify-between gap-4 border-b border-gray-200 p-4 dark:border-gray-700">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-gray-900 dark:text-white">Product preview</p>
+                    <p className="mt-0.5 truncate text-xs text-gray-600 dark:text-gray-300">{productPreview?.name}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeProductPreview}
+                    className="rounded p-1 text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+                    title="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                <div className="p-4">
+                  <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+                    <img
+                      src={productPreview?.attributes?.mainImage}
+                      alt={productPreview?.name}
+                      className="h-72 w-full object-cover"
+                    />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-700 dark:text-gray-200">
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/30">
+                      <p className="text-gray-500 dark:text-gray-300">Price</p>
+                      <p className="mt-0.5 font-semibold text-gray-900 dark:text-white">
+                        {formatPriceRangeLabel(productPreview)}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/30">
+                      <p className="text-gray-500 dark:text-gray-300">Available</p>
+                      <p className="mt-0.5 font-semibold text-gray-900 dark:text-white">{productPreview?.available ?? 0}</p>
+                    </div>
+                    {Number(productPreview?.batchesCount ?? 0) > 1 && (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/30">
+                        <p className="text-gray-500 dark:text-gray-300">Batches</p>
+                        <p className="mt-0.5 font-semibold text-gray-900 dark:text-white">{productPreview?.batchesCount}</p>
+                      </div>
+                    )}
+                    {productPreview?.daysUntilExpiry !== null && productPreview?.daysUntilExpiry !== undefined && (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 dark:border-gray-700 dark:bg-gray-900/30">
+                        <p className="text-gray-500 dark:text-gray-300">Expiry</p>
+                        <p className="mt-0.5 font-semibold text-gray-900 dark:text-white">
+                          {productPreview?.daysUntilExpiry < 0
+                            ? 'Expired'
+                            : `${productPreview?.daysUntilExpiry} days`}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={closeProductPreview}
+                      className="rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-700"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleProductSelect(productPreview);
+                        closeProductPreview();
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-black px-3 py-2 text-sm font-semibold text-white hover:bg-gray-800"
+                    >
+                      <Eye className="h-4 w-4" />
+                      Select
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
