@@ -335,6 +335,23 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     setViewMode(initialViewMode);
   }, [initialViewMode]);
 
+  // Default to Pending in Online Orders (as requested) for faster workflow.
+  // Keeps Installments on "All" because installment statuses vary.
+  const didInitQuickDefaultsRef = useRef(false);
+  useEffect(() => {
+    if (didInitQuickDefaultsRef.current) return;
+    didInitQuickDefaultsRef.current = true;
+
+    if (initialViewMode === 'online') {
+      setOrderStatusFilter('pending');
+    } else {
+      setOrderStatusFilter('All Order Status');
+    }
+
+    setCourierFilter('All Couriers');
+  }, [initialViewMode]);
+
+
   // ♻️ Restore cached Pathao lookup results (10 min TTL)
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1128,17 +1145,26 @@ const derivePaymentStatus = (order: any) => {
     setShowPrinterSelect(false);
   };
 
-  const orderStatusOptions = useMemo(() => {
-    const set = new Set<string>();
-    orders.forEach((o) => set.add(o.status));
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [orders]);
-
   const paymentStatusOptions = useMemo(() => {
     const set = new Set<string>();
     orders.forEach((o) => set.add(o.paymentStatus));
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [orders]);
+
+  // ⚡ Quick top tabs (status + courier) for fast switching
+  const quickStatusTabs = useMemo(
+    () => [
+      { label: 'Pending', value: 'pending' },
+      { label: 'Confirmed', value: 'confirmed' },
+      { label: 'Cancelled', value: 'cancelled' },
+      { label: 'Returned', value: 'returned' },
+      { label: 'All', value: 'All Order Status' },
+    ],
+    []
+  );
+
+  const quickCourierTabs = useMemo(() => ['All Couriers', ...courierFilterOptions], [courierFilterOptions]);
+
 
   useEffect(() => {
     let filtered = orders;
@@ -3026,7 +3052,7 @@ amount: newOrderTotal,
                   onClick={() => {
                     setViewMode('online');
                     setOrderTypeFilter('All Types');
-                    setOrderStatusFilter('All Order Status');
+                    setOrderStatusFilter('pending');
                     setPaymentStatusFilter('All Payment Status');
                     setCourierFilter('All Couriers');
                     setSearch('');
@@ -3069,6 +3095,86 @@ amount: newOrderTotal,
                 )}
               </div>
 
+
+              {/* ⚡ Quick filters (2-row): Status then Courier */}
+              <div className="mb-3 border border-gray-200 dark:border-gray-800 rounded p-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-bold tracking-wide">
+                    Order Status
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderStatusFilter(viewMode === 'online' ? 'pending' : 'All Order Status');
+                      setCourierFilter('All Couriers');
+                    }}
+                    className="text-[10px] font-semibold text-gray-600 dark:text-gray-400 hover:text-black dark:hover:text-white"
+                    title="Reset quick filters"
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {quickStatusTabs.map((t) => {
+                    const active =
+                      t.value === 'All Order Status'
+                        ? orderStatusFilter === 'All Order Status'
+                        : normalize(orderStatusFilter) === normalize(t.value);
+
+                    return (
+                      <button
+                        key={t.value}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setOrderStatusFilter(t.value)}
+                        className={`px-2.5 py-1 rounded border text-[11px] font-semibold transition-colors ${
+                          active
+                            ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                            : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {viewMode === 'online' && (
+                  <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
+                    <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-bold tracking-wide">
+                      Courier
+                    </p>
+
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {quickCourierTabs.map((c) => {
+                        const active =
+                          c === 'All Couriers'
+                            ? courierFilter === 'All Couriers'
+                            : normalizeCourier(courierFilter) === normalizeCourier(c);
+
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() => setCourierFilter(c)}
+                            className={`px-2.5 py-1 rounded border text-[11px] font-semibold transition-colors ${
+                              active
+                                ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                                : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
+                            }`}
+                            title={c === 'All Couriers' ? 'All couriers' : `Courier: ${courierLabel(c)}`}
+                          >
+                            {c === 'All Couriers' ? 'All' : courierLabel(c)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="flex flex-col md:flex-row md:items-center gap-2 mb-3">
                 <div className="relative flex-1 w-full">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -3108,19 +3214,6 @@ amount: newOrderTotal,
                 </select>
 
                 <select
-                  value={orderStatusFilter}
-                  onChange={(e) => setOrderStatusFilter(e.target.value)}
-                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
-                >
-                  <option>All Order Status</option>
-                  {orderStatusOptions.map((s) => (
-                    <option key={s} value={s}>
-                      {statusLabel(s)}
-                    </option>
-                  ))}
-                </select>
-
-                <select
                   value={paymentStatusFilter}
                   onChange={(e) => setPaymentStatusFilter(e.target.value)}
                   className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
@@ -3132,22 +3225,6 @@ amount: newOrderTotal,
                     </option>
                   ))}
                 </select>
-
-                {viewMode === 'online' && (
-                  <select
-                    value={courierFilter}
-                    onChange={(e) => setCourierFilter(e.target.value)}
-                    className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
-                    title="Filter by intended courier marker"
-                  >
-                    <option value="All Couriers">All Couriers</option>
-                    {courierFilterOptions.map((c) => (
-                      <option key={c} value={c}>
-                        {courierLabel(c)}
-                      </option>
-                    ))}
-                  </select>
-                )}
               </div>
 
               <p className="text-xs text-gray-500 dark:text-gray-500">
