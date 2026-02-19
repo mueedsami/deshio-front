@@ -20,6 +20,7 @@ import orderService from '@/services/orderService';
 import barcodeService from '@/services/barcodeService';
 import productService from '@/services/productService';
 import Toast from '@/components/Toast';
+import ImageLightboxModal from '@/components/ImageLightboxModal';
 
 interface ScannedItemTracking {
   required: number;
@@ -108,6 +109,11 @@ export default function WarehouseFulfillmentPage() {
 
   // 🖼️ Product thumbnails (shown in packing UI)
   const [productThumbsById, setProductThumbsById] = useState<Record<number, string>>({});
+
+  // 🔍 Image popup modal
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [imageModalSrc, setImageModalSrc] = useState<string | null>(null);
+  const [imageModalTitle, setImageModalTitle] = useState<string>('');
 
   const [scannedItems, setScannedItems] = useState<Record<number, ScannedItemTracking>>({});
   const [currentBarcode, setCurrentBarcode] = useState('');
@@ -250,6 +256,18 @@ export default function WarehouseFulfillmentPage() {
     const id = Number(productId ?? 0) || 0;
     if (!id) return '/placeholder-product.png';
     return productThumbsById[id] || '/placeholder-product.png';
+  };
+
+  const openImageModal = (src: string, title?: string) => {
+    setImageModalSrc(src);
+    setImageModalTitle(title || '');
+    setImageModalOpen(true);
+  };
+
+  const closeImageModal = () => {
+    setImageModalOpen(false);
+    setImageModalSrc(null);
+    setImageModalTitle('');
   };
 
   useEffect(() => {
@@ -740,6 +758,14 @@ if (!matchingItem) {
         </div>
 
         {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
+
+        <ImageLightboxModal
+          open={imageModalOpen}
+          src={imageModalSrc}
+          title="Product image"
+          subtitle={imageModalTitle}
+          onClose={closeImageModal}
+        />
       </div>
     );
   }
@@ -853,14 +879,22 @@ if (!matchingItem) {
                           >
                             <div className="flex items-start justify-between">
                               <div className="flex items-start gap-3 flex-1">
-                                <img
-                                  src={getItemThumbSrc(item.product_id)}
-                                  alt={item.product_name}
-                                  className="w-12 h-12 rounded-md object-cover border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800"
-                                  onError={(e) => {
-                                    e.currentTarget.src = '/placeholder-product.png';
-                                  }}
-                                />
+                                <button
+                                  type="button"
+                                  onClick={() => openImageModal(getItemThumbSrc(item.product_id), item.product_name)}
+                                  className="group relative h-12 w-12 overflow-hidden rounded-md border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  title="View image"
+                                >
+                                  <img
+                                    src={getItemThumbSrc(item.product_id)}
+                                    alt={item.product_name}
+                                    className="h-12 w-12 object-cover transition-transform duration-200 group-hover:scale-[1.05]"
+                                    onError={(e) => {
+                                      e.currentTarget.src = '/placeholder-product.png';
+                                    }}
+                                  />
+                                  <span className="pointer-events-none absolute inset-0 ring-0 group-hover:ring-2 group-hover:ring-blue-400/60" />
+                                </button>
                                 <div className="flex-1">
                                   <h3 className="font-medium text-gray-900 dark:text-white">{item.product_name}</h3>
                                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">SKU: {item.product_sku}</p>
@@ -1127,6 +1161,14 @@ if (!matchingItem) {
 
       {/* Toast Notification */}
       {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
+
+      <ImageLightboxModal
+        open={imageModalOpen}
+        src={imageModalSrc}
+        title="Product image"
+        subtitle={imageModalTitle}
+        onClose={closeImageModal}
+      />
 
       <style jsx>{`
         .custom-scrollbar::-webkit-scrollbar {

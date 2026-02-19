@@ -6,6 +6,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
 import ServiceSelector, { ServiceItem } from '@/components/ServiceSelector';
+import ImageLightboxModal from '@/components/ImageLightboxModal';
 import axios from '@/lib/axios';
 import { useCustomerLookup, type RecentOrder } from '@/lib/hooks/useCustomerLookup';
 import storeService from '@/services/storeService';
@@ -139,6 +140,14 @@ export default function SocialCommercePage() {
   const [productPreviewOpen, setProductPreviewOpen] = useState(false);
   const [productPreview, setProductPreview] = useState<any | null>(null);
 
+  // 🔍 Image popup modal (for recent orders + other inline previews)
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [imageModalSrc, setImageModalSrc] = useState<string | null>(null);
+  const [imageModalTitle, setImageModalTitle] = useState<string>('');
+
+  // 🧩 Cache product thumbnails for recent orders (by product_id)
+  const [recentThumbsByProductId, setRecentThumbsByProductId] = useState<Record<number, string>>({});
+
   // ✅ Reuse lookup hook for consistent phone lookup behavior (debounced)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
 
@@ -228,6 +237,54 @@ export default function SocialCommercePage() {
 
   const getProductCardImage = (p: any): string => {
     return normalizeImageUrl(pickProductImage(p));
+  };
+
+  const openImageModal = (src: string, title?: string) => {
+    setImageModalSrc(src);
+    setImageModalTitle(title || '');
+    setImageModalOpen(true);
+  };
+
+  const closeImageModal = () => {
+    setImageModalOpen(false);
+    setImageModalSrc(null);
+    setImageModalTitle('');
+  };
+
+  const getRecentItemThumbSrc = (it: any): string => {
+    const raw = it?.product_image || it?.image_url || it?.image;
+    if (raw) return normalizeImageUrl(String(raw));
+
+    const pid = Number(it?.product_id ?? it?.productId ?? it?.product?.id ?? 0) || 0;
+    if (pid && recentThumbsByProductId[pid]) return recentThumbsByProductId[pid];
+
+    return '/placeholder-product.png';
+  };
+
+  const ensureRecentThumbs = async (productIds: number[]) => {
+    const ids = Array.from(new Set(productIds.filter((id) => id > 0)));
+    const missing = ids.filter((id) => !recentThumbsByProductId[id]);
+    if (missing.length === 0) return;
+
+    // Keep it lightweight: fetch up to 25 at a time
+    const slice = missing.slice(0, 25);
+
+    const fetched: Record<number, string> = {};
+    await Promise.all(
+      slice.map(async (id) => {
+        try {
+          const p = await productService.getById(id);
+          const img = normalizeImageUrl(pickProductImage(p));
+          fetched[id] = img || '/placeholder-product.png';
+        } catch {
+          fetched[id] = '/placeholder-product.png';
+        }
+      })
+    );
+
+    if (Object.keys(fetched).length > 0) {
+      setRecentThumbsByProductId((prev) => ({ ...prev, ...fetched }));
+    }
   };
 
   const normalizeOrderItemsForPreview = (order: any) => {
@@ -719,6 +776,19 @@ export default function SocialCommercePage() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customerLookup.customer, customerLookup.lastOrder, (customerLookup as any).recentOrders, customerLookup.loading, customerLookup.error]);
+
+  // 🖼️ Warm cache: thumbnails for items in the recent orders list
+  useEffect(() => {
+    const ids: number[] = [];
+    recentOrders
+      .slice(0, 5)
+      .forEach((o) => (Array.isArray(o.items) ? o.items.slice(0, 12) : []).forEach((it: any) => {
+        const pid = Number(it?.product_id ?? it?.productId ?? it?.product?.id ?? 0) || 0;
+        if (pid) ids.push(pid);
+      }));
+    if (ids.length) ensureRecentThumbs(ids);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentOrders]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -1480,12 +1550,33 @@ export default function SocialCommercePage() {
                                             <div className="text-[11px] text-gray-700 dark:text-gray-200">
                                               {Array.isArray(o.items) && o.items.length > 0 ? (
                                                 <div className="space-y-0.5">
-                                                  {o.items.slice(0, 6).map((it, i) => (
-                                                    <div key={`${o.id}-${i}`} className="truncate">
-                                                      • {it.product_name || 'Unnamed product'}
-                                                      {it.quantity ? ` ×${it.quantity}` : ''}
-                                                    </div>
-                                                  ))}
+                                                  {o.items.slice(0, 6).map((it, i) => {
+                                                    const name = it.product_name || 'Unnamed product';
+                                                    const src = getRecentItemThumbSrc(it);
+                                                    return (
+                                                      <div key={`${o.id}-${i}`} className="flex items-center gap-2">
+                                                        <button
+                                                          type="button"
+                                                          onClick={() => openImageModal(src, name)}
+                                                          className="group relative h-8 w-8 flex-shrink-0 overflow-hidden rounded border border-amber-200 bg-white dark:border-amber-700/40 dark:bg-black/20 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                                          title="View image"
+                                                        >
+                                                          <img
+                                                            src={src}
+                                                            alt={name}
+                                                            className="h-8 w-8 object-cover transition-transform duration-200 group-hover:scale-[1.05]"
+                                                            onError={(e) => {
+                                                              e.currentTarget.src = '/placeholder-product.png';
+                                                            }}
+                                                          />
+                                                        </button>
+                                                        <div className="min-w-0 truncate">
+                                                          • {name}
+                                                          {it.quantity ? ` ×${it.quantity}` : ''}
+                                                        </div>
+                                                      </div>
+                                                    );
+                                                  })}
                                                   {o.items.length > 6 && (
                                                     <div className="text-gray-500 dark:text-gray-300 italic">
                                                       + {o.items.length - 6} more
@@ -2313,6 +2404,15 @@ export default function SocialCommercePage() {
               </div>
             </div>
           )}
+
+          {/* 🔍 Image popup (recent orders + inline thumbnails) */}
+          <ImageLightboxModal
+            open={imageModalOpen}
+            src={imageModalSrc}
+            title="Product image"
+            subtitle={imageModalTitle}
+            onClose={closeImageModal}
+          />
         </div>
       </div>
     </div>
