@@ -12,11 +12,6 @@ const getApiUrlBase = () => {
   return raw.replace(/\/$/, '');
 };
 
-const getWebBaseUrl = () => {
-  const api = getApiUrlBase();
-  return api.replace(/\/api\/?$/, '');
-};
-
 type Status = 'draft' | 'approved' | 'partially_received' | 'received' | 'cancelled' | '';
 type PaymentStatus = 'unpaid' | 'partial' | 'paid' | '';
 
@@ -109,12 +104,6 @@ export default function PurchaseOrderReportsPage() {
     setPaymentStatus('');
   };
 
-  const openBladeDelete = () => {
-    const web = getWebBaseUrl();
-    if (!web) return;
-    openInNewTab(`${web}/admin/purchase-orders`);
-  };
-
   return (
     <div className={`${darkMode ? 'dark' : ''} flex min-h-screen`}>
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
@@ -131,15 +120,6 @@ export default function PurchaseOrderReportsPage() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <button
-                onClick={openBladeDelete}
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm"
-                title="Open Laravel Blade purchase order list (legacy delete actions live there)"
-              >
-                <ExternalLink className="w-4 h-4" />
-                PO Delete (Blade)
-              </button>
-
               <button
                 onClick={resetFilters}
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm"
