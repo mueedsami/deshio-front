@@ -24,11 +24,9 @@ type LastOrderSummary = {
 
 export type RecentOrderItem = {
   id?: number;
-  product_id?: number;
   product_name?: string;
   product_sku?: string;
   quantity?: number;
-  product_image?: string;
 };
 
 export type RecentOrder = {
@@ -57,10 +55,6 @@ function normalizeItems(raw: any): RecentOrderItem[] {
     .map((it: any) => {
       if (!it) return null;
       const id = it?.id ?? it?.order_item_id ?? it?.orderItemId;
-
-      const product_id_raw = it?.product_id ?? it?.productId ?? it?.product?.id;
-      const product_id = typeof product_id_raw === "number" ? product_id_raw : product_id_raw != null ? safeNum(product_id_raw) : undefined;
-
       const product_name =
         it?.product_name ||
         it?.productName ||
@@ -70,21 +64,6 @@ function normalizeItems(raw: any): RecentOrderItem[] {
         it?.title;
       const product_sku =
         it?.product_sku || it?.productSku || it?.sku || it?.product?.sku || it?.product_code;
-
-      // Best-effort image extraction (if API includes product/primary_image/images)
-      const product_image =
-        it?.product_image ||
-        it?.image_url ||
-        it?.image ||
-        it?.product?.primary_image?.url ||
-        it?.product?.primary_image?.image_url ||
-        it?.product?.primary_image?.image_path ||
-        (Array.isArray(it?.product?.images)
-          ? (it.product.images.find((x: any) => x?.is_primary && x?.is_active) ||
-              it.product.images.find((x: any) => x?.is_primary) ||
-              it.product.images[0])?.image_url ||
-            (it.product.images[0] || {})?.image_path
-          : undefined);
       const quantity =
         typeof it?.quantity === "number"
           ? it.quantity
@@ -93,11 +72,9 @@ function normalizeItems(raw: any): RecentOrderItem[] {
           : safeNum(it?.quantity ?? it?.qty ?? 0);
       return {
         id: typeof id === "number" ? id : id != null ? safeNum(id) : undefined,
-        product_id,
         product_name: product_name ? String(product_name) : undefined,
         product_sku: product_sku ? String(product_sku) : undefined,
         quantity,
-        product_image: product_image ? String(product_image) : undefined,
       } as RecentOrderItem;
     })
     .filter(Boolean) as RecentOrderItem[];

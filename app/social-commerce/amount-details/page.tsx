@@ -64,16 +64,7 @@ export default function AmountDetailsPage() {
   const [intendedCourier, setIntendedCourier] = useState('');
 
   const courierOptions = useMemo(() => {
-    // Keep a sane default list, but you can add more later.
-    return [
-      'pathao',
-      'sundarban',
-      'steadfast',
-      'redx',
-      'paperfly',
-      'eCourier',
-      'manual',
-    ];
+    return ['pathao', 'Sundarban', 'Pending', 'Partial Order'];
   }, []);
 
   const [showToast, setShowToast] = useState(false);
@@ -311,7 +302,7 @@ export default function AmountDetailsPage() {
         } catch (e) {
           console.warn('Failed to set intended courier marker:', e);
           // Don't fail order placement if marker update fails
-          displayToast('Order placed, but failed to set courier marker.', 'warning');
+          displayToast('Order placed, but failed to set order marker.', 'warning');
         }
       }
 
@@ -643,7 +634,7 @@ export default function AmountDetailsPage() {
                   {/* Intended Courier Marker */}
                   <div className="mb-4">
                     <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
-                      Intended Courier (Marker)
+                      Add Order Marker
                     </label>
                     <div className="relative">
                       <Truck className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -653,7 +644,7 @@ export default function AmountDetailsPage() {
                         disabled={isProcessing}
                         className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       >
-                        <option value="">Select courier (optional)</option>
+                        <option value="">Select marker (optional)</option>
                         {courierOptions.map((c) => (
                           <option key={c} value={c}>
                             {c}
@@ -662,7 +653,7 @@ export default function AmountDetailsPage() {
                       </select>
                     </div>
                     <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                      This will be saved as a courier marker and you can edit it later from the Orders page.
+                      This will be saved as an order marker and you can edit it later from the Orders page.
                     </p>
                   </div>
 

@@ -961,42 +961,48 @@ const derivePaymentStatus = (order: any) => {
     };
   };
 
-  const normalizeCourier = (v: any) => normalize(v);
+  const normalizeCourier = (v: any) => normalize(v).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+
+  // Only these values are allowed as order markers in UI
+  const getAllowedCourierValue = (raw: any): string => {
+    const n = normalizeCourier(raw);
+    if (!n) return '';
+    if (n === 'pathao') return 'pathao';
+    if (n === 'sundarban') return 'Sundarban';
+    if (n === 'pending') return 'Pending';
+    if (n === 'partial order' || n === 'partialorder') return 'Partial Order';
+    return '';
+  };
 
   const courierLabel = (raw: any): string => {
-    const n = normalizeCourier(raw);
-    if (!n) return 'Unassigned';
-    const map: Record<string, string> = {
-      pathao: 'Pathao',
-      steadfast: 'Steadfast',
-      sundarban: 'Sundarban',
-      redx: 'RedX',
-      paperfly: 'Paperfly',
-      ecourier: 'eCourier',
-      'e-courier': 'eCourier',
-      manual: 'Manual',
-    };
-    return map[n] || String(raw);
+    const allowed = getAllowedCourierValue(raw);
+    if (!allowed) return 'Unassigned';
+
+    const n = normalizeCourier(allowed);
+    if (n === 'pathao') return 'Pathao';
+    if (n === 'sundarban') return 'Sundarban';
+    if (n === 'pending') return 'Pending';
+    if (n === 'partial order') return 'Partial Order';
+    return String(allowed);
   };
 
   const getCourierBadge = (raw: any) => {
-    const n = normalizeCourier(raw);
+    const allowed = getAllowedCourierValue(raw);
+    if (!allowed) return null;
+
+    const n = normalizeCourier(allowed);
     const cls =
       n === 'pathao'
         ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300'
-        : n === 'steadfast'
-        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
         : n === 'sundarban'
         ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300'
-        : n === 'redx'
-        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
-        : n
-        ? 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
-        : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400';
+        : n === 'pending'
+        ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+        : 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300';
 
     return (
       <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${cls}`}>
-        {courierLabel(raw)}
+        {courierLabel(allowed)}
       </span>
     );
   };
@@ -1027,9 +1033,13 @@ const derivePaymentStatus = (order: any) => {
       }
 
       return list.map((o) => {
-        if (normalizeCourier(o.intendedCourier)) return o;
-        if (!map.has(o.id)) return o;
-        return { ...o, intendedCourier: map.get(o.id) ?? null };
+        const currentAllowed = getAllowedCourierValue(o.intendedCourier);
+        if (currentAllowed) return { ...o, intendedCourier: currentAllowed };
+
+        if (!map.has(o.id)) return { ...o, intendedCourier: null };
+
+        const dbAllowed = getAllowedCourierValue(map.get(o.id));
+        return { ...o, intendedCourier: dbAllowed || null };
       });
     } catch (e) {
       console.warn('Failed to hydrate courier markers from DB:', e);
@@ -1037,27 +1047,30 @@ const derivePaymentStatus = (order: any) => {
     }
   };
 
-  const DEFAULT_COURIERS = useMemo(
-    () => ['pathao', 'sundarban', 'steadfast', 'redx', 'paperfly', 'eCourier', 'manual'],
-    []
-  );
+  const DEFAULT_COURIERS = useMemo(() => ['pathao', 'Sundarban', 'Pending', 'Partial Order'], []);
+
+  const allowedCourierMap = useMemo(() => {
+    const map = new Map<string, string>();
+    DEFAULT_COURIERS.forEach((c) => map.set(normalizeCourier(c), String(c)));
+    return map;
+  }, [DEFAULT_COURIERS]);
 
   const courierFilterOptions = useMemo(() => {
-    const set = new Set<string>();
-    DEFAULT_COURIERS.forEach((c) => set.add(String(c)));
-    (availableCouriers || []).forEach((c) => c && set.add(String(c)));
-    // also include whatever already exists in loaded orders (so it always shows)
-    (orders || []).forEach((o) => {
-      if (o?.intendedCourier) set.add(String(o.intendedCourier));
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [DEFAULT_COURIERS, availableCouriers, orders]);
+    // Keep the marker list fixed so no legacy courier tags (RedX, etc.) show up in filters/modals
+    return [...DEFAULT_COURIERS];
+  }, [DEFAULT_COURIERS]);
 
   const loadAvailableCouriers = async () => {
     try {
       const list = await orderService.getAvailableCouriers();
       const names = Array.from(
-        new Set((list || []).map((x) => x?.courier_name).filter(Boolean).map((x) => String(x)))
+        new Set(
+          (list || [])
+            .map((x) => x?.courier_name)
+            .filter(Boolean)
+            .map((x) => allowedCourierMap.get(normalizeCourier(x)) || null)
+            .filter(Boolean) as string[]
+        )
       );
       setAvailableCouriers(names);
     } catch (e) {
@@ -1317,13 +1330,16 @@ const derivePaymentStatus = (order: any) => {
   const openCourierEditor = (order: Order) => {
     setActiveMenu(null);
     setCourierModalOrder(order);
-    setCourierModalValue(order.intendedCourier ? String(order.intendedCourier) : '');
+    const current = order.intendedCourier ? String(order.intendedCourier) : '';
+    const normalizedCurrent = normalizeCourier(current);
+    setCourierModalValue(current && allowedCourierMap.has(normalizedCurrent) ? (allowedCourierMap.get(normalizedCurrent) as string) : '');
     setShowCourierModal(true);
   };
 
   const saveCourierMarker = async () => {
     if (!courierModalOrder) return;
-    const nextVal = courierModalValue?.trim() ? courierModalValue.trim() : null;
+    const nextRaw = courierModalValue?.trim() ? courierModalValue.trim() : '';
+    const nextVal = nextRaw ? (allowedCourierMap.get(normalizeCourier(nextRaw)) || nextRaw) : null;
 
     setIsSavingCourier(true);
     try {
@@ -1335,14 +1351,17 @@ const derivePaymentStatus = (order: any) => {
       );
 
       if (applied) {
-        setAvailableCouriers((prev) => Array.from(new Set([...(prev || []), String(applied)])));
+        const mappedApplied = allowedCourierMap.get(normalizeCourier(applied));
+        if (mappedApplied) {
+          setAvailableCouriers((prev) => Array.from(new Set([...(prev || []), mappedApplied])));
+        }
       }
 
       setShowCourierModal(false);
       setCourierModalOrder(null);
-      alert('Courier marker updated successfully');
+      alert('Order marker updated successfully');
     } catch (e: any) {
-      alert(e?.message || 'Failed to update courier marker');
+      alert(e?.message || 'Failed to update order marker');
     } finally {
       setIsSavingCourier(false);
     }
@@ -3143,7 +3162,7 @@ amount: newOrderTotal,
                 {viewMode === 'online' && (
                   <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-800">
                     <p className="text-[10px] text-gray-600 dark:text-gray-400 uppercase font-bold tracking-wide">
-                      Courier
+                      Add Order Marker
                     </p>
 
                     <div className="mt-1 flex flex-wrap gap-1.5">
@@ -3164,7 +3183,7 @@ amount: newOrderTotal,
                                 ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
                                 : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
                             }`}
-                            title={c === 'All Couriers' ? 'All couriers' : `Courier: ${courierLabel(c)}`}
+                            title={c === 'All Couriers' ? 'All order markers' : `Order Marker: ${courierLabel(c)}`}
                           >
                             {c === 'All Couriers' ? 'All' : courierLabel(c)}
                           </button>
@@ -3475,7 +3494,7 @@ amount: newOrderTotal,
                         </th>
                         {viewMode === 'online' && (
                           <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
-                            Courier
+                            Order Marker
                           </th>
                         )}
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
@@ -3546,7 +3565,7 @@ amount: newOrderTotal,
                                     openCourierEditor(order);
                                   }}
                                   className="p-1 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
-                                  title="Edit courier marker"
+                                  title="Edit order marker"
                                 >
                                   <Edit className="h-3.5 w-3.5 text-gray-700 dark:text-gray-300" />
                                 </button>
@@ -3722,13 +3741,13 @@ amount: newOrderTotal,
         </div>
       )}
 
-      {/* Courier Marker Modal */}
+      {/* Order Marker Modal */}
       {showCourierModal && courierModalOrder && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full border border-gray-200 dark:border-gray-800">
             <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-bold text-black dark:text-white">Set Courier Marker</h3>
+                <h3 className="text-sm font-bold text-black dark:text-white">Add Order Marker</h3>
                 <p className="text-[10px] text-gray-500 dark:text-gray-400">
                   {courierModalOrder.orderNumber} • #{courierModalOrder.id}
                 </p>
@@ -3745,7 +3764,7 @@ amount: newOrderTotal,
             </div>
 
             <div className="p-5 space-y-2">
-              <label className="block text-[11px] text-gray-700 dark:text-gray-300">Courier</label>
+              <label className="block text-[11px] text-gray-700 dark:text-gray-300">Add Order Marker</label>
               <select
                 value={courierModalValue}
                 onChange={(e) => setCourierModalValue(e.target.value)}
@@ -3759,7 +3778,7 @@ amount: newOrderTotal,
                 ))}
               </select>
               <p className="text-[10px] text-gray-500 dark:text-gray-400">
-                This is just an intended courier marker for tracking & filtering. You can change it anytime.
+                This is just an order marker for tracking & filtering. You can change it anytime.
               </p>
             </div>
 
@@ -3827,7 +3846,7 @@ amount: newOrderTotal,
               className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
             >
               <Truck className="h-5 w-5 flex-shrink-0" />
-              <span>Set Courier Marker</span>
+              <span>Add Order Marker</span>
             </button>
           )}
 
