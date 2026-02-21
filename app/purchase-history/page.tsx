@@ -778,7 +778,8 @@ export default function PurchaseHistoryPage() {
                   <div className="text-gray-500 dark:text-gray-400">No counter orders found</div>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <>
+                  <div className="space-y-4">
                   {filteredOrders.map((order) => (
                     <div
                       key={order.id}
@@ -1107,6 +1108,7 @@ export default function PurchaseHistoryPage() {
                     </div>
                   </div>
                 )}
+                </>
               )}
             </div>
           </main>
