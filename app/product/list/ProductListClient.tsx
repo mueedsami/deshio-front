@@ -61,6 +61,8 @@ export default function ProductPage() {
 
   const SOCIAL_COMMERCE_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 
+  const isSocialQueueMode = selectMode && /social-commerce/i.test(redirectPath);
+
   const normalizeSocialSelectionQueue = (items: any[]) => {
     const list = Array.isArray(items) ? items : [];
     const byId = new Map<number, any>();
@@ -178,7 +180,7 @@ const goToPage = useCallback(
   }, []);
 
   useEffect(() => {
-    if (!selectMode) {
+    if (!isSocialQueueMode) {
       setQueuedForSocialCount(0);
       setQueuedForSocialItems([]);
       return;
@@ -186,7 +188,7 @@ const goToPage = useCallback(
     const queue = readSocialSelectionQueue();
     setQueuedForSocialItems(queue);
     setQueuedForSocialCount(getQueuedUnitsCount(queue));
-  }, [selectMode]);
+  }, [isSocialQueueMode]);
 
   // ✅ Backend-powered multi-language search (Bangla/Roman/English + fuzzy)
   useEffect(() => {
@@ -767,41 +769,51 @@ const goToPage = useCallback(
   };
 
   const handleSelect = (variant: ProductVariant) => {
-    if (!selectMode) return;
+    if (!selectMode || !redirectPath) return;
 
-    const queue = readSocialSelectionQueue();
-    const pid = Number(variant.id);
-    const existingIndex = queue.findIndex((item: any) => Number(item?.id) === pid);
+    // ✅ Social Commerce uses queue mode (multi-select + qty drawer)
+    if (isSocialQueueMode) {
+      const queue = readSocialSelectionQueue();
+      const pid = Number(variant.id);
+      const existingIndex = queue.findIndex((item: any) => Number(item?.id) === pid);
 
-    if (existingIndex >= 0) {
-      const ex = queue[existingIndex];
-      queue[existingIndex] = {
-        ...ex,
-        qty: Math.max(1, Number(ex?.qty) || 1) + 1,
-        ts: Date.now(),
-        image: ex?.image || (variant as any).image || null,
-        sku: ex?.sku || String((variant as any).sku || ''),
-        name: ex?.name || String(variant.name || ''),
-      };
-    } else {
-      queue.push({
-        id: pid,
-        name: String(variant.name || ''),
-        sku: String((variant as any).sku || ''),
-        image: (variant as any).image || null,
-        qty: 1,
-        ts: Date.now(),
+      if (existingIndex >= 0) {
+        const ex = queue[existingIndex];
+        queue[existingIndex] = {
+          ...ex,
+          qty: Math.max(1, Number(ex?.qty) || 1) + 1,
+          ts: Date.now(),
+          image: ex?.image || (variant as any).image || null,
+          sku: ex?.sku || String((variant as any).sku || ''),
+          name: ex?.name || String(variant.name || ''),
+        };
+      } else {
+        queue.push({
+          id: pid,
+          name: String(variant.name || ''),
+          sku: String((variant as any).sku || ''),
+          image: (variant as any).image || null,
+          qty: 1,
+          ts: Date.now(),
+        });
+      }
+
+      writeSocialSelectionQueue(queue);
+      const totalUnits = getQueuedUnitsCount(queue);
+
+      setToast({
+        message: `${variant.name} added to queue (${totalUnits} item${totalUnits > 1 ? 's' : ''})`,
+        type: 'success',
       });
+      return;
     }
 
-    writeSocialSelectionQueue(queue);
-    const totalUnits = getQueuedUnitsCount(queue);
-
-    setToast({
-      message: `${variant.name} added to queue (${totalUnits} item${totalUnits > 1 ? 's' : ''})`,
-      type: 'success',
-    });
+    // ✅ All other select flows (e.g. Batch Create) keep old behavior
+    const separator = redirectPath.includes('?') ? '&' : '?';
+    const url = `${redirectPath}${separator}productId=${variant.id}&productName=${encodeURIComponent(variant.name)}&productSku=${encodeURIComponent(variant.sku)}`;
+    router.push(url);
   };
+
 
   // Flatten categories for filter dropdown
   const flatCategories = useMemo(() => {
@@ -842,7 +854,7 @@ const goToPage = useCallback(
             toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
 
-          <main className={`flex-1 overflow-y-auto p-6 ${selectMode ? 'pb-72 md:pb-56' : ''} `}>
+          <main className={`flex-1 overflow-y-auto p-6 ${isSocialQueueMode ? 'pb-72 md:pb-56' : ''} `}>
             <div className="max-w-7xl mx-auto">
               {/* Header */}
               <div className="mb-6">
@@ -852,13 +864,15 @@ const goToPage = useCallback(
                       {selectMode ? 'Select a Product' : 'Products'}
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400">
-                      {selectMode 
-                        ? 'Click products to queue them, then adjust quantities from the queue drawer' 
+                      {selectMode
+                        ? (isSocialQueueMode
+                          ? 'Click products to queue them, then adjust quantities from the queue drawer'
+                          : 'Select a product to return to the previous page')
                         : `Manage your store's product catalog`}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
-                    {selectMode && redirectPath && (
+                    {isSocialQueueMode && redirectPath && (
                       <>
                         <button
                           onClick={handleClearSocialQueue}
@@ -1210,7 +1224,7 @@ const goToPage = useCallback(
       </div>
 
 
-      {selectMode && redirectPath && (
+      {isSocialQueueMode && redirectPath && (
         <div className="fixed bottom-4 left-4 right-4 md:left-auto md:w-[430px] z-40">
           <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-2xl overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
