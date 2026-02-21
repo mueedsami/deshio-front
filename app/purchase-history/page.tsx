@@ -53,18 +53,18 @@ interface Order {
     name: string;
   };
   subtotal: string;
-  subtotal_amount: string;
+  subtotal_amount?: string;
   tax_amount: string;
   discount_amount: string;
   shipping_amount: string;
-  shipping_cost: string;
+  shipping_cost?: string;
   total_amount: string;
   paid_amount: string;
   outstanding_amount: string;
   is_installment: boolean;
   order_date: string;
   created_at: string;
-  items?: OrderItem[];
+  items: OrderItem[];
   payments?: Array<{
     id: number;
     amount: string;
@@ -95,6 +95,10 @@ export default function PurchaseHistoryPage() {
   const [loadingDetails, setLoadingDetails] = useState<number | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ [key: number]: string }>({});
   const [loading, setLoading] = useState(true);
+  const PAGE_SIZE = 50;
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
+  const [totalMatchingOrders, setTotalMatchingOrders] = useState(0);
   const [userRole, setUserRole] = useState<string>('');
   const [userStoreId, setUserStoreId] = useState<string>('');
   const [activeMenu, setActiveMenu] = useState<number | null>(null);
@@ -136,6 +140,13 @@ export default function PurchaseHistoryPage() {
     }
   };
 
+  const normalizeOrder = (raw: any): Order => ({
+    ...raw,
+    subtotal_amount: raw?.subtotal_amount ?? raw?.subtotal ?? '0',
+    shipping_cost: raw?.shipping_cost ?? raw?.shipping_amount ?? '0',
+    items: Array.isArray(raw?.items) ? raw.items : [],
+    payments: Array.isArray(raw?.payments) ? raw.payments : [],
+  });
 
   useEffect(() => {
     const role = localStorage.getItem('userRole') || '';
@@ -147,11 +158,15 @@ export default function PurchaseHistoryPage() {
       setSelectedStore(storeId);
     }
     
-    fetchOrders(role, storeId);
     fetchStores(role, storeId);
   }, []);
 
-  const fetchOrders = async (role?: string, storeId?: string) => {
+  useEffect(() => {
+    fetchOrders(currentPage, userRole, userStoreId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, userRole, userStoreId, searchTerm, selectedStore, startDate, endDate]);
+
+  const fetchOrders = async (page = 1, role?: string, storeId?: string) => {
     try {
       setLoading(true);
       
@@ -160,19 +175,31 @@ export default function PurchaseHistoryPage() {
       
       const filters: OrderFilters = {
         order_type: 'counter',
-        per_page: 50,
+        per_page: PAGE_SIZE,
+        page,
       };
-      
+
+      if (searchTerm.trim()) filters.search = searchTerm.trim();
+      if (startDate) filters.date_from = startDate;
+      if (endDate) filters.date_to = endDate;
+
       if (resolvedRole === 'store_manager' && resolvedStoreId) {
         filters.store_id = parseInt(resolvedStoreId);
+      } else if (selectedStore) {
+        filters.store_id = parseInt(selectedStore);
       }
       
       const result = await orderService.getAll(filters);
-      setOrders(result.data);
+      setOrders((result.data || []).map(normalizeOrder));
+      setCurrentPage(result.current_page || page);
+      setLastPage(result.last_page || 1);
+      setTotalMatchingOrders(result.total || 0);
       
     } catch (error) {
       console.error('❌ Failed to fetch orders:', error);
       setOrders([]);
+      setLastPage(1);
+      setTotalMatchingOrders(0);
     } finally {
       setLoading(false);
     }
@@ -224,8 +251,8 @@ export default function PurchaseHistoryPage() {
     setErrorDetails(prev => ({ ...prev, [orderId]: '' }));
     
     try {
-      const fullOrder = await orderService.getById(orderId);
-      setOrders(orders.map(o => o.id === orderId ? fullOrder : o));
+      const fullOrder = normalizeOrder(await orderService.getById(orderId));
+      setOrders(prev => prev.map(o => (o.id === orderId ? fullOrder : o)));
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load order details';
       setErrorDetails(prev => ({ ...prev, [orderId]: errorMessage }));
@@ -251,7 +278,7 @@ export default function PurchaseHistoryPage() {
     
     if (!order.items || order.items.length === 0) {
       try {
-        const fullOrder = await orderService.getById(order.id);
+        const fullOrder = normalizeOrder(await orderService.getById(order.id));
         setSelectedOrderForAction(fullOrder);
       } catch (error) {
         console.error('Failed to load order details:', error);
@@ -270,7 +297,7 @@ export default function PurchaseHistoryPage() {
     
     if (!order.items || order.items.length === 0) {
       try {
-        const fullOrder = await orderService.getById(order.id);
+        const fullOrder = normalizeOrder(await orderService.getById(order.id));
         setSelectedOrderForAction(fullOrder);
       } catch (error) {
         console.error('Failed to load order details:', error);
@@ -399,7 +426,7 @@ export default function PurchaseHistoryPage() {
       }
 
       console.log('🔄 Refreshing order list...');
-      await fetchOrders(userRole, userStoreId);
+      await fetchOrders(currentPage, userRole, userStoreId);
       
       alert('✅ Return processed successfully!');
       setShowReturnModal(false);
@@ -566,7 +593,7 @@ export default function PurchaseHistoryPage() {
       console.log('✅ New order completed - Inventory reduced for new products');
 
       console.log('\n🔄 STEP 6: Refreshing order list...');
-      await fetchOrders(userRole, userStoreId);
+      await fetchOrders(currentPage, userRole, userStoreId);
       
       console.log('\n✅ ========================================');
       console.log('✅ EXCHANGE COMPLETED SUCCESSFULLY!');
@@ -646,27 +673,14 @@ export default function PurchaseHistoryPage() {
     return store ? `${store.name} - ${store.location}` : 'Unknown Store';
   };
 
-  const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
-      order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.customer?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      order.customer?.phone?.includes(searchTerm);
-    
-    const matchesStore = !selectedStore || order.store.id === parseInt(selectedStore);
-    
-    const orderDate = new Date(order.created_at);
-    const matchesStartDate = !startDate || orderDate >= new Date(startDate);
-    const matchesEndDate = !endDate || orderDate <= new Date(endDate);
-    
-    return matchesSearch && matchesStore && matchesStartDate && matchesEndDate;
-  });
+  const filteredOrders = orders;
 
   const totalRevenue = filteredOrders.reduce((sum, order) => {
     const amount = parseFloat(order.total_amount.replace(/,/g, ''));
     return sum + (isNaN(amount) ? 0 : amount);
   }, 0);
   
-  const totalOrders = filteredOrders.length;
+  const totalOrders = totalMatchingOrders;
   
   const totalDue = filteredOrders.reduce((sum, order) => {
     const amount = parseFloat(order.outstanding_amount.replace(/,/g, ''));
@@ -720,14 +734,14 @@ export default function PurchaseHistoryPage() {
                       type="text"
                       placeholder="Search by order#, customer, phone..."
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                       className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
                   
                   <select
                     value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
+                    onChange={(e) => { setSelectedStore(e.target.value); setCurrentPage(1); }}
                     disabled={userRole === 'store_manager'}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:dark:bg-gray-600"
                   >
@@ -742,14 +756,14 @@ export default function PurchaseHistoryPage() {
                   <input
                     type="date"
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    onChange={(e) => { setStartDate(e.target.value); setCurrentPage(1); }}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                   
                   <input
                     type="date"
                     value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    onChange={(e) => { setEndDate(e.target.value); setCurrentPage(1); }}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
@@ -1064,6 +1078,35 @@ export default function PurchaseHistoryPage() {
                     </div>
                   ))}
                 </div>
+
+                {lastPage > 1 && (
+                  <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+                    <div className="text-xs text-gray-600 dark:text-gray-400">
+                      Showing {orders.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-{(currentPage - 1) * PAGE_SIZE + orders.length} of {totalMatchingOrders} orders
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={currentPage <= 1 || loading}
+                        className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Previous
+                      </button>
+                      <div className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300">
+                        Page {currentPage} / {lastPage}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.min(lastPage, p + 1))}
+                        disabled={currentPage >= lastPage || loading}
+                        className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
               )}
             </div>
           </main>
