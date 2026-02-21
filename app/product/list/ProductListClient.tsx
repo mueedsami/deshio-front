@@ -49,6 +49,32 @@ export default function ProductPage() {
   const [showFilters, setShowFilters] = useState(false);
   const itemsPerPage = 10;
 
+  const queueProductForSocialCommerce = (variant: ProductVariant) => {
+    try {
+      const meta = catalogMetaById[variant.id];
+      const raw = sessionStorage.getItem('social_commerce_cart_add_queue_v1');
+      const current = raw ? (JSON.parse(raw) as any[]) : [];
+      const queue = Array.isArray(current) ? current : [];
+
+      queue.push({
+        productId: variant.id,
+        productName: variant.name,
+        sku: variant.sku,
+        image: (variant as any).image || '',
+        quantity: 1,
+        priceHint: typeof meta?.selling_price === 'number' ? meta.selling_price : null,
+        stockHint: typeof meta?.stock_quantity === 'number' ? meta.stock_quantity : null,
+        ts: Date.now(),
+      });
+
+      sessionStorage.setItem('social_commerce_cart_add_queue_v1', JSON.stringify(queue));
+      return true;
+    } catch (e) {
+      console.error('Failed to queue product for social commerce', e);
+      return false;
+    }
+  };
+
   const updateQueryParams = useCallback(
     (updates: Record<string, string | null | undefined>) => {
       const params = new URLSearchParams(searchParams.toString());
@@ -658,6 +684,19 @@ const goToPage = useCallback(
 
   const handleSelect = (variant: ProductVariant) => {
     if (selectMode && redirectPath) {
+      const normalizedRedirect = redirectPath.split('?')[0];
+
+      if (normalizedRedirect === '/social-commerce') {
+        const queued = queueProductForSocialCommerce(variant);
+        if (queued) {
+          setToast({ message: `${variant.name} added to Social Commerce cart queue`, type: 'success' });
+        } else {
+          setToast({ message: 'Failed to queue product for Social Commerce', type: 'error' });
+        }
+        router.push('/social-commerce');
+        return;
+      }
+
       const url = `${redirectPath}?productId=${variant.id}&productName=${encodeURIComponent(variant.name)}&productSku=${encodeURIComponent(variant.sku)}`;
       router.push(url);
     }
@@ -713,7 +752,7 @@ const goToPage = useCallback(
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400">
                       {selectMode 
-                        ? 'Choose a product variant to add to your operation' 
+                        ? ((redirectPath || '').split('?')[0] === '/social-commerce' ? 'Choose a product and it will be added back to the Social Commerce cart' : 'Choose a product variant to add to your operation') 
                         : `Manage your store's product catalog`}
                     </p>
                   </div>

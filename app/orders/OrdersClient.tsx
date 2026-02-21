@@ -285,6 +285,14 @@ const pickOrderItemImage = (item: any): string | null => {
   return null;
 };
 
+const getTodayFilterValue = () => {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
 // Pathao lookup types (used for Social Commerce address editing)
 type PathaoCity = { city_id: number; city_name: string };
 type PathaoZone = { zone_id: number; zone_name: string };
@@ -304,7 +312,7 @@ export default function OrdersDashboard() {
   const pathaoInFlightRef = useRef<Set<string>>(new Set());
 
   const [search, setSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState(getTodayFilterValue());
 
   // ✅ NEW: Order type filter (All / Social / E-Com)
   const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
@@ -348,7 +356,7 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
       setOrderStatusFilter('All Order Status');
     }
 
-    setCourierFilter('All Couriers');
+    setCourierFilter('pathao');
   }, [initialViewMode]);
 
 
