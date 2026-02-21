@@ -58,8 +58,8 @@ interface PathaoArea {
   area_name: string;
 }
 
-const SOCIAL_COMMERCE_DRAFT_KEY = 'social_commerce_draft_v1';
-const SOCIAL_COMMERCE_CART_QUEUE_KEY = 'social_commerce_cart_add_queue_v1';
+const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
+const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
@@ -122,8 +122,6 @@ export default function SocialCommercePage() {
   const [storeBatchesStoreId, setStoreBatchesStoreId] = useState<number | null>(null);
   const [isLoadingBatches, setIsLoadingBatches] = useState<boolean>(false);
   const batchesLoadRef = useRef<Promise<any[]> | null>(null);
-  const draftRestoredRef = useRef(false);
-  const queueProcessingRef = useRef(false);
 
   // 🧑‍💼 Existing customer + last order summary states
   const [existingCustomer, setExistingCustomer] = useState<any | null>(null);
@@ -155,6 +153,8 @@ export default function SocialCommercePage() {
 
   // ✅ Reuse lookup hook for consistent phone lookup behavior (debounced)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
+  const draftHydratedRef = useRef(false);
+  const queueImportingRef = useRef(false);
 
   function getTodayDate() {
     const today = new Date();
@@ -173,6 +173,85 @@ export default function SocialCommercePage() {
       console.log('Success:', message);
       alert(message);
     }
+  };
+
+  const saveDraftToSession = () => {
+    if (typeof window === 'undefined') return;
+    try {
+      const draft = {
+        date,
+        salesBy,
+        userName,
+        userEmail,
+        userPhone,
+        socialId,
+        isInternational,
+        usePathaoAutoLocation,
+        pathaoCityId,
+        pathaoZoneId,
+        pathaoAreaId,
+        streetAddress,
+        postalCode,
+        country,
+        state,
+        internationalCity,
+        internationalPostalCode,
+        deliveryAddress,
+        selectedStore,
+        searchQuery,
+        minPrice,
+        maxPrice,
+        cart,
+      };
+      sessionStorage.setItem(SC_DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch (e) {
+      console.warn('Failed to save social commerce draft', e);
+    }
+  };
+
+  const readQueuedSelections = () => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = sessionStorage.getItem(SC_SELECTION_QUEUE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      const list = Array.isArray(parsed) ? parsed : [];
+
+      const byId = new Map<number, any>();
+      for (const item of list) {
+        const id = Number(item?.id || 0);
+        if (!Number.isFinite(id) || id <= 0) continue;
+
+        const qtyRaw = Number(item?.qty);
+        const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.floor(qtyRaw) : 1;
+
+        const ex = byId.get(id);
+        if (ex) {
+          ex.qty += qty;
+          ex.ts = Math.max(Number(ex.ts || 0), Number(item?.ts || 0));
+          if (!ex.image && item?.image) ex.image = String(item.image);
+          if (!ex.sku && item?.sku) ex.sku = String(item.sku);
+          if (!ex.name && item?.name) ex.name = String(item.name);
+        } else {
+          byId.set(id, {
+            id,
+            name: String(item?.name || ''),
+            sku: String(item?.sku || ''),
+            image: item?.image ? String(item.image) : null,
+            qty,
+            ts: Number(item?.ts || 0) || Date.now(),
+          });
+        }
+      }
+
+      return Array.from(byId.values());
+    } catch {
+      return [];
+    }
+  };
+
+  const clearQueuedSelections = () => {
+    if (typeof window === 'undefined') return;
+    sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
   };
 
   const formatOrderDateTime = (v?: any) => {
@@ -254,115 +333,6 @@ export default function SocialCommercePage() {
     setImageModalOpen(false);
     setImageModalSrc(null);
     setImageModalTitle('');
-  };
-
-  const addResolvedProductToCart = (product: any, qty = 1) => {
-    if (!product || !product.id) return false;
-    const price = Number(String(product?.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '')) || 0;
-    const safeQty = Math.max(1, Math.floor(Number(qty) || 1));
-    const available = Number(product?.available ?? 0) || 0;
-
-    if (available <= 0) return false;
-
-    const newItem: CartProduct = {
-      id: Date.now() + Math.floor(Math.random() * 1000),
-      product_id: Number(product.id),
-      batch_id: null,
-      productName: String(product.name || 'Product'),
-      quantity: safeQty,
-      unit_price: price,
-      discount_amount: 0,
-      amount: price * safeQty,
-    };
-
-    setCart((prev) => {
-      const idx = prev.findIndex((it) =>
-        !it.isService &&
-        !it.isDefective &&
-        Number(it.product_id) === Number(newItem.product_id) &&
-        Number(it.unit_price) === Number(newItem.unit_price) &&
-        Number(it.discount_amount) === 0
-      );
-
-      if (idx === -1) return [...prev, newItem];
-
-      const next = [...prev];
-      const existing = next[idx];
-      next[idx] = {
-        ...existing,
-        quantity: Number(existing.quantity || 0) + safeQty,
-        amount: Number(existing.amount || 0) + newItem.amount,
-      };
-      return next;
-    });
-
-    return true;
-  };
-
-  const consumeQueuedCartAdds = async () => {
-    if (typeof window === 'undefined') return;
-    if (!selectedStore) return;
-    if (queueProcessingRef.current) return;
-
-    let queued: any[] = [];
-    try {
-      const raw = sessionStorage.getItem(SOCIAL_COMMERCE_CART_QUEUE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      queued = Array.isArray(parsed) ? parsed : [];
-      queued = queued.filter((q) => Number(q?.productId ?? q?.product_id) > 0);
-      if (!queued.length) {
-        sessionStorage.removeItem(SOCIAL_COMMERCE_CART_QUEUE_KEY);
-        return;
-      }
-    } catch {
-      sessionStorage.removeItem(SOCIAL_COMMERCE_CART_QUEUE_KEY);
-      return;
-    }
-
-    queueProcessingRef.current = true;
-    try {
-      const storeId = Number(selectedStore);
-      const batches = await ensureStoreBatchesLoaded(storeId);
-      const ids = Array.from(new Set(queued.map((q) => Number(q.productId ?? q.product_id)).filter((n) => n > 0)));
-
-      const matchedBatches = (batches || []).filter((b: any) => {
-        const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
-        return ids.includes(pid);
-      });
-
-      const resolvedProducts = buildProductResultsFromBatches(matchedBatches, { defaultStage: 'queue', defaultScore: 0 });
-      const resolvedMap = new Map<number, any>(resolvedProducts.map((rp: any) => [Number(rp.id), rp]));
-
-      const missingNames: string[] = [];
-      let addedCount = 0;
-      for (const q of queued) {
-        const pid = Number(q.productId ?? q.product_id ?? 0);
-        const qty = Math.max(1, Number(q.quantity ?? 1) || 1);
-        const resolved = resolvedMap.get(pid);
-        if (resolved && Number(resolved.available ?? 0) > 0) {
-          const ok = addResolvedProductToCart(resolved, qty);
-          if (ok) addedCount += 1;
-          continue;
-        }
-        missingNames.push(String(q.productName || q.name || `Product ${pid}`));
-      }
-
-      sessionStorage.removeItem(SOCIAL_COMMERCE_CART_QUEUE_KEY);
-
-      if (addedCount > 0) {
-        const msg = missingNames.length
-          ? `${addedCount} product(s) added to cart. Not available in this store: ${missingNames.slice(0, 3).join(', ')}${missingNames.length > 3 ? '…' : ''}`
-          : `${addedCount} product(s) added to cart.`;
-        showToast(msg, 'success');
-      } else if (missingNames.length) {
-        showToast(`These products were not found in the selected store: ${missingNames.slice(0, 3).join(', ')}${missingNames.length > 3 ? '…' : ''}`, 'error');
-      }
-    } catch (e) {
-      console.error('Failed to consume queued cart adds', e);
-    } finally {
-      queueProcessingRef.current = false;
-    }
   };
 
   const getRecentItemThumbSrc = (it: any): string => {
@@ -529,7 +499,7 @@ export default function SocialCommercePage() {
 
       setStores(sortedStores);
       if (sortedStores.length > 0) {
-        setSelectedStore((prev) => prev || String((mainStore ?? sortedStores[0]).id));
+        setSelectedStore(String((mainStore ?? sortedStores[0]).id));
       }
     } catch (error) {
       console.error('Error fetching stores:', error);
@@ -906,101 +876,48 @@ export default function SocialCommercePage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (draftRestoredRef.current) return;
-
     try {
-      const raw = sessionStorage.getItem(SOCIAL_COMMERCE_DRAFT_KEY);
-      if (!raw) return;
-
-      const draft = JSON.parse(raw);
-      if (!draft || typeof draft !== 'object') return;
-
-      if (typeof draft.date === 'string') setDate(draft.date);
-      if (typeof draft.salesBy === 'string') setSalesBy(draft.salesBy);
-      if (typeof draft.userName === 'string') setUserName(draft.userName);
-      if (typeof draft.userEmail === 'string') setUserEmail(draft.userEmail);
-      if (typeof draft.userPhone === 'string') setUserPhone(draft.userPhone);
-      if (typeof draft.socialId === 'string') setSocialId(draft.socialId);
-      if (typeof draft.isInternational === 'boolean') setIsInternational(draft.isInternational);
-      if (typeof draft.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(draft.usePathaoAutoLocation);
-
-      if (typeof draft.pathaoCityId === 'string') setPathaoCityId(draft.pathaoCityId);
-      if (typeof draft.pathaoZoneId === 'string') setPathaoZoneId(draft.pathaoZoneId);
-      if (typeof draft.pathaoAreaId === 'string') setPathaoAreaId(draft.pathaoAreaId);
-
-      if (typeof draft.streetAddress === 'string') setStreetAddress(draft.streetAddress);
-      if (typeof draft.postalCode === 'string') setPostalCode(draft.postalCode);
-      if (typeof draft.country === 'string') setCountry(draft.country);
-      if (typeof draft.state === 'string') setState(draft.state);
-      if (typeof draft.internationalCity === 'string') setInternationalCity(draft.internationalCity);
-      if (typeof draft.internationalPostalCode === 'string') setInternationalPostalCode(draft.internationalPostalCode);
-      if (typeof draft.deliveryAddress === 'string') setDeliveryAddress(draft.deliveryAddress);
-
-      if (typeof draft.searchQuery === 'string') setSearchQuery(draft.searchQuery);
-      if (typeof draft.minPrice === 'string') setMinPrice(draft.minPrice);
-      if (typeof draft.maxPrice === 'string') setMaxPrice(draft.maxPrice);
-
-      if (typeof draft.selectedStore === 'string') setSelectedStore(draft.selectedStore);
-
-      if (Array.isArray(draft.cart)) {
-        const safeCart = draft.cart.filter((it: any) => it && typeof it === 'object').map((it: any) => ({
-          id: it.id ?? `${Date.now()}-${Math.random()}`,
-          product_id: Number(it.product_id ?? 0),
-          batch_id: it.batch_id ?? null,
-          productName: String(it.productName ?? ''),
-          quantity: Number(it.quantity ?? 0) || 0,
-          unit_price: Number(it.unit_price ?? 0) || 0,
-          discount_amount: Number(it.discount_amount ?? 0) || 0,
-          amount: Number(it.amount ?? 0) || 0,
-          isDefective: Boolean(it.isDefective),
-          defectId: it.defectId,
-          isService: Boolean(it.isService),
-          serviceId: it.serviceId,
-          serviceCategory: it.serviceCategory,
-        } as CartProduct));
-        setCart(safeCart);
+      const raw = sessionStorage.getItem(SC_DRAFT_STORAGE_KEY);
+      if (!raw) {
+        draftHydratedRef.current = true;
+        return;
+      }
+      const d = JSON.parse(raw);
+      if (d && typeof d === 'object') {
+        if (typeof d.date === 'string') setDate(d.date);
+        if (typeof d.salesBy === 'string') setSalesBy(d.salesBy);
+        if (typeof d.userName === 'string') setUserName(d.userName);
+        if (typeof d.userEmail === 'string') setUserEmail(d.userEmail);
+        if (typeof d.userPhone === 'string') setUserPhone(d.userPhone);
+        if (typeof d.socialId === 'string') setSocialId(d.socialId);
+        if (typeof d.isInternational === 'boolean') setIsInternational(d.isInternational);
+        if (typeof d.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(d.usePathaoAutoLocation);
+        if (typeof d.pathaoCityId === 'string') setPathaoCityId(d.pathaoCityId);
+        if (typeof d.pathaoZoneId === 'string') setPathaoZoneId(d.pathaoZoneId);
+        if (typeof d.pathaoAreaId === 'string') setPathaoAreaId(d.pathaoAreaId);
+        if (typeof d.streetAddress === 'string') setStreetAddress(d.streetAddress);
+        if (typeof d.postalCode === 'string') setPostalCode(d.postalCode);
+        if (typeof d.country === 'string') setCountry(d.country);
+        if (typeof d.state === 'string') setState(d.state);
+        if (typeof d.internationalCity === 'string') setInternationalCity(d.internationalCity);
+        if (typeof d.internationalPostalCode === 'string') setInternationalPostalCode(d.internationalPostalCode);
+        if (typeof d.deliveryAddress === 'string') setDeliveryAddress(d.deliveryAddress);
+        if (typeof d.selectedStore === 'string') setSelectedStore(d.selectedStore);
+        if (typeof d.searchQuery === 'string') setSearchQuery(d.searchQuery);
+        if (typeof d.minPrice === 'string') setMinPrice(d.minPrice);
+        if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
+        if (Array.isArray(d.cart)) setCart(d.cart);
       }
     } catch (e) {
       console.warn('Failed to restore social commerce draft', e);
     } finally {
-      draftRestoredRef.current = true;
+      draftHydratedRef.current = true;
     }
   }, []);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!draftRestoredRef.current) return;
-
-    try {
-      const draft = {
-        date,
-        salesBy,
-        userName,
-        userEmail,
-        userPhone,
-        socialId,
-        isInternational,
-        usePathaoAutoLocation,
-        pathaoCityId,
-        pathaoZoneId,
-        pathaoAreaId,
-        streetAddress,
-        postalCode,
-        country,
-        state,
-        internationalCity,
-        internationalPostalCode,
-        deliveryAddress,
-        searchQuery,
-        minPrice,
-        maxPrice,
-        selectedStore,
-        cart,
-      };
-      sessionStorage.setItem(SOCIAL_COMMERCE_DRAFT_KEY, JSON.stringify(draft));
-    } catch (e) {
-      console.warn('Failed to save social commerce draft', e);
-    }
+    if (!draftHydratedRef.current) return;
+    saveDraftToSession();
   }, [
     date,
     salesBy,
@@ -1020,12 +937,135 @@ export default function SocialCommercePage() {
     internationalCity,
     internationalPostalCode,
     deliveryAddress,
+    selectedStore,
     searchQuery,
     minPrice,
     maxPrice,
-    selectedStore,
     cart,
   ]);
+
+  useEffect(() => {
+    if (!selectedStore || queueImportingRef.current) return;
+
+    const queued = readQueuedSelections();
+    if (!queued.length) return;
+
+    const run = async () => {
+      queueImportingRef.current = true;
+      try {
+        const storeId = Number(selectedStore);
+        if (!Number.isFinite(storeId) || storeId <= 0) return;
+
+        const batches = await ensureStoreBatchesLoaded(storeId);
+        const ids = queued.map((q: any) => Number(q?.id || 0)).filter((id: number) => id > 0);
+        if (!ids.length) {
+          clearQueuedSelections();
+          return;
+        }
+
+        const idSet = new Set(ids);
+        const matchedBatches = (batches || []).filter((b: any) => {
+          const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
+          return idSet.has(pid);
+        });
+        const productResults = buildProductResultsFromBatches(matchedBatches, { defaultStage: 'queue', defaultScore: 0 });
+        const byId = new Map<number, any>(productResults.map((p: any) => [Number(p.id), p]));
+
+        const missingNames: string[] = [];
+        const selectedProducts: any[] = [];
+        for (const q of queued) {
+          const pid = Number(q?.id || 0);
+          const qty = Math.max(1, Math.floor(Number(q?.qty) || 1));
+          const p = byId.get(pid);
+          if (!p || Number(p?.available ?? 0) <= 0) {
+            missingNames.push(String(q?.name || `#${pid}`));
+            continue;
+          }
+          for (let i = 0; i < qty; i += 1) {
+            selectedProducts.push(p);
+          }
+        }
+
+        let addedCount = 0;
+        const stockLimitedNames: string[] = [];
+
+        if (selectedProducts.length) {
+          setCart((prev) => {
+            const next = [...prev];
+            const queuedCountByPid = new Map<number, number>();
+
+            for (const p of selectedProducts) {
+              const pid = Number(p.id);
+              const name = String(p?.name || `#${pid}`);
+              const price = Number(String(p?.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+              const available = Math.max(0, Number(p?.available ?? 0) || 0);
+
+              const alreadyInCartQty = next
+                .filter((item) => !item.isService && !item.isDefective && Number(item.product_id) === pid)
+                .reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+
+              const queuedUsed = queuedCountByPid.get(pid) || 0;
+              if (alreadyInCartQty + queuedUsed + 1 > available) {
+                stockLimitedNames.push(name);
+                continue;
+              }
+
+              const existingIndex = next.findIndex((item) => !item.isService && !item.isDefective && Number(item.product_id) === pid);
+              if (existingIndex >= 0) {
+                const ex = next[existingIndex];
+                const newQty = (Number(ex.quantity) || 0) + 1;
+                const exDiscount = Number(ex.discount_amount) || 0;
+                next[existingIndex] = {
+                  ...ex,
+                  quantity: newQty,
+                  discount_amount: exDiscount,
+                  amount: Math.max(0, (price * newQty) - exDiscount),
+                  unit_price: price,
+                };
+              } else {
+                next.push({
+                  id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                  product_id: pid,
+                  batch_id: null,
+                  productName: name,
+                  quantity: 1,
+                  unit_price: price,
+                  discount_amount: 0,
+                  amount: price,
+                });
+              }
+
+              queuedCountByPid.set(pid, queuedUsed + 1);
+              addedCount += 1;
+            }
+
+            return next;
+          });
+        }
+
+        clearQueuedSelections();
+
+        if (addedCount > 0) {
+          if (missingNames.length || stockLimitedNames.length) {
+            showToast(
+              `Added ${addedCount} queued product(s). ${missingNames.length + stockLimitedNames.length} could not be added for this store/stock.`,
+              'success'
+            );
+          } else {
+            showToast(`Added ${addedCount} product(s) from Product List`, 'success');
+          }
+        } else if (missingNames.length || stockLimitedNames.length) {
+          showToast('Queued products are not available in the selected store', 'error');
+        }
+      } catch (e) {
+        console.error('Failed to import queued products', e);
+      } finally {
+        queueImportingRef.current = false;
+      }
+    };
+
+    run();
+  }, [selectedStore]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -1109,21 +1149,6 @@ export default function SocialCommercePage() {
     // Do not auto-load batches/products; wait for user to type or set price filters
     setSelectedProduct(null);
     setSearchResults([]);
-  }, [selectedStore]);
-
-  useEffect(() => {
-    if (!selectedStore) return;
-    consumeQueuedCartAdds();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedStore, storeBatchesStoreId, storeAvailableBatches.length]);
-
-  useEffect(() => {
-    const onFocus = () => {
-      if (selectedStore) consumeQueuedCartAdds();
-    };
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedStore]);
 
   // ✅ Load Pathao cities only when domestic + manual selection mode
@@ -1616,12 +1641,8 @@ export default function SocialCommercePage() {
         })
       );
 
-      try {
-        sessionStorage.removeItem(SOCIAL_COMMERCE_DRAFT_KEY);
-        sessionStorage.removeItem(SOCIAL_COMMERCE_CART_QUEUE_KEY);
-      } catch {}
-
       console.log('✅ Order data prepared, redirecting...');
+      sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
       window.location.href = '/social-commerce/amount-details';
     } catch (error) {
       console.error('❌ Error:', error);
@@ -2161,17 +2182,20 @@ export default function SocialCommercePage() {
                       >
                         <Search size={18} />
                       </button>
+                    </div>
 
+                    <div className="mb-4 flex items-center justify-between gap-2 rounded border border-dashed border-gray-300 dark:border-gray-600 p-2">
+                      <p className="text-xs text-gray-600 dark:text-gray-300">
+                        Need easier browsing? Open Product List and queue multiple items.
+                      </p>
                       <button
                         type="button"
                         onClick={() => {
-                          try {
-                            sessionStorage.setItem('social_commerce_return_hint', '1');
-                          } catch {}
-                          window.location.href = '/product/list?selectMode=true&redirect=/social-commerce';
+                          saveDraftToSession();
+                          window.location.href = `/product/list?selectMode=true&redirect=${encodeURIComponent('/social-commerce')}`;
                         }}
-                        className="w-full sm:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex-shrink-0"
-                        title="Browse full product list and send items back to Social Commerce cart"
+                        disabled={!selectedStore}
+                        className="px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         Browse Product List
                       </button>

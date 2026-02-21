@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { Plus, Search, ChevronLeft, ChevronRight, Filter, Grid, List, RefreshCw } from 'lucide-react';
+import { Plus, Search, ChevronLeft, ChevronRight, Filter, Grid, List, RefreshCw, Minus, X } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import ProductListItem from '@/components/ProductListItem';
@@ -15,6 +15,7 @@ import Toast from '@/components/Toast';
 import {
   ProductVariant,
   ProductGroup,
+  FALLBACK_IMAGE_URL,
 } from '@/types/product';
 
 export default function ProductPage() {
@@ -27,7 +28,16 @@ export default function ProductPage() {
   // Read URL parameters
   const [selectMode, setSelectMode] = useState(false);
   const [redirectPath, setRedirectPath] = useState('');
-  
+  const [queuedForSocialCount, setQueuedForSocialCount] = useState(0);
+  const [queuedForSocialItems, setQueuedForSocialItems] = useState<Array<{
+    id: number;
+    name: string;
+    sku: string;
+    image?: string | null;
+    qty: number;
+    ts: number;
+  }>>([]);
+
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
@@ -49,29 +59,68 @@ export default function ProductPage() {
   const [showFilters, setShowFilters] = useState(false);
   const itemsPerPage = 10;
 
-  const queueProductForSocialCommerce = (variant: ProductVariant) => {
+  const SOCIAL_COMMERCE_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
+
+  const normalizeSocialSelectionQueue = (items: any[]) => {
+    const list = Array.isArray(items) ? items : [];
+    const byId = new Map<number, any>();
+
+    for (const raw of list) {
+      const id = Number(raw?.id || 0);
+      if (!Number.isFinite(id) || id <= 0) continue;
+
+      const qtyRaw = Number(raw?.qty);
+      const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.floor(qtyRaw) : 1;
+
+      const existing = byId.get(id);
+      if (existing) {
+        existing.qty += qty;
+        existing.ts = Math.max(existing.ts || 0, Number(raw?.ts || 0) || Date.now());
+        if (!existing.image && raw?.image) existing.image = String(raw.image);
+        if (!existing.sku && raw?.sku) existing.sku = String(raw.sku);
+        if (!existing.name && raw?.name) existing.name = String(raw.name);
+      } else {
+        byId.set(id, {
+          id,
+          name: String(raw?.name || ''),
+          sku: String(raw?.sku || ''),
+          image: raw?.image ? String(raw.image) : null,
+          qty,
+          ts: Number(raw?.ts || 0) || Date.now(),
+        });
+      }
+    }
+
+    return Array.from(byId.values()).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  };
+
+  const getQueuedUnitsCount = (items: any[]) =>
+    (Array.isArray(items) ? items : []).reduce((sum, item) => sum + Math.max(1, Number(item?.qty) || 1), 0);
+
+  const readSocialSelectionQueue = () => {
+    if (typeof window === 'undefined') return [];
     try {
-      const meta = catalogMetaById[variant.id];
-      const raw = sessionStorage.getItem('social_commerce_cart_add_queue_v1');
-      const current = raw ? (JSON.parse(raw) as any[]) : [];
-      const queue = Array.isArray(current) ? current : [];
+      const raw = sessionStorage.getItem(SOCIAL_COMMERCE_QUEUE_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return normalizeSocialSelectionQueue(parsed);
+    } catch {
+      return [];
+    }
+  };
 
-      queue.push({
-        productId: variant.id,
-        productName: variant.name,
-        sku: variant.sku,
-        image: (variant as any).image || '',
-        quantity: 1,
-        priceHint: typeof meta?.selling_price === 'number' ? meta.selling_price : null,
-        stockHint: typeof meta?.stock_quantity === 'number' ? meta.stock_quantity : null,
-        ts: Date.now(),
-      });
-
-      sessionStorage.setItem('social_commerce_cart_add_queue_v1', JSON.stringify(queue));
-      return true;
+  const writeSocialSelectionQueue = (items: any[]) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const normalized = normalizeSocialSelectionQueue(items);
+      if (!normalized.length) {
+        sessionStorage.removeItem(SOCIAL_COMMERCE_QUEUE_KEY);
+      } else {
+        sessionStorage.setItem(SOCIAL_COMMERCE_QUEUE_KEY, JSON.stringify(normalized));
+      }
+      setQueuedForSocialItems(normalized);
+      setQueuedForSocialCount(getQueuedUnitsCount(normalized));
     } catch (e) {
-      console.error('Failed to queue product for social commerce', e);
-      return false;
+      console.warn('Failed to update social commerce selection queue', e);
     }
   };
 
@@ -127,6 +176,17 @@ const goToPage = useCallback(
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (!selectMode) {
+      setQueuedForSocialCount(0);
+      setQueuedForSocialItems([]);
+      return;
+    }
+    const queue = readSocialSelectionQueue();
+    setQueuedForSocialItems(queue);
+    setQueuedForSocialCount(getQueuedUnitsCount(queue));
+  }, [selectMode]);
 
   // ✅ Backend-powered multi-language search (Bangla/Roman/English + fuzzy)
   useEffect(() => {
@@ -682,24 +742,65 @@ const goToPage = useCallback(
     router.push('/product/add');
   };
 
+  const handleReturnToSocialCommerce = () => {
+    if (!redirectPath) return;
+    router.push(redirectPath);
+  };
+
+  const handleClearSocialQueue = () => {
+    writeSocialSelectionQueue([]);
+    setToast({ message: 'Selection queue cleared', type: 'warning' });
+  };
+
+  const handleQueueQtyChange = (productId: number, nextQtyInput: number) => {
+    const nextQty = Math.max(1, Math.floor(Number(nextQtyInput) || 1));
+    const queue = readSocialSelectionQueue();
+    const updated = queue.map((item: any) =>
+      Number(item?.id) === productId ? { ...item, qty: nextQty, ts: Date.now() } : item
+    );
+    writeSocialSelectionQueue(updated);
+  };
+
+  const handleRemoveQueuedItem = (productId: number) => {
+    const queue = readSocialSelectionQueue().filter((item: any) => Number(item?.id) !== productId);
+    writeSocialSelectionQueue(queue);
+  };
+
   const handleSelect = (variant: ProductVariant) => {
-    if (selectMode && redirectPath) {
-      const normalizedRedirect = redirectPath.split('?')[0];
+    if (!selectMode) return;
 
-      if (normalizedRedirect === '/social-commerce') {
-        const queued = queueProductForSocialCommerce(variant);
-        if (queued) {
-          setToast({ message: `${variant.name} added to Social Commerce cart queue`, type: 'success' });
-        } else {
-          setToast({ message: 'Failed to queue product for Social Commerce', type: 'error' });
-        }
-        router.push('/social-commerce');
-        return;
-      }
+    const queue = readSocialSelectionQueue();
+    const pid = Number(variant.id);
+    const existingIndex = queue.findIndex((item: any) => Number(item?.id) === pid);
 
-      const url = `${redirectPath}?productId=${variant.id}&productName=${encodeURIComponent(variant.name)}&productSku=${encodeURIComponent(variant.sku)}`;
-      router.push(url);
+    if (existingIndex >= 0) {
+      const ex = queue[existingIndex];
+      queue[existingIndex] = {
+        ...ex,
+        qty: Math.max(1, Number(ex?.qty) || 1) + 1,
+        ts: Date.now(),
+        image: ex?.image || (variant as any).image || null,
+        sku: ex?.sku || String((variant as any).sku || ''),
+        name: ex?.name || String(variant.name || ''),
+      };
+    } else {
+      queue.push({
+        id: pid,
+        name: String(variant.name || ''),
+        sku: String((variant as any).sku || ''),
+        image: (variant as any).image || null,
+        qty: 1,
+        ts: Date.now(),
+      });
     }
+
+    writeSocialSelectionQueue(queue);
+    const totalUnits = getQueuedUnitsCount(queue);
+
+    setToast({
+      message: `${variant.name} added to queue (${totalUnits} item${totalUnits > 1 ? 's' : ''})`,
+      type: 'success',
+    });
   };
 
   // Flatten categories for filter dropdown
@@ -741,7 +842,7 @@ const goToPage = useCallback(
             toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
 
-          <main className="flex-1 overflow-y-auto p-6">
+          <main className={`flex-1 overflow-y-auto p-6 ${selectMode ? 'pb-72 md:pb-56' : ''} `}>
             <div className="max-w-7xl mx-auto">
               {/* Header */}
               <div className="mb-6">
@@ -752,11 +853,30 @@ const goToPage = useCallback(
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400">
                       {selectMode 
-                        ? ((redirectPath || '').split('?')[0] === '/social-commerce' ? 'Choose a product and it will be added back to the Social Commerce cart' : 'Choose a product variant to add to your operation') 
+                        ? 'Click products to queue them, then adjust quantities from the queue drawer' 
                         : `Manage your store's product catalog`}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
+                    {selectMode && redirectPath && (
+                      <>
+                        <button
+                          onClick={handleClearSocialQueue}
+                          type="button"
+                          className="px-3 py-2 border border-gray-200 dark:border-gray-700 text-xs font-semibold text-gray-700 dark:text-gray-300 rounded-lg hover:bg-white dark:hover:bg-gray-800 transition-colors shadow-sm"
+                        >
+                          Clear Queue
+                        </button>
+                        <button
+                          onClick={handleReturnToSocialCommerce}
+                          type="button"
+                          className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-xs font-semibold rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors shadow-sm"
+                          title="Return to Social Commerce with selected products"
+                        >
+                          Back to Social Commerce ({queuedForSocialCount})
+                        </button>
+                      </>
+                    )}
                     {/* Refresh Button */}
                     <button
                       onClick={handleRefresh}
@@ -1088,6 +1208,106 @@ const goToPage = useCallback(
           </main>
         </div>
       </div>
+
+
+      {selectMode && redirectPath && (
+        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:w-[430px] z-40">
+          <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-2xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900 dark:text-white">Social Commerce Queue</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {queuedForSocialItems.length} product{queuedForSocialItems.length !== 1 ? 's' : ''} • {queuedForSocialCount} total item{queuedForSocialCount !== 1 ? 's' : ''}
+                </p>
+              </div>
+              <button
+                onClick={handleClearSocialQueue}
+                type="button"
+                className="px-2.5 py-1.5 text-xs font-semibold border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+              >
+                Clear
+              </button>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto p-3 space-y-2">
+              {queuedForSocialItems.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 text-center">
+                  <p className="text-sm text-gray-600 dark:text-gray-300">No products queued yet</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Click “Select” on products to add them here.</p>
+                </div>
+              ) : (
+                queuedForSocialItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-2.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={item.image || FALLBACK_IMAGE_URL}
+                        alt={item.name || `#${item.id}`}
+                        className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-gray-700"
+                        onError={(e) => {
+                          e.currentTarget.src = FALLBACK_IMAGE_URL;
+                        }}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.name || `#${item.id}`}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{item.sku || `ID: ${item.id}`}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveQueuedItem(Number(item.id))}
+                        className="h-7 w-7 flex items-center justify-center rounded-md text-gray-500 hover:text-red-600 hover:bg-white dark:hover:bg-gray-800"
+                        title="Remove from queue"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) - 1))}
+                        className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200"
+                        title="Decrease quantity"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <input
+                        type="number"
+                        min={1}
+                        value={Math.max(1, Number(item.qty) || 1)}
+                        onChange={(e) => handleQueueQtyChange(Number(item.id), Number(e.target.value))}
+                        className="w-16 h-8 text-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) + 1))}
+                        className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200 font-bold"
+                        title="Increase quantity"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="px-3 pb-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+              <button
+                onClick={handleReturnToSocialCommerce}
+                type="button"
+                className="w-full px-3 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors disabled:opacity-50"
+                disabled={queuedForSocialItems.length === 0}
+                title="Return to Social Commerce with selected products"
+              >
+                Back to Social Commerce ({queuedForSocialCount})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <Toast
