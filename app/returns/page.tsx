@@ -655,7 +655,7 @@ export default function ReturnsPage() {
   useEffect(() => {
     productReturnService.getStatistics().then(r => setStats(r?.data || null)).catch(() => {});
     storeService.getStores({ per_page: 100, is_active: true }).then((r: any) => {
-      const list = Array.isArray(r) ? r : r?.data || r?.data?.data || [];
+      const list = Array.isArray(r) ? r : Array.isArray(r?.data) ? r.data : Array.isArray(r?.data?.data) ? r.data.data : [];
       setStores(list);
     }).catch(() => {});
   }, []);

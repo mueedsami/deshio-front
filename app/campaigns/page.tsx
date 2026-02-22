@@ -75,7 +75,8 @@ export default function CampaignsPage() {
       if (filterAutomatic !== null) params.is_automatic = filterAutomatic;
       if (filterActive !== null) params.is_active = filterActive;
       const data = await campaignService.getCampaigns(params);
-      setCampaigns(data.data || []);
+      const list = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
+      setCampaigns(list);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Failed to load campaigns');
       setCampaigns([]);
