@@ -72,38 +72,38 @@ export interface DiscountCalculationResponse {
 }
 
 const campaignService = {
-  // Employee panel - CRUD
+  // CRUD
   async getCampaigns(params?: {
     is_automatic?: boolean;
     is_active?: boolean;
     valid_only?: boolean;
   }) {
-    const response = await axiosInstance.get('/employee/promotions', { params });
+    const response = await axiosInstance.get('/promotions', { params });
     return response.data;
   },
 
   async getCampaign(id: number) {
-    const response = await axiosInstance.get(`/employee/promotions/${id}`);
+    const response = await axiosInstance.get(`/promotions/${id}`);
     return response.data;
   },
 
   async createCampaign(data: CampaignFormData) {
-    const response = await axiosInstance.post('/employee/promotions', data);
+    const response = await axiosInstance.post('/promotions', data);
     return response.data;
   },
 
   async updateCampaign(id: number, data: Partial<CampaignFormData>) {
-    const response = await axiosInstance.put(`/employee/promotions/${id}`, data);
+    const response = await axiosInstance.put(`/promotions/${id}`, data);
     return response.data;
   },
 
   async deleteCampaign(id: number) {
-    const response = await axiosInstance.delete(`/employee/promotions/${id}`);
+    const response = await axiosInstance.delete(`/promotions/${id}`);
     return response.data;
   },
 
   async toggleCampaign(id: number, isActive: boolean) {
-    const response = await axiosInstance.patch(`/employee/promotions/${id}`, {
+    const response = await axiosInstance.patch(`/promotions/${id}`, {
       is_active: isActive,
     });
     return response.data;
