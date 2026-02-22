@@ -11,6 +11,7 @@ import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
 import lookupService, { LookupProductData } from '@/services/lookupService';
 import purchaseOrderService from '@/services/purchase-order.service';
+import ReturnExchangeFromOrder from '@/components/lookup/ReturnExchangeFromOrder';
 import productImageService from '@/services/productImageService';
 import storeService, { Store } from '@/services/storeService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
@@ -2259,6 +2260,16 @@ export default function LookupPage() {
                                       >
                                         Open in Order Lookup (Barcodes)
                                       </button>
+                                      <button
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          setActiveTab('order');
+                                          await openOrderById(order.id);
+                                        }}
+                                        className="text-[10px] px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30"
+                                      >
+                                        ↩ Return / Exchange
+                                      </button>
                                     </div>
                                   </div>
 
@@ -2484,6 +2495,27 @@ export default function LookupPage() {
                             <p className="text-[10px] text-gray-600 dark:text-gray-400">{singleOrder.notes}</p>
                           </div>
                         )}
+
+                        {/* ── Return / Exchange from Order Lookup ── */}
+                        <ReturnExchangeFromOrder
+                          order={{
+                            id: singleOrder.id,
+                            order_number: singleOrder.order_number,
+                            store: (singleOrder as any).store,
+                            store_id: (singleOrder as any).store_id,
+                            items: singleOrder.items.map((it: any) => ({
+                              id: it.id,
+                              product_id: it.product_id,
+                              product_name: it.product_name,
+                              product_sku: it.product_sku,
+                              quantity: it.quantity,
+                              unit_price: it.unit_price,
+                              total_amount: it.total_amount,
+                              barcodes: it.barcodes,
+                            })),
+                          }}
+                          stores={stores as any}
+                        />
                       </div>
                     </div>
                   )}

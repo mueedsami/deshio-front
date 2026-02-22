@@ -7,6 +7,7 @@ export interface ProductReturn {
   order_id: number;
   customer_id: number;
   store_id: number;
+  received_at_store_id?: number;
   return_reason: 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
   return_type?: 'customer_return' | 'store_return' | 'warehouse_return';
   status: ReturnStatus;
@@ -48,6 +49,9 @@ export type ReturnStatus =
   | 'processing'
   | 'completed'
   | 'refunded';
+
+// Alias for backwards compat (some old code uses 'processed')
+export type ReturnStatusExtended = ReturnStatus | 'processed';
 
 export interface ReturnItem {
   order_item_id: number;
@@ -304,11 +308,11 @@ class ProductReturnService {
    * Helper: Get status label
    */
   getStatusLabel(status: ReturnStatus): string {
-    const labels: Record<ReturnStatus, string> = {
+    const labels: Record<string, string> = {
       pending: 'Pending',
       approved: 'Approved',
       rejected: 'Rejected',
-      processed: 'Processed',
+      processing: 'Processing',
       completed: 'Completed',
       refunded: 'Refunded',
     };
@@ -319,11 +323,11 @@ class ProductReturnService {
    * Helper: Get status color for UI
    */
   getStatusColor(status: ReturnStatus): string {
-    const colors: Record<ReturnStatus, string> = {
+    const colors: Record<string, string> = {
       pending: 'orange',
       approved: 'blue',
       rejected: 'red',
-      processed: 'purple',
+      processing: 'purple',
       completed: 'green',
       refunded: 'green',
     };
@@ -362,7 +366,7 @@ class ProductReturnService {
    * Helper: Check if return can be completed
    */
   canComplete(status: ReturnStatus): boolean {
-    return status === 'processed';
+    return status === 'processing';
   }
 }
 

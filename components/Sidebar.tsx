@@ -18,6 +18,7 @@ import {
   Search,
   History,
   Tag,
+  RotateCcw,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 // ──────────────────────────────
@@ -118,6 +119,7 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
       ],
     },
     { icon: Tag, label: 'Sale Campaigns', href: '/campaigns' },
+    { icon: RotateCcw, label: 'Returns & Exchanges', href: '/returns' },
     { icon: Package, label: 'Orders', href: '/orders' },
     { icon: CreditCard, label: 'Installments', href: '/orders?view=installments' },
     { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
