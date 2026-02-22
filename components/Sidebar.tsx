@@ -17,6 +17,7 @@ import {
   Truck,
   Search,
   History,
+  Tag,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 // ──────────────────────────────
@@ -116,6 +117,7 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
         { label: 'Service Orders', href: '/service-orders' },
       ],
     },
+    { icon: Tag, label: 'Sale Campaigns', href: '/campaigns' },
     { icon: Package, label: 'Orders', href: '/orders' },
     { icon: CreditCard, label: 'Installments', href: '/orders?view=installments' },
     { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
