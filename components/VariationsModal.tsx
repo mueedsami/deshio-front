@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { ImageWithFallback } from '@/components/figma/ImageWithFallback';
+import ImageLightboxModal from '@/components/ImageLightboxModal';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4KCg==';
@@ -31,7 +32,9 @@ export default function VariationsModal({
   groupedProducts = [],
 }: VariationsModalProps) {
   const [quantities, setQuantities] = useState<Record<string | number, number>>({});
-  const [previewImage, setPreviewImage] = useState<{src:string; alt:string} | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [previewTitle, setPreviewTitle] = useState<string>('');
+  const [previewSubtitle, setPreviewSubtitle] = useState<string>('');
 
   useEffect(() => {
     const initial: Record<string | number, number> = {};
@@ -60,9 +63,16 @@ export default function VariationsModal({
     return parts.length > 0 ? parts.join(' - ') : 'Default';
   };
 
-  // Helper to preview variation image in a lightbox
-  const handleImageClick = (src: string, alt: string) => {
-    setPreviewImage({ src, alt });
+  // Helper to preview variation image in popup
+  const handleImageClick = (variation: { id: string | number; attributes: Record<string, any> }) => {
+    const img = getVariationImage(variation.attributes);
+    const color = variation.attributes.color || '-';
+    const size = variation.attributes.size || '-';
+    const label = [color !== '-' ? color : null, size !== '-' ? size : null].filter(Boolean).join(' • ') || 'Variation';
+
+    setPreviewImage(img);
+    setPreviewTitle(product.name);
+    setPreviewSubtitle(label);
   };
 
   if (!product.variations || product.variations.length === 0) {
@@ -158,9 +168,9 @@ export default function VariationsModal({
                     >
                       <td className="py-3 px-4">
                         <button
-                          onClick={() => handleImageClick(variationImage, `${product.name} - ${color} - ${size}`)}
+                          onClick={() => handleImageClick(variation)}
                           className="relative group cursor-pointer"
-                          title="Click to view image"
+                          title="Click to preview image"
                         >
                           <ImageWithFallback
                             src={variationImage}
@@ -169,7 +179,7 @@ export default function VariationsModal({
                           />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-colors flex items-center justify-center">
                             <span className="opacity-0 group-hover:opacity-100 text-white text-xs font-medium bg-black/50 px-2 py-1 rounded transition-opacity">
-                              View
+                              Preview
                             </span>
                           </div>
                         </button>
@@ -225,30 +235,17 @@ export default function VariationsModal({
           </button>
         </div>
       </div>
-      {previewImage && (
-        <div
-          className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4"
-          onClick={() => setPreviewImage(null)}
-        >
-          <div
-            className="relative max-w-3xl w-full"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={() => setPreviewImage(null)}
-              className="absolute -top-3 -right-3 p-2 rounded-full bg-white text-gray-900 shadow"
-              aria-label="Close image preview"
-            >
-              <X className="w-4 h-4" />
-            </button>
-            <ImageWithFallback
-              src={previewImage.src}
-              alt={previewImage.alt}
-              className="w-full max-h-[80vh] object-contain rounded-xl bg-white"
-            />
-          </div>
-        </div>
-      )}
+      <ImageLightboxModal
+        open={!!previewImage}
+        src={previewImage}
+        title={previewTitle || product.name}
+        subtitle={previewSubtitle}
+        onClose={() => {
+          setPreviewImage(null);
+          setPreviewTitle('');
+          setPreviewSubtitle('');
+        }}
+      />
     </div>
   );
 }
