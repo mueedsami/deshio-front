@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { ImageWithFallback } from '@/components/figma/ImageWithFallback';
-import ImageLightboxModal from '@/components/ImageLightboxModal';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4KCg==';
@@ -32,7 +31,9 @@ export default function VariationsModal({
   groupedProducts = [],
 }: VariationsModalProps) {
   const [quantities, setQuantities] = useState<Record<string | number, number>>({});
-  const [previewImage, setPreviewImage] = useState<{src:string; alt:string} | null>(null);
+  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
+  const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('');
 
   useEffect(() => {
     const initial: Record<string | number, number> = {};
@@ -61,10 +62,27 @@ export default function VariationsModal({
     return parts.length > 0 ? parts.join(' - ') : 'Default';
   };
 
-  // Helper to preview variation image in a lightbox
-  const handleImageClick = (src: string, alt: string) => {
-    setPreviewImage({ src, alt });
+  const closeImagePreview = () => {
+    setImagePreviewOpen(false);
+    setImagePreviewUrl(null);
+    setImagePreviewTitle('');
   };
+
+  const handleImageClick = (imageUrl: string, label: string) => {
+    if (!imageUrl) return;
+    setImagePreviewUrl(imageUrl);
+    setImagePreviewTitle(label);
+    setImagePreviewOpen(true);
+  };
+
+  useEffect(() => {
+    if (!imagePreviewOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeImagePreview();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [imagePreviewOpen]);
 
   if (!product.variations || product.variations.length === 0) {
     return (
@@ -159,9 +177,9 @@ export default function VariationsModal({
                     >
                       <td className="py-3 px-4">
                         <button
-                          onClick={() => handleImageClick(variationImage, `${product.name} - ${color} - ${size}`)}
+                          onClick={(e) => { e.stopPropagation(); handleImageClick(variationImage, `${product.name} - ${color} - ${size}`); }}
                           className="relative group cursor-pointer"
-                          title="Click to view image"
+                          title="View image"
                         >
                           <ImageWithFallback
                             src={variationImage}
@@ -226,13 +244,39 @@ export default function VariationsModal({
           </button>
         </div>
       </div>
-      <ImageLightboxModal
-        open={!!previewImage}
-        src={previewImage?.src || null}
-        title="Product Image"
-        subtitle={previewImage?.alt || product.name}
-        onClose={() => setPreviewImage(null)}
-      />
+
+      {imagePreviewOpen && imagePreviewUrl && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/70" onClick={closeImagePreview} />
+          <div className="relative w-full max-w-4xl bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-black dark:text-white">Product Image</p>
+                <p className="text-[10px] text-gray-600 dark:text-gray-400">{imagePreviewTitle || product.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeImagePreview}
+                className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-3 bg-gray-50 dark:bg-gray-950 flex items-center justify-center max-h-[80vh] overflow-auto">
+              <img
+                src={imagePreviewUrl}
+                alt={imagePreviewTitle || product.name}
+                className="max-w-full max-h-[72vh] object-contain rounded"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src = '/placeholder-product.png';
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
