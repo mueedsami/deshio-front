@@ -31,6 +31,7 @@ export default function VariationsModal({
   groupedProducts = [],
 }: VariationsModalProps) {
   const [quantities, setQuantities] = useState<Record<string | number, number>>({});
+  const [previewImage, setPreviewImage] = useState<{src:string; alt:string} | null>(null);
 
   useEffect(() => {
     const initial: Record<string | number, number> = {};
@@ -59,9 +60,9 @@ export default function VariationsModal({
     return parts.length > 0 ? parts.join(' - ') : 'Default';
   };
 
-  // Helper to view product details
-  const handleImageClick = (variationId: string | number) => {
-    window.open(`/product/view?id=${variationId}`, '_blank');
+  // Helper to preview variation image in a lightbox
+  const handleImageClick = (src: string, alt: string) => {
+    setPreviewImage({ src, alt });
   };
 
   if (!product.variations || product.variations.length === 0) {
@@ -157,9 +158,9 @@ export default function VariationsModal({
                     >
                       <td className="py-3 px-4">
                         <button
-                          onClick={() => handleImageClick(variation.id)}
+                          onClick={() => handleImageClick(variationImage, `${product.name} - ${color} - ${size}`)}
                           className="relative group cursor-pointer"
-                          title="Click to view product details"
+                          title="Click to view image"
                         >
                           <ImageWithFallback
                             src={variationImage}
@@ -224,6 +225,30 @@ export default function VariationsModal({
           </button>
         </div>
       </div>
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setPreviewImage(null)}
+        >
+          <div
+            className="relative max-w-3xl w-full"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute -top-3 -right-3 p-2 rounded-full bg-white text-gray-900 shadow"
+              aria-label="Close image preview"
+            >
+              <X className="w-4 h-4" />
+            </button>
+            <ImageWithFallback
+              src={previewImage.src}
+              alt={previewImage.alt}
+              className="w-full max-h-[80vh] object-contain rounded-xl bg-white"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
