@@ -32,9 +32,7 @@ export default function VariationsModal({
   groupedProducts = [],
 }: VariationsModalProps) {
   const [quantities, setQuantities] = useState<Record<string | number, number>>({});
-  const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [previewTitle, setPreviewTitle] = useState<string>('');
-  const [previewSubtitle, setPreviewSubtitle] = useState<string>('');
+  const [previewImage, setPreviewImage] = useState<{src:string; alt:string} | null>(null);
 
   useEffect(() => {
     const initial: Record<string | number, number> = {};
@@ -63,16 +61,9 @@ export default function VariationsModal({
     return parts.length > 0 ? parts.join(' - ') : 'Default';
   };
 
-  // Helper to preview variation image in popup
-  const handleImageClick = (variation: { id: string | number; attributes: Record<string, any> }) => {
-    const img = getVariationImage(variation.attributes);
-    const color = variation.attributes.color || '-';
-    const size = variation.attributes.size || '-';
-    const label = [color !== '-' ? color : null, size !== '-' ? size : null].filter(Boolean).join(' • ') || 'Variation';
-
-    setPreviewImage(img);
-    setPreviewTitle(product.name);
-    setPreviewSubtitle(label);
+  // Helper to preview variation image in a lightbox
+  const handleImageClick = (src: string, alt: string) => {
+    setPreviewImage({ src, alt });
   };
 
   if (!product.variations || product.variations.length === 0) {
@@ -168,9 +159,9 @@ export default function VariationsModal({
                     >
                       <td className="py-3 px-4">
                         <button
-                          onClick={() => handleImageClick(variation)}
+                          onClick={() => handleImageClick(variationImage, `${product.name} - ${color} - ${size}`)}
                           className="relative group cursor-pointer"
-                          title="Click to preview image"
+                          title="Click to view image"
                         >
                           <ImageWithFallback
                             src={variationImage}
@@ -179,7 +170,7 @@ export default function VariationsModal({
                           />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-colors flex items-center justify-center">
                             <span className="opacity-0 group-hover:opacity-100 text-white text-xs font-medium bg-black/50 px-2 py-1 rounded transition-opacity">
-                              Preview
+                              View
                             </span>
                           </div>
                         </button>
@@ -237,14 +228,10 @@ export default function VariationsModal({
       </div>
       <ImageLightboxModal
         open={!!previewImage}
-        src={previewImage}
-        title={previewTitle || product.name}
-        subtitle={previewSubtitle}
-        onClose={() => {
-          setPreviewImage(null);
-          setPreviewTitle('');
-          setPreviewSubtitle('');
-        }}
+        src={previewImage?.src || null}
+        title="Product Image"
+        subtitle={previewImage?.alt || product.name}
+        onClose={() => setPreviewImage(null)}
       />
     </div>
   );
