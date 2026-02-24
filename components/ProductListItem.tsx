@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import { MoreVertical, Edit, Trash2, Eye, Plus } from 'lucide-react';
 import type { ProductGroup, ProductVariant } from '@/types/product';
+import ImageLightboxModal from '@/components/ImageLightboxModal';
 
 const ERROR_IMG_SRC =
   'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODgiIGhlaWdodD0iODgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgc3Ryb2tlPSIjMDAwIiBzdHJva2UtbGluZWpvaW49InJvdW5kIiBvcGFjaXR5PSIuMyIgZmlsbD0ibm9uZSIgc3Ryb2tlLXdpZHRoPSIzLjciPjxyZWN0IHg9IjE2IiB5PSIxNiIgd2lkdGg9IjU2IiBoZWlnaHQ9IjU2IiByeD0iNiIvPjxwYXRoIGQ9Im0xNiA1OCAxNi0xOCAzMiAzMiIvPjxjaXJjbGUgY3g9IjUzIiBjeT0iMzUiIHI9IjciLz48L3N2Zz4=';
@@ -30,6 +31,8 @@ export default function ProductListItem({
 }: ProductListItemProps) {
   const [showDropdown, setShowDropdown] = useState(false);
   const [showVariations, setShowVariations] = useState(false);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [lightboxTitle, setLightboxTitle] = useState<string>('');
   const [isDropdownMounted, setIsDropdownMounted] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -91,6 +94,7 @@ export default function ProductListItem({
   const firstVariant = productGroup.variants[0];
 
   return (
+    <>
     <div className="border border-gray-200 dark:border-gray-700 rounded-xl bg-white dark:bg-gray-800 hover:shadow-lg transition-all duration-200">
       <div className="flex items-start gap-4 p-5">
         {/* Product Image */}
@@ -269,10 +273,9 @@ export default function ProductListItem({
                     <img
                       src={variants[0].image}
                       alt={color}
-                      className="w-14 h-14 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600"
-                      onError={(e) => {
-                        e.currentTarget.src = ERROR_IMG_SRC;
-                      }}
+                      className="w-14 h-14 object-cover rounded-lg border-2 border-gray-200 dark:border-gray-600 cursor-zoom-in hover:opacity-80 transition-opacity"
+                      onClick={() => { setLightboxSrc(variants[0].image!); setLightboxTitle(color); }}
+                      onError={(e) => { e.currentTarget.src = ERROR_IMG_SRC; }}
                     />
                   )}
                   <div className="flex-1">
@@ -335,5 +338,13 @@ export default function ProductListItem({
         </div>
       )}
     </div>
+
+      <ImageLightboxModal
+        open={!!lightboxSrc}
+        src={lightboxSrc}
+        title={lightboxTitle}
+        onClose={() => setLightboxSrc(null)}
+      />
+    </>
   );
 }
