@@ -50,11 +50,9 @@ export type RefundMethod =
   | 'cash'
   | 'bank_transfer'
   | 'card_refund'
-  | 'mobile_banking'
   | 'store_credit'
   | 'gift_card'
   | 'digital_wallet'
-  | 'original_payment_method'
   | 'check'
   | 'other';
 
@@ -80,8 +78,6 @@ export interface RefundFilters {
 
 export interface CreateRefundRequest {
   return_id: number;
-  order_id?: number;
-  customer_id?: number;
   refund_type: RefundType;
   refund_percentage?: number;
   refund_amount?: number;
@@ -266,11 +262,9 @@ class RefundService {
       cash: 'Cash',
       bank_transfer: 'Bank Transfer',
       card_refund: 'Card Refund',
-      mobile_banking: 'Mobile Banking',
       store_credit: 'Store Credit',
       gift_card: 'Gift Card',
       digital_wallet: 'Digital Wallet',
-      original_payment_method: 'Original Payment Method',
       check: 'Check',
       other: 'Other',
     };

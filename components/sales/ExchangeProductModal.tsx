@@ -91,8 +91,6 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   // ✅ NEW: Store selection
   const [stores, setStores] = useState<Store[]>([]);
   const [exchangeAtStoreId, setExchangeAtStoreId] = useState<number>(order.store.id);
-  const [inventoryWarnings, setInventoryWarnings] = useState<{ [key: number]: string }>({});
-  const [isCheckingInventory, setIsCheckingInventory] = useState(false);
 
   // Payment/Refund states
   const [cashAmount, setCashAmount] = useState(0);
@@ -118,14 +116,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     fetchStores();
   }, []);
 
-  // ✅ NEW: Check inventory when store or selected products change
-  useEffect(() => {
-    if (selectedProducts.length > 0) {
-      checkInventoryAvailability();
-    } else {
-      setInventoryWarnings({});
-    }
-  }, [exchangeAtStoreId, selectedProducts, exchangeQuantities]);
+
 
   const fetchStores = async () => {
     try {
@@ -157,43 +148,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     }
   };
 
-  // ✅ NEW: Check if selected products have sufficient inventory in the selected store
-  const checkInventoryAvailability = async () => {
-    if (selectedProducts.length === 0) return;
 
-    setIsCheckingInventory(true);
-    const warnings: { [key: number]: string } = {};
-
-    try {
-      // Here you would call your inventory service to check availability
-      // For now, we'll show a placeholder implementation
-      
-      for (const itemId of selectedProducts) {
-        const item = order.items.find(i => i.id === itemId);
-        const exchangeQty = exchangeQuantities[itemId] || 0;
-        
-        if (!item || exchangeQty === 0) continue;
-
-        // TODO: Replace with actual API call to check inventory
-        // Example: const inventory = await inventoryService.checkStock({
-        //   store_id: exchangeAtStoreId,
-        //   product_id: item.product_id,
-        //   batch_id: item.batch_id
-        // });
-
-        // Placeholder: If exchange is at a different store, show warning
-        if (exchangeAtStoreId !== order.store.id) {
-          warnings[itemId] = `⚠️ Please verify inventory at ${stores.find(s => s.id === exchangeAtStoreId)?.name || 'selected store'}`;
-        }
-      }
-
-      setInventoryWarnings(warnings);
-    } catch (error) {
-      console.error('Failed to check inventory:', error);
-    } finally {
-      setIsCheckingInventory(false);
-    }
-  };
 
   // Handle barcode scanned
   const handleProductScanned = (scannedProduct: ScannedProduct) => {
@@ -329,15 +284,6 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     if (hasInvalidQuantities) {
       alert('Please set valid quantities for all selected products');
       return;
-    }
-
-    // ✅ NEW: Check for inventory warnings
-    const hasWarnings = Object.keys(inventoryWarnings).length > 0;
-    if (hasWarnings) {
-      const warningMessage = Object.values(inventoryWarnings).join('\n');
-      if (!confirm(`⚠️ INVENTORY WARNINGS:\n\n${warningMessage}\n\nDo you want to proceed anyway?`)) {
-        return;
-      }
     }
 
     let confirmMessage = `Process exchange for order ${order.order_number}?\n\n`;
@@ -503,12 +449,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                       {stores.length} store(s) available • Original order location: {order.store.name}
                     </p>
                     
-                    {isCheckingInventory && (
-                      <div className="flex items-center gap-2 mt-2 text-sm text-blue-600 dark:text-blue-400">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Checking inventory availability...
-                      </div>
-                    )}
+
                   </div>
                 </div>
               </div>
@@ -522,16 +463,10 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                 {order.items && order.items.length > 0 ? (
                   <div className="space-y-3">
                     {order.items.map((item) => {
-                      const hasWarning = inventoryWarnings[item.id];
-                      
                       return (
                         <div
                           key={item.id}
-                          className={`bg-white dark:bg-gray-900 rounded-lg p-4 border ${
-                            hasWarning 
-                              ? 'border-orange-300 dark:border-orange-700' 
-                              : 'border-gray-200 dark:border-gray-700'
-                          }`}
+                          className="bg-white dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700"
                         >
                           <div className="flex items-start gap-3">
                             <input
@@ -570,17 +505,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                                 Price: ৳{parseFloat(item.unit_price.replace(/[^0-9.-]/g, '')).toFixed(2)} × Qty: {item.quantity}
                               </p>
 
-                              {/* ✅ NEW: Show inventory warning */}
-                              {hasWarning && selectedProducts.includes(item.id) && (
-                                <div className="mb-3 p-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-700 rounded-lg">
-                                  <div className="flex items-start gap-2">
-                                    <AlertCircle className="w-4 h-4 text-orange-600 dark:text-orange-400 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-orange-700 dark:text-orange-300">
-                                      {hasWarning}
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
+
 
                               {selectedProducts.includes(item.id) && (
                                 <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">

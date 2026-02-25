@@ -29,10 +29,6 @@ const PUBLIC_ROUTES = [
   '/guest-checkout',
   '/guest-orders/by-phone',
   '/payment-method',
-  // Campaign public endpoints (no auth required)
-  '/campaigns/active',
-  '/campaigns/calculate-discount',
-  '/campaigns/product-discounts',
 ];
 
 // Helper function to check if route is public

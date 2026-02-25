@@ -34,7 +34,7 @@ import pathaoOrderLookupService, {
   type PathaoLookupData,
 } from '@/services/pathaoOrderLookupService';
 import paymentService from '@/services/paymentService';
-import type { PaymentMethod } from '@/services/paymentMethodService';
+import paymentMethodService, { type PaymentMethod } from '@/services/paymentMethodService';
 import axios from '@/lib/axios';
 import batchService from '@/services/batchService';
 import productService from '@/services/productService';
@@ -1679,46 +1679,39 @@ const derivePaymentStatus = (order: any) => {
       await productReturnService.process(returnId, { restore_inventory: true });
       await productReturnService.complete(returnId);
 
-      const refundRequest: CreateRefundRequest = {
-        return_id: returnId,
-        refund_type: 'full',
-        refund_method: 'cash',
-        internal_notes: `Full refund for exchange - Original Order: ${selectedOrderForAction.order_number}`,
-      };
-
-      const refundResponse = await refundService.create(refundRequest);
-      const refundId = refundResponse.data.id;
-
-      await refundService.process(refundId);
-      await refundService.complete(refundId, { transaction_reference: `EXCHANGE-REFUND-${Date.now()}` });
-
-      const newOrderTotal = exchangeData.replacementProducts.reduce((sum, p) => sum + p.unit_price * p.quantity, 0);
-
-
-      // ✅ Avoid hardcoding payment_method_id (IDs can differ per environment)
+      // ─── Payment method lookup (using service, not raw axios) ───────────────
       let paymentMethodId = 1;
       try {
-        const pmRes = await axios.get('/payment-methods/all');
-        const methods: any[] =
-          (pmRes as any)?.data?.data?.payment_methods ||
-          (pmRes as any)?.data?.data ||
-          (pmRes as any)?.data ||
-          [];
-
+        const methods = await paymentMethodService.getAll({ is_active: true });
         const normalized = (v: any) => String(v ?? '').toLowerCase().trim();
         const cash =
           methods.find((m) => normalized(m?.type) === 'cash') ||
           methods.find((m) => normalized(m?.name).includes('cash')) ||
           methods.find((m) => normalized(m?.name).includes('ক্যাশ')) ||
           methods[0];
-
         paymentMethodId = Number(cash?.id) || 1;
       } catch (e) {
         console.warn('Failed to load payment methods, falling back to id=1', e);
       }
 
+      // ─── Calculate amounts ──────────────────────────────────────────────────
+      const newOrderTotal = exchangeData.replacementProducts.reduce(
+        (sum, p) => sum + p.unit_price * p.quantity,
+        0
+      );
+
+      // How much extra the customer actually paid/refunded during this exchange
+      const additionalPaid   = exchangeData.paymentRefund.type === 'payment' ? exchangeData.paymentRefund.total : 0;
+      const refundGivenBack  = exchangeData.paymentRefund.type === 'refund'  ? exchangeData.paymentRefund.total : 0;
+
+      // ─── Create new replacement order ──────────────────────────────────────
+      // Payment on the new order = only the ADDITIONAL amount collected from customer.
+      // The rest is covered by the refund credit from the returned items.
+      const newOrderPaymentAmount = additionalPaid; // 0 for even exchange or refund scenarios
+      const newOrderPaymentType   = additionalPaid > 0 ? 'partial' : 'advance';
+
       const newOrderData = {
-        order_type: selectedOrderForAction.order_type as 'social_commerce' | 'ecommerce',
+        order_type: selectedOrderForAction.order_type as 'counter' | 'social_commerce' | 'ecommerce',
         store_id: exchangeData.exchangeAtStoreId,
         customer_id: selectedOrderForAction.customer?.id,
         items: exchangeData.replacementProducts.map((p) => ({
@@ -1726,26 +1719,60 @@ const derivePaymentStatus = (order: any) => {
           batch_id: p.batch_id,
           quantity: p.quantity,
           unit_price: p.unit_price,
-          barcode: p.barcode,
-})),
+          ...(p.barcode ? { barcode: p.barcode } : {}),
+        })),
         payment: {
           payment_method_id: paymentMethodId,
-amount: newOrderTotal,
-          payment_type: 'full' as const,
+          amount: newOrderPaymentAmount,
+          payment_type: newOrderPaymentType as 'partial' | 'advance',
         },
         notes: `Exchange from order #${selectedOrderForAction.order_number} | Return: #${returnNumber}`,
       };
 
       const newOrder = await orderService.create(newOrderData);
-      await orderService.complete(newOrder.id);
+
+      // Mark as complete only if fully paid (additionalPaid covers the whole new order)
+      if (additionalPaid >= newOrderTotal) {
+        await orderService.complete(newOrder.id);
+      }
+
+      // ─── Create refund if customer gets money back ──────────────────────────
+      if (refundGivenBack > 0) {
+        try {
+          const refundRequest: CreateRefundRequest = {
+            return_id: returnId,
+            refund_type: 'partial_amount',
+            refund_amount: refundGivenBack,
+            refund_method: 'cash',
+            refund_method_details: {
+              cash: exchangeData.paymentRefund.cash,
+              card: exchangeData.paymentRefund.card,
+              bkash: exchangeData.paymentRefund.bkash,
+              nagad: exchangeData.paymentRefund.nagad,
+            },
+            internal_notes: `Exchange refund - Original Order: ${selectedOrderForAction.order_number}`,
+          };
+          const refundResponse = await refundService.create(refundRequest);
+          await refundService.process(refundResponse.data.id);
+          await refundService.complete(refundResponse.data.id, {
+            transaction_reference: `EXCHANGE-REFUND-${Date.now()}`,
+          });
+        } catch (refundErr: any) {
+          console.warn('⚠️ Refund creation failed (non-fatal):', refundErr.message);
+          // Don't throw - the exchange itself succeeded; refund can be done manually
+        }
+      }
 
       await loadOrders();
 
       let msg = `✅ Exchange processed successfully!\n\n📦 Return: #${returnNumber}\n🛒 New Order: #${newOrder.order_number}`;
       if (exchangeData.paymentRefund.type === 'payment') {
         msg += `\n\n💳 Customer paid additional: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
+        if (additionalPaid < newOrderTotal) {
+          msg += `\n⚠️ Remaining due: ৳${(newOrderTotal - additionalPaid).toLocaleString()}`;
+        }
       } else if (exchangeData.paymentRefund.type === 'refund') {
-        msg += `\n\n💵 Give customer back: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
+        msg += `\n\n💵 Refund given back: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
       } else {
         msg += `\n\n📊 Even exchange (no difference)`;
       }
