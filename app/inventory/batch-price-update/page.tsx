@@ -498,7 +498,7 @@ export default function BatchPriceUpdatePage() {
                           onClick={() => setSearchLimit((v) => v + 20)}
                           className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline"
                         >
-                          +20 more
+                          +More
                         </button>
                       </div>
                     )}
