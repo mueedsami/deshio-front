@@ -162,7 +162,7 @@ export default function InventoryReportsPage() {
     ecommerce: true,
   });
   const [statuses, setStatuses] = useState({
-    confirmed: true,
+    pending_assignment: true,
     completed: true,
     pending: false,
   });
@@ -364,17 +364,13 @@ export default function InventoryReportsPage() {
 
     return q;
   };
-  // `fetch` expects HeadersInit (no undefined values). Returning an empty object is fine,
-  // but we must avoid `{ Authorization?: undefined }` unions which break overload resolution.
-  const getAuthHeaders = (): HeadersInit => {
+  const getAuthHeader = (): HeadersInit => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    const headers: Record<string, string> = {};
-    if (token) headers.Authorization = `Bearer ${token}`;
-    return headers;
+    return token ? { Authorization: `Bearer ${token}` } : {};
   };
 
   const downloadCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: getAuthHeaders() });
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(msg || 'Failed to download report');
@@ -395,7 +391,7 @@ export default function InventoryReportsPage() {
   };
 
   const previewCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: getAuthHeaders() });
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(msg || 'Failed to load report');
@@ -473,7 +469,8 @@ export default function InventoryReportsPage() {
   };
 
   const downloadExternalCsv = async (url: string, filename: string) => {
-    const res = await fetch(url, { headers: getAuthHeaders() });
+    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
+    const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(msg || 'Failed to download report');
@@ -735,11 +732,10 @@ export default function InventoryReportsPage() {
     const categoriesList = Array.from(categoryAgg.values());
 
     const sortByMetric = <T extends { units: number; net: number }>(arr: T[], m: Metric): T[] => {
-      const key: 'units' | 'net' = m === 'units' ? 'units' : 'net';
-      return [...arr].sort((a, b) => (toNumber((b as any)[key]) || 0) - (toNumber((a as any)[key]) || 0));
+      const key = m === 'units' ? 'units' : 'net';
+      return [...arr].sort((a, b) => (b[key] || 0) - (a[key] || 0));
     };
 
-    // Preserve full types (ProductAgg/CategoryAgg) so JSX property access stays type-safe.
     const topProducts = sortByMetric(productsList, metric).slice(0, topN);
     const topCategories = sortByMetric(categoriesList, metric).slice(0, topN);
 
@@ -992,9 +988,9 @@ export default function InventoryReportsPage() {
               <div className="mt-3 flex flex-wrap gap-2 items-center">
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Order status:</span>
                 <Toggle
-                  checked={statuses.confirmed}
-                  onChange={() => setStatuses((p) => ({ ...p, confirmed: !p.confirmed }))}
-                  label="Confirmed"
+                  checked={statuses.pending_assignment}
+                  onChange={() => setStatuses((p) => ({ ...p, pending_assignment: !p.pending_assignment }))}
+                  label="Pending Assignment"
                 />
                 <Toggle
                   checked={statuses.completed}
@@ -1374,9 +1370,8 @@ export default function InventoryReportsPage() {
                     >
                       <option value="">All statuses</option>
                       <option value="completed">completed</option>
-                      <option value="confirmed">confirmed</option>
-                      <option value="pending">pending</option>
                       <option value="pending_assignment">pending_assignment</option>
+                      <option value="pending">pending</option>
                       <option value="cancelled">cancelled</option>
                     </select>
                   </div>
@@ -1445,7 +1440,7 @@ export default function InventoryReportsPage() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                     <h3 className="font-semibold text-gray-900 dark:text-white">Category Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Grouped by product category with VAT (7.5) and net breakdown.</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Grouped by product category. Columns: Sold Qty, SUB Total, Discount, Exchange, Return, Net Sales (ex-VAT), VAT Amount (actual tax from orders), Net Amount. Default: completed + pending_assignment orders.</p>
                     <div className="mt-3 flex gap-2">
                       <button
                         onClick={() => doPreview('category')}
