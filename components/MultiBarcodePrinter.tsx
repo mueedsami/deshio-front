@@ -390,7 +390,7 @@ export default function MultiBarcodePrinter({
         for (let i = 0; i < qty; i++) {
           const base64 = await renderBarcodeLabelBase64({
             code: it.code,
-            productName: (it.productName || "Product").substring(0, 28),
+            productName: it.productName || "Product",
             price: it.price,
             dpi,
           });
