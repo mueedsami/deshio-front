@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer } from 'lucide-react';
+import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer, Pencil, CheckCircle2, XCircle } from 'lucide-react';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -43,6 +43,7 @@ interface Order {
     phone: string;
     email?: string;
     customer_code: string;
+    address?: string;
   };
   store: {
     id: number;
@@ -108,6 +109,26 @@ export default function PurchaseHistoryPage() {
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
   const [selectedOrderForAction, setSelectedOrderForAction] = useState<Order | null>(null);
+
+
+// Toast notifications
+type Toast = { id: string; type: 'success' | 'error'; message: string };
+const [toasts, setToasts] = useState<Toast[]>([]);
+const pushToast = (type: Toast['type'], message: string) => {
+  const id = `${Date.now()}-${Math.random()}`;
+  setToasts((prev) => [...prev, { id, type, message }]);
+  window.setTimeout(() => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, 3500);
+};
+
+// Customer edit modal states
+const [showEditCustomerModal, setShowEditCustomerModal] = useState(false);
+const [selectedOrderForCustomerEdit, setSelectedOrderForCustomerEdit] = useState<Order | null>(null);
+const [editCustomerName, setEditCustomerName] = useState('');
+const [editCustomerPhone, setEditCustomerPhone] = useState('');
+const [editCustomerAddress, setEditCustomerAddress] = useState('');
+const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
 
   // ✅ Payment method cache (avoid hardcoding IDs)
   const [cashPaymentMethodId, setCashPaymentMethodId] = useState<number | null>(null);
@@ -291,6 +312,45 @@ export default function PurchaseHistoryPage() {
     
     setShowReturnModal(true);
   };
+
+
+const handleEditCustomerInfoClick = (order: Order) => {
+  setSelectedOrderForCustomerEdit(order);
+  setEditCustomerName(order.customer?.name || '');
+  setEditCustomerPhone(order.customer?.phone || '');
+  setEditCustomerAddress((order.customer as any)?.address || '');
+  setShowEditCustomerModal(true);
+};
+
+const handleSaveCustomerInfo = async () => {
+  if (!selectedOrderForCustomerEdit) return;
+  if (!editCustomerName.trim() || !editCustomerPhone.trim()) {
+    pushToast('error', 'Customer name and phone are required.');
+    return;
+  }
+  setSavingCustomerInfo(true);
+  try {
+    const res = await orderService.updateCustomerInfo(selectedOrderForCustomerEdit.id, {
+      customer_name: editCustomerName.trim(),
+      customer_phone: editCustomerPhone.trim(),
+      customer_address: editCustomerAddress.trim() || undefined,
+    });
+    pushToast('success', res?.message || 'Customer information updated.');
+    setShowEditCustomerModal(false);
+    setSelectedOrderForCustomerEdit(null);
+
+    // Refresh list to reflect new customer info
+    await fetchOrders();
+  } catch (err: any) {
+    const msg =
+      err?.response?.data?.message ||
+      err?.message ||
+      'Failed to update customer information.';
+    pushToast('error', msg);
+  } finally {
+    setSavingCustomerInfo(false);
+  }
+};
 
   const handleExchangeClick = async (order: Order) => {
     setActiveMenu(null);
@@ -889,6 +949,20 @@ export default function PurchaseHistoryPage() {
                                     <Printer className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                                     <span>Print Receipt</span>
                                   </button>
+                                  
+<div className="h-px bg-gray-200 dark:bg-gray-700"></div>
+<button
+  type="button"
+  onClick={(e) => {
+    e.stopPropagation();
+    setActiveMenu(null);
+    handleEditCustomerInfoClick(order);
+  }}
+  className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-amber-50 dark:hover:bg-amber-900/20 flex items-center gap-3 transition-colors"
+>
+  <Pencil className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+  <span>Edit Customer Info</span>
+</button>
                                   <div className="h-px bg-gray-200 dark:bg-gray-700"></div>
                                   <button
                                     type="button"
@@ -1111,7 +1185,94 @@ export default function PurchaseHistoryPage() {
                 </>
               )}
             </div>
-          </main>
+          
+
+{/* Edit Customer Info Modal */}
+{showEditCustomerModal && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-gray-200 dark:border-gray-700">
+      <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Edit Customer Info</h3>
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Updating phone will reassign the order to a different customer.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowEditCustomerModal(false);
+            setSelectedOrderForCustomerEdit(null);
+          }}
+          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+        >
+          <span className="text-gray-500 dark:text-gray-400">✕</span>
+        </button>
+      </div>
+
+      <div className="px-6 py-5 space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name</label>
+          <input
+            value={editCustomerName}
+            onChange={(e) => setEditCustomerName(e.target.value)}
+            maxLength={255}
+            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            placeholder="Full name"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
+          <input
+            value={editCustomerPhone}
+            onChange={(e) => setEditCustomerPhone(e.target.value)}
+            maxLength={20}
+            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            placeholder="+8801XXXXXXXXX"
+          />
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            ⚠️ Changing phone will reassign this order to another customer record.
+          </p>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address</label>
+          <textarea
+            value={editCustomerAddress}
+            onChange={(e) => setEditCustomerAddress(e.target.value)}
+            maxLength={500}
+            rows={3}
+            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+            placeholder="Customer address (optional)"
+          />
+        </div>
+      </div>
+
+      <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-3">
+        <button
+          type="button"
+          onClick={() => {
+            setShowEditCustomerModal(false);
+            setSelectedOrderForCustomerEdit(null);
+          }}
+          className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
+          disabled={savingCustomerInfo}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleSaveCustomerInfo}
+          className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-60"
+          disabled={savingCustomerInfo}
+        >
+          {savingCustomerInfo ? 'Saving...' : 'Save Changes'}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+</main>
         </div>
       </div>
 

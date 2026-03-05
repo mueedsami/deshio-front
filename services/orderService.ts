@@ -591,6 +591,22 @@ const orderService = {
     }
   },
 
+
+
+/** Update customer name/phone/address for an existing order (admin) */
+async updateCustomerInfo(
+  orderId: number,
+  payload: { customer_name: string; customer_phone: string; customer_address?: string }
+): Promise<any> {
+  try {
+    const response = await axiosInstance.patch(`/admin/orders/${orderId}/customer-info`, payload);
+    return response.data;
+  } catch (error: any) {
+    console.error('Update customer info error:', error);
+    throw error;
+  }
+},
+
   /** Validate barcode for fulfillment */
   async validateBarcode(params: {
     barcode: string;
