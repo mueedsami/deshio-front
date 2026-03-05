@@ -176,6 +176,24 @@ export default function InventoryReportsPage() {
   const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
   const [csvPaymentToday, setCsvPaymentToday] = useState(false); // Payment Breakdown CSV only
   const [csvPaymentOrderType, setCsvPaymentOrderType] = useState(''); // Payment Breakdown CSV only
+  // Purchase Order CSV
+  const [csvPoId, setCsvPoId] = useState('');
+  const [csvPoBusy, setCsvPoBusy] = useState(false);
+  const [csvPoBarcodeBusy, setCsvPoBarcodeBusy] = useState(false);
+
+  // Dispatch Barcode CSV
+  const [csvDispatchStoreId, setCsvDispatchStoreId] = useState('');
+  const [csvDispatchStatus, setCsvDispatchStatus] = useState('');
+  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState('');
+  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState('');
+  const [csvDispatchBusy, setCsvDispatchBusy] = useState(false);
+
+  // Installment CSV
+  const [csvInstallmentCustomerId, setCsvInstallmentCustomerId] = useState('');
+  const [csvInstallmentStoreId, setCsvInstallmentStoreId] = useState('');
+  const [csvInstallmentPaymentStatus, setCsvInstallmentPaymentStatus] = useState('');
+  const [csvInstallmentBusy, setCsvInstallmentBusy] = useState(false);
+
   const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean; payment: boolean }>({
     category: false,
     sales: false,
@@ -346,13 +364,17 @@ export default function InventoryReportsPage() {
 
     return q;
   };
-  const getAuthHeader = () => {
+  // `fetch` expects HeadersInit (no undefined values). Returning an empty object is fine,
+  // but we must avoid `{ Authorization?: undefined }` unions which break overload resolution.
+  const getAuthHeaders = (): HeadersInit => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    const headers: Record<string, string> = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return headers;
   };
 
   const downloadCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: getAuthHeaders() });
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(msg || 'Failed to download report');
@@ -373,7 +395,7 @@ export default function InventoryReportsPage() {
   };
 
   const previewCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
+    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: getAuthHeaders() });
     if (!res.ok) {
       const msg = await res.text();
       throw new Error(msg || 'Failed to load report');
@@ -445,6 +467,99 @@ export default function InventoryReportsPage() {
       setCsvBusy((s) => ({ ...s, payment: false }));
     }
   };
+  const getApiBase = () => {
+    const raw = process.env.NEXT_PUBLIC_API_URL || '';
+    return raw.replace(/\/$/, '');
+  };
+
+  const downloadExternalCsv = async (url: string, filename: string) => {
+    const res = await fetch(url, { headers: getAuthHeaders() });
+    if (!res.ok) {
+      const msg = await res.text();
+      throw new Error(msg || 'Failed to download report');
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const m = cd.match(/filename="?([^";]+)"?/i);
+    const fname = m?.[1] || filename;
+    const objUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = objUrl;
+    a.download = fname;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(objUrl);
+  };
+
+  const doDownloadPODetail = async () => {
+    if (!csvPoId.trim()) { setPreviewError('Please enter a Purchase Order ID.'); return; }
+    setCsvPoBusy(true);
+    setPreviewError('');
+    try {
+      const api = getApiBase();
+      await downloadExternalCsv(`${api}/purchase-orders/${csvPoId.trim()}/csv`, `PO-${csvPoId.trim()}-detail.csv`);
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download PO CSV');
+    } finally {
+      setCsvPoBusy(false);
+    }
+  };
+
+  const doDownloadPOBarcodes = async () => {
+    if (!csvPoId.trim()) { setPreviewError('Please enter a Purchase Order ID.'); return; }
+    setCsvPoBarcodeBusy(true);
+    setPreviewError('');
+    try {
+      const api = getApiBase();
+      await downloadExternalCsv(`${api}/purchase-orders/${csvPoId.trim()}/barcodes/csv`, `PO-${csvPoId.trim()}-barcodes.csv`);
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download PO Barcodes CSV');
+    } finally {
+      setCsvPoBarcodeBusy(false);
+    }
+  };
+
+  const doDownloadDispatchBarcodes = async () => {
+    if (!csvDispatchDateFrom || !csvDispatchDateTo) {
+      setPreviewError('Date From and Date To are required for Dispatch Barcodes CSV.');
+      return;
+    }
+    setCsvDispatchBusy(true);
+    setPreviewError('');
+    try {
+      const api = getApiBase();
+      const q = new URLSearchParams();
+      q.set('date_from', csvDispatchDateFrom);
+      q.set('date_to', csvDispatchDateTo);
+      if (csvDispatchStoreId.trim()) q.set('store_id', csvDispatchStoreId.trim());
+      if (csvDispatchStatus.trim()) q.set('status', csvDispatchStatus.trim());
+      await downloadExternalCsv(`${api}/dispatches/barcodes/csv?${q.toString()}`, `Dispatch-Barcodes-${csvDispatchDateFrom}-to-${csvDispatchDateTo}.csv`);
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download Dispatch Barcodes CSV');
+    } finally {
+      setCsvDispatchBusy(false);
+    }
+  };
+
+  const doDownloadInstallments = async () => {
+    setCsvInstallmentBusy(true);
+    setPreviewError('');
+    try {
+      const q = new URLSearchParams();
+      if (dateFrom) q.set('date_from', dateFrom);
+      if (dateTo) q.set('date_to', dateTo);
+      if (csvInstallmentCustomerId.trim()) q.set('customer_id', csvInstallmentCustomerId.trim());
+      if (csvInstallmentStoreId.trim()) q.set('store_id', csvInstallmentStoreId.trim());
+      if (csvInstallmentPaymentStatus.trim()) q.set('payment_status', csvInstallmentPaymentStatus.trim());
+      await downloadCsv('/api/reporting/csv/installments', q);
+    } catch (e: any) {
+      setPreviewError(e?.message || 'Failed to download Installments CSV');
+    } finally {
+      setCsvInstallmentBusy(false);
+    }
+  };
+
   const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking' | 'payment') => {
     setPreviewError('');
     try {
@@ -619,13 +734,14 @@ export default function InventoryReportsPage() {
     const productsList = Array.from(productAgg.values());
     const categoriesList = Array.from(categoryAgg.values());
 
-    const sortByMetric = <T extends { units: number; net: number }>(arr: T[], m: Metric) => {
-      const key = m === 'units' ? 'units' : 'net';
-      return [...arr].sort((a: any, b: any) => (b[key] || 0) - (a[key] || 0));
+    const sortByMetric = <T extends { units: number; net: number }>(arr: T[], m: Metric): T[] => {
+      const key: 'units' | 'net' = m === 'units' ? 'units' : 'net';
+      return [...arr].sort((a, b) => (toNumber((b as any)[key]) || 0) - (toNumber((a as any)[key]) || 0));
     };
 
-    const topProducts = sortByMetric(productsList as any, metric).slice(0, topN);
-    const topCategories = sortByMetric(categoriesList as any, metric).slice(0, topN);
+    // Preserve full types (ProductAgg/CategoryAgg) so JSX property access stays type-safe.
+    const topProducts = sortByMetric(productsList, metric).slice(0, topN);
+    const topCategories = sortByMetric(categoriesList, metric).slice(0, topN);
 
     const zeroSellingProducts = products
       .filter((p) => (stockByProductId.get(p.id) || 0) > 0)
@@ -1490,6 +1606,188 @@ export default function InventoryReportsPage() {
                   Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span>. Applies to:
                   <span className="font-semibold"> Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>,
                   <span className="font-semibold"> Payment Breakdown</span> (unless Today only is enabled).
+                </div>
+
+                {/* ── Purchase Order CSVs ── */}
+                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
+                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Purchase Order Exports</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Purchase Order ID <span className="text-red-500">*</span></label>
+                      <input
+                        value={csvPoId}
+                        onChange={(e) => setCsvPoId(e.target.value)}
+                        placeholder="e.g. 123"
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Detail CSV</h4>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        Full breakdown of a single PO: vendor, store, employee tracking, item-by-item pricing (50+ columns).
+                      </p>
+                      <div className="mt-3">
+                        <button
+                          disabled={csvPoBusy}
+                          onClick={doDownloadPODetail}
+                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {csvPoBusy ? 'Preparing…' : 'Download CSV'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Barcodes CSV</h4>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        Atomic barcode list for a PO — one row per physical unit. Includes batch info, active/defective flags, current location.
+                      </p>
+                      <div className="mt-3">
+                        <button
+                          disabled={csvPoBarcodeBusy}
+                          onClick={doDownloadPOBarcodes}
+                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {csvPoBarcodeBusy ? 'Preparing…' : 'Download CSV'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Dispatch Barcode Breakdown CSV ── */}
+                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
+                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Dispatch Barcode Breakdown</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date From <span className="text-red-500">*</span></label>
+                      <input
+                        type="date"
+                        value={csvDispatchDateFrom}
+                        onChange={(e) => setCsvDispatchDateFrom(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date To <span className="text-red-500">*</span></label>
+                      <input
+                        type="date"
+                        value={csvDispatchDateTo}
+                        onChange={(e) => setCsvDispatchDateTo(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
+                      <input
+                        value={csvDispatchStoreId}
+                        onChange={(e) => setCsvDispatchStoreId(e.target.value)}
+                        placeholder="Matches source or destination"
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
+                      <select
+                        value={csvDispatchStatus}
+                        onChange={(e) => setCsvDispatchStatus(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      >
+                        <option value="">All statuses</option>
+                        <option value="pending">pending</option>
+                        <option value="in_transit">in_transit</option>
+                        <option value="delivered">delivered</option>
+                        <option value="cancelled">cancelled</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <h4 className="font-semibold text-gray-900 dark:text-white">Dispatch Barcodes CSV</h4>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Atomic barcode-level breakdown of dispatches — one row per scanned unit. Includes source/destination stores, carrier, product info, scan timestamp.
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Requires date range. Store filter matches <span className="font-semibold">either</span> source or destination.
+                    </p>
+                    <div className="mt-3">
+                      <button
+                        disabled={csvDispatchBusy}
+                        onClick={doDownloadDispatchBarcodes}
+                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                      >
+                        {csvDispatchBusy ? 'Preparing…' : 'Download CSV'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Customer Installment / Partial Payment CSV ── */}
+                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
+                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Customer Installments & Partial Payments</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (optional)</label>
+                      <input
+                        value={csvInstallmentCustomerId}
+                        onChange={(e) => setCsvInstallmentCustomerId(e.target.value)}
+                        placeholder="e.g. 25"
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
+                      <input
+                        value={csvInstallmentStoreId}
+                        onChange={(e) => setCsvInstallmentStoreId(e.target.value)}
+                        placeholder="e.g. 1"
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Payment Status (optional)</label>
+                      <select
+                        value={csvInstallmentPaymentStatus}
+                        onChange={(e) => setCsvInstallmentPaymentStatus(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      >
+                        <option value="">All statuses</option>
+                        <option value="unpaid">unpaid</option>
+                        <option value="partial">partial</option>
+                        <option value="paid">paid</option>
+                        <option value="overdue">overdue</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                      <h4 className="font-semibold text-gray-900 dark:text-white">Installments / Partial Payments CSV</h4>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                        Customer info, order details, full payment history — one row per payment. Includes balance before/after, installment number, payment method, due dates.
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                        Uses the main date range filter above. Leave all filters blank to export all installment orders.
+                      </p>
+                      <div className="mt-3">
+                        <button
+                          disabled={csvInstallmentBusy}
+                          onClick={doDownloadInstallments}
+                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {csvInstallmentBusy ? 'Preparing…' : 'Download CSV'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
+                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Installments CSV columns</h4>
+                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                        Order Number, Order Date, Store, Customer Name, Customer Phone, Customer Email, Customer Address, Products, Total Items,
+                        Order Total, Total Paid, Outstanding, Payment Status, Next Payment Due,
+                        Payment Number, Payment Date, Payment Amount, Payment Method, Payment Type, Installment #,
+                        Balance Before, Balance After, Processed By, Payment Notes.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
