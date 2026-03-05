@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Search, Loader2, Save, CheckCircle2, AlertCircle, Pencil, X, Check } from 'lucide-react';
+import { Search, Loader2, Save, CheckCircle2, AlertCircle, Pencil, X, Check, Printer } from 'lucide-react';
 
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 
 import productService, { Product as FullProduct } from '@/services/productService';
 import batchService, { Batch } from '@/services/batchService';
+import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
 
 type ProductPick = {
   id: number;
@@ -55,6 +56,106 @@ export default function BatchPriceUpdatePage() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [updates, setUpdates] = useState<UpdateRow[]>([]);
+
+  // Barcode printing (reuse PO barcode-center logic)
+  const [showBarcodeModal, setShowBarcodeModal] = useState(false);
+  const [barcodeSources, setBarcodeSources] = useState<BatchBarcodeSource[]>([]);
+  const [isPreparingBarcodes, setIsPreparingBarcodes] = useState(false);
+  const [barcodePrepError, setBarcodePrepError] = useState<string | null>(null);
+
+  const prepareBarcodeSources = async () => {
+    setBarcodePrepError(null);
+
+    if (!selectedProduct?.id) {
+      setBarcodePrepError('Select a product first.');
+      return;
+    }
+
+    try {
+      setIsPreparingBarcodes(true);
+
+      // Same target selection logic as bulk price apply
+      const targetIdsRaw = selectedVariationIds.length ? selectedVariationIds : [selectedProduct.id];
+      const targetIds = Array.from(new Set(targetIdsRaw)).filter(Boolean);
+
+      const toNumber = (v: any) => {
+        if (v === null || v === undefined || v === '') return 0;
+        const n = typeof v === 'string' ? Number(String(v).replace(/,/g, '')) : Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      // Prefer the current input (new price), otherwise fallback to each batch sell_price
+      const desiredPrice = (() => {
+        const n = Number(sellPrice);
+        return Number.isFinite(n) && n >= 0 ? n : null;
+      })();
+
+      const out: BatchBarcodeSource[] = [];
+
+      for (const pid of targetIds) {
+        // Use getBatchesAll to avoid silent per_page caps
+        const list = await batchService.getBatchesAll({ product_id: Number(pid) }, { per_page: 100, max_items: 10000 });
+        for (const b of list) {
+          const productName = String(b?.product?.name || selectedProduct.name || 'Product');
+          const price = desiredPrice !== null ? desiredPrice : toNumber((b as any)?.sell_price ?? 0);
+          const fallbackCode = b?.barcode?.barcode || (b as any)?.primary_barcode || b?.batch_number;
+          out.push({
+            batchId: Number(b.id),
+            productName,
+            price,
+            fallbackCode: fallbackCode ? String(fallbackCode) : undefined,
+          });
+        }
+      }
+
+      // Dedupe by batchId
+      const seen = new Set<number>();
+      const deduped = out.filter((s) => {
+        if (!s.batchId) return false;
+        if (seen.has(s.batchId)) return false;
+        seen.add(s.batchId);
+        return true;
+      });
+
+      if (deduped.length === 0) {
+        setBarcodePrepError('No batches found to print barcodes for.');
+        return;
+      }
+
+      setBarcodeSources(deduped);
+      setShowBarcodeModal(true);
+    } catch (e: any) {
+      console.error('Failed to prepare barcode sources', e);
+      setBarcodePrepError(e?.response?.data?.message || e?.message || 'Failed to prepare barcodes.');
+    } finally {
+      setIsPreparingBarcodes(false);
+    }
+  };
+
+  const BarcodeModal = ({ isOpen, onClose, title, children }: {
+    isOpen: boolean;
+    onClose: () => void;
+    title: string;
+    children: React.ReactNode;
+  }) => {
+    if (!isOpen) return null;
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+        <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-xl bg-white dark:bg-gray-800 shadow-xl">
+          <div className="sticky top-0 z-10 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
+            <button
+              onClick={onClose}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+            >
+              <X className="h-4 w-4" /> Close
+            </button>
+          </div>
+          <div className="p-4">{children}</div>
+        </div>
+      </div>
+    );
+  };
 
   // Debounced product search
   useEffect(() => {
@@ -515,8 +616,60 @@ export default function BatchPriceUpdatePage() {
                     {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                     Apply to all batches
                   </button>
+
+                  <button
+                    onClick={prepareBarcodeSources}
+                    disabled={!selectedProduct || isSaving || isPreparingBarcodes}
+                    className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 font-semibold text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Open barcode printing (same logic as Purchase Order barcode printing)"
+                  >
+                    {isPreparingBarcodes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
+                    Print barcodes
+                  </button>
                 </div>
+
+                {barcodePrepError ? (
+                  <div className="mt-2 text-xs text-red-600 dark:text-red-400">{barcodePrepError}</div>
+                ) : null}
               </div>
+
+              <BarcodeModal
+                isOpen={showBarcodeModal}
+                onClose={() => setShowBarcodeModal(false)}
+                title="Barcode Center"
+              >
+                <div className="flex flex-col gap-3">
+                  <div className="text-sm text-gray-700 dark:text-gray-300">
+                    Ready to print unit-level barcodes for{' '}
+                    <span className="font-semibold">{barcodeSources.length}</span> batch(es).
+                    {selectedProduct?.sku && selectedVariationIds.length > 1 ? (
+                      <span className="block mt-1 text-xs text-gray-600 dark:text-gray-400">
+                        Note: This includes all selected variations (same SKU) and their batches.
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <GroupedAllBarcodesPrinter
+                      sources={barcodeSources}
+                      buttonLabel="Print ALL (unit barcodes)"
+                      title="Print all barcodes"
+                      softLimit={500}
+                    />
+                    <div className="text-xs text-gray-600 dark:text-gray-400">
+                      Uses QZ Tray + the same label rendering as Purchase Order printing.
+                    </div>
+                  </div>
+
+                  <div className="mt-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                    <div className="text-xs font-semibold text-gray-800 dark:text-gray-200">Tips</div>
+                    <ul className="mt-1 list-disc pl-5 text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                      <li>Make sure QZ Tray is running and a default printer is selected.</li>
+                      <li>If a batch has no per-unit barcodes, we print the primary barcode as fallback.</li>
+                    </ul>
+                  </div>
+                </div>
+              </BarcodeModal>
 
               {/* Per-batch cost price update */}
               {selectedProduct && (
