@@ -33,11 +33,14 @@ export default function BatchPriceUpdatePage() {
   const [search, setSearch] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [products, setProducts] = useState<ProductPick[]>([]);
+  const [searchLimit, setSearchLimit] = useState<number>(10);
+  const [searchHasMore, setSearchHasMore] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductPick | null>(null);
 
   // Variations with same SKU (so you can apply price to multiple variations without backend changes)
   const [skuGroupProducts, setSkuGroupProducts] = useState<ProductPick[]>([]);
   const [selectedVariationIds, setSelectedVariationIds] = useState<number[]>([]);
+  const [variationVisible, setVariationVisible] = useState<number>(20);
 
   // Batches
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -56,7 +59,7 @@ export default function BatchPriceUpdatePage() {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [updates, setUpdates] = useState<UpdateRow[]>([]);
-
+  
   // Barcode printing (reuse PO barcode-center logic)
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [barcodeSources, setBarcodeSources] = useState<BatchBarcodeSource[]>([]);
@@ -165,6 +168,7 @@ export default function BatchPriceUpdatePage() {
     const q = search.trim();
     if (q.length < 2) {
       setProducts([]);
+      setSearchHasMore(false);
       return;
     }
 
@@ -173,7 +177,7 @@ export default function BatchPriceUpdatePage() {
         setIsSearching(true);
 
         // ✅ Fast autocomplete first
-        const quick = await productService.quickSearch(q, 10);
+        const quick = await productService.quickSearch(q, searchLimit);
 
         // Fallback to advanced search (better multi-language + fuzzy) if quick is empty
         const list = (Array.isArray(quick) && quick.length > 0)
@@ -184,7 +188,7 @@ export default function BatchPriceUpdatePage() {
               enable_fuzzy: true,
               fuzzy_threshold: 60,
               search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-              per_page: 10,
+              per_page: searchLimit,
             })).items as FullProduct[]);
         const mapped: ProductPick[] = list.map((p) => ({
           id: p.id,
@@ -193,15 +197,19 @@ export default function BatchPriceUpdatePage() {
         }));
 
         setProducts(mapped);
+
+        // If we got a full page, assume there may be more
+        setSearchHasMore(mapped.length >= searchLimit);
       } catch (e: any) {
         setError(e?.message || 'Failed to search products.');
+        setSearchHasMore(false);
       } finally {
         setIsSearching(false);
       }
     }, 350);
 
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, searchLimit]);
 
   // Load batches when product selected
   useEffect(() => {
@@ -275,6 +283,7 @@ export default function BatchPriceUpdatePage() {
 
         setSkuGroupProducts(exact);
         setSelectedVariationIds(exact.map((p) => p.id)); // default: select all, user can uncheck
+        setVariationVisible(12); // default: select all, user can uncheck
       } catch (e) {
         console.error('Failed to load SKU group products', e);
         setSkuGroupProducts([]);
@@ -455,6 +464,8 @@ export default function BatchPriceUpdatePage() {
                     value={search}
                     onChange={(e) => {
                       setSearch(e.target.value);
+                      setSearchLimit(10);
+                      setSearchHasMore(false);
                       setSelectedProduct(null);
                     }}
                     placeholder="Search product by name / SKU (type 2+ chars)..."
@@ -465,20 +476,33 @@ export default function BatchPriceUpdatePage() {
 
                 {/* Search Results */}
                 {products.length > 0 && (
-                  <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                    {products.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => onSelectProduct(p)}
-                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 border-b border-gray-200 dark:border-gray-700 last:border-b-0"
-                      >
-                        <div className="font-medium text-gray-900 dark:text-gray-100">{p.name}</div>
-                        <div className="text-xs text-gray-500 dark:text-gray-400">
-                          ID: {p.id} {p.sku ? `• SKU: ${p.sku}` : ''}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                  <>
+                    <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      {products.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => onSelectProduct(p)}
+                          className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 border-b border-gray-200 dark:border-gray-700 last:border-b-0"
+                        >
+                          <div className="font-medium text-gray-900 dark:text-gray-100">{p.name}</div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400">
+                            ID: {p.id} {p.sku ? `• SKU: ${p.sku}` : ''}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    {searchHasMore && !isSearching && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSearchLimit((v) => v + 20)}
+                          className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          +20 more
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
 
                 {/* Selected Product + Summary */}
@@ -563,7 +587,7 @@ export default function BatchPriceUpdatePage() {
                     </div>
 
                     <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-auto pr-1">
-                      {skuGroupProducts.map((vp) => (
+                      {skuGroupProducts.slice(0, variationVisible).map((vp) => (
                         <label
                           key={vp.id}
                           className="flex items-start gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/40 px-3 py-2"
@@ -583,6 +607,22 @@ export default function BatchPriceUpdatePage() {
                         </label>
                       ))}
                     </div>
+
+                    {skuGroupProducts.length > variationVisible && (
+                      <div className="mt-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVariationVisible((v) =>
+                              Math.min(skuGroupProducts.length, v + Math.min(20, skuGroupProducts.length - v))
+                            )
+                          }
+                          className="text-sm font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                        >
+                          +{Math.min(20, skuGroupProducts.length - variationVisible)} more
+                        </button>
+                      </div>
+                    )}
 
                     <div className="mt-2 text-xs text-gray-600 dark:text-gray-400">
                       Selected: <span className="font-semibold">{selectedVariationIds.length}</span> variation(s).
@@ -616,7 +656,6 @@ export default function BatchPriceUpdatePage() {
                     {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                     Apply to all batches
                   </button>
-
                   <button
                     onClick={prepareBarcodeSources}
                     disabled={!selectedProduct || isSaving || isPreparingBarcodes}
