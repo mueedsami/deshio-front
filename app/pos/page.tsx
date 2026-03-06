@@ -548,13 +548,26 @@ export default function POSPage() {
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
   const total = subtotal + transportCost;
 
-  // Installment amount (ceil to 2 decimals so collected amount is not less than required per installment)
-  const installmentAmount = useMemo(() => {
+  // Installment / EMI (flexible pay-now amount in POS)
+  // We still compute a *suggested* installment amount for reference, but staff can collect any amount now.
+  const suggestedInstallmentAmount = useMemo(() => {
     if (!isInstallment) return 0;
     const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
     if (total <= 0) return 0;
     return Math.ceil((total / n) * 100) / 100;
   }, [isInstallment, installmentCount, total]);
+
+  const [installmentPayNow, setInstallmentPayNow] = useState<number>(0);
+
+  useEffect(() => {
+    // Default the "pay now" to the suggested amount when switching to installment / when totals change.
+    // If user already typed something positive, keep it.
+    if (!isInstallment) {
+      setInstallmentPayNow(0);
+      return;
+    }
+    setInstallmentPayNow((prev) => (prev > 0 ? prev : suggestedInstallmentAmount));
+  }, [isInstallment, suggestedInstallmentAmount]);
 
   const installmentPaymentMethodId = useMemo(() => {
     if (!isInstallment) return null;
@@ -563,7 +576,7 @@ export default function POSPage() {
     return paymentMethods.cash || 1;
   }, [isInstallment, installmentPaymentMode, paymentMethods]);
 
-  const totalPaid = isInstallment ? installmentAmount : cashPaid + cardPaid + bkashPaid + nagadPaid;
+  const totalPaid = isInstallment ? installmentPayNow : cashPaid + cardPaid + bkashPaid + nagadPaid;
 
   // ✅ FIXED: Calculate due and change correctly
   const due = total - totalPaid;
@@ -605,7 +618,7 @@ export default function POSPage() {
     // ✅ Confirmation
     if (isInstallment) {
       const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-      const msg = `Installment/EMI: ${n} × ৳${installmentAmount.toFixed(2)}. First installment will be collected now. Continue?`;
+      const msg = `Installment/EMI: ${n} × ৳${suggestedInstallmentAmount.toFixed(2)} (suggested). Collecting now: ৳${installmentPayNow.toFixed(2)}. Continue?`;
       if (!confirm(msg)) return;
     } else {
       // Due sales are blocked; optional confirmation only when change needs to be returned.
@@ -734,7 +747,7 @@ export default function POSPage() {
           ? {
               installment_plan: {
                 total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: installmentAmount,
+                installment_amount: suggestedInstallmentAmount,
                 start_date: undefined, // ✅ Changed from null to undefined
               },
             }
@@ -804,13 +817,13 @@ export default function POSPage() {
           throw new Error('Installment payment method is missing');
         }
 
-        if (installmentAmount > 0) {
+        if (installmentPayNow > 0) {
           console.log('💳 Processing installment/EMI first payment...');
 
           // ✅ FIXED: Remove payment_type field
           await paymentService.addInstallmentPayment(order.id, {
             payment_method_id: installmentPaymentMethodId,
-            amount: installmentAmount,
+            amount: installmentPayNow,
             auto_complete: true,
             notes: `POS installment/EMI - 1st installment of ${Math.max(2, Math.min(24, Number(installmentCount) || 2))}`,
             payment_data: installmentTransactionReference
@@ -820,10 +833,10 @@ export default function POSPage() {
           console.log('✅ Installment payment processed');
 
           // Receipt breakdown for installment first payment
-          if (installmentPaymentMode === 'cash') receiptPaymentBreakdown.cash = installmentAmount;
-          if (installmentPaymentMode === 'card') receiptPaymentBreakdown.card = installmentAmount;
-          if (installmentPaymentMode === 'bkash') receiptPaymentBreakdown.bkash = installmentAmount;
-          if (installmentPaymentMode === 'nagad') receiptPaymentBreakdown.nagad = installmentAmount;
+          if (installmentPaymentMode === 'cash') receiptPaymentBreakdown.cash = installmentPayNow;
+          if (installmentPaymentMode === 'card') receiptPaymentBreakdown.card = installmentPayNow;
+          if (installmentPaymentMode === 'bkash') receiptPaymentBreakdown.bkash = installmentPayNow;
+          if (installmentPaymentMode === 'nagad') receiptPaymentBreakdown.nagad = installmentPayNow;
         }
       } else {
         // ✅ FIXED: Process payments - only charge the order total, not overpayment
@@ -1906,7 +1919,7 @@ export default function POSPage() {
                             <div>
                               <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Paying now</label>
                               <div className="w-full px-2 py-1.5 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-semibold text-gray-900 dark:text-white">
-                                ৳{installmentAmount.toFixed(2)}
+                                ৳{suggestedInstallmentAmount.toFixed(2)}
                               </div>
                             </div>
                           </div>
@@ -1936,9 +1949,30 @@ export default function POSPage() {
                             </div>
                           </div>
 
-                          <p className="text-[11px] text-gray-600 dark:text-gray-300">
-                            Remaining after today: <span className="font-semibold">৳{Math.max(0, total - installmentAmount).toFixed(2)}</span>
-                          </p>
+                          <div className="grid grid-cols-2 gap-2 mt-2">
+                            <div>
+                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">
+                                Paying now (flexible)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={installmentPayNow}
+                                onChange={(e) => setInstallmentPayNow(Number(e.target.value))}
+                                disabled={isProcessing}
+                                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                              />
+                              <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
+                                Suggested per installment: ৳{suggestedInstallmentAmount.toFixed(2)}
+                              </p>
+                            </div>
+                            <div className="flex items-end">
+                              <p className="text-[11px] text-gray-600 dark:text-gray-300">
+                                Remaining after today:{' '}
+                                <span className="font-semibold">৳{Math.max(0, total - installmentPayNow).toFixed(2)}</span>
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       )}
 
