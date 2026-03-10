@@ -599,7 +599,7 @@ async updateCustomerInfo(
   payload: { customer_name: string; customer_phone: string; customer_address?: string }
 ): Promise<any> {
   try {
-    const response = await axiosInstance.patch(`/admin/orders/${orderId}/customer-info`, payload);
+    const response = await axiosInstance.patch(`/orders/${orderId}/customer-info`, payload);
     return response.data;
   } catch (error: any) {
     console.error('Update customer info error:', error);
