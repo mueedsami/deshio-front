@@ -240,32 +240,13 @@ export default function PurchaseOrdersPage() {
   }, [selectedPO]);
 
   // ─────────────────────────────────────────────────────────
-  // CSV download for a PO
+  // PDF quick access
   // ─────────────────────────────────────────────────────────
-  const downloadPoCsv = async (po: PurchaseOrder) => {
+  const openPoPdf = (poId: number, inline: boolean = true) => {
     const api = getApiUrlBaseWithApi();
-    if (!api || !po.id) return;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    try {
-      const res = await fetch(`${api}/purchase-orders/${po.id}/csv`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error('Failed to download CSV');
-      const blob = await res.blob();
-      const cd = res.headers.get('content-disposition') || '';
-      const m = cd.match(/filename="?([^";]+)"?/i);
-      const filename = m?.[1] || `${po.po_number || `PO-${po.id}`}-detail.csv`;
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setAlert({ type: 'error', message: e?.message || 'Failed to download CSV' });
-    }
+    if (!api || !poId) return;
+    const url = `${api}/purchase-orders/${poId}/pdf${inline ? '?inline=true' : ''}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
   };
 
   // ✅ Per-batch / per-barcode printing UI helpers (inside PO details modal)
@@ -1076,12 +1057,12 @@ export default function PurchaseOrdersPage() {
                         </button>
 
                         <button
-                          onClick={() => downloadPoCsv(po)}
+                          onClick={() => openPoPdf(po.id, true)}
                           className="flex items-center gap-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
-                          title="Download PO as CSV"
+                          title="Open PO PDF (inline)"
                         >
                           <FileText className="w-4 h-4" />
-                          CSV
+                          PDF
                         </button>
                         {po.status === 'draft' && (
                           <button

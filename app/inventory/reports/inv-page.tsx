@@ -489,30 +489,13 @@ export default function InventoryReportsPage() {
     window.URL.revokeObjectURL(objUrl);
   };
 
-  /**
-   * Accepts either a plain numeric ID (e.g. "123") or a formatted PO number
-   * like "PO-20260310-000012". Returns the numeric ID string, or null if invalid.
-   */
-  const parsePOId = (input: string): string | null => {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-    // Plain numeric
-    if (/^\d+$/.test(trimmed)) return trimmed;
-    // PO-YYYYMMDD-NNNNNN or similar — grab last numeric segment
-    const parts = trimmed.split('-');
-    const lastNumeric = [...parts].reverse().find((p) => /^\d+$/.test(p));
-    if (lastNumeric) return String(parseInt(lastNumeric, 10)); // strip leading zeros
-    return null;
-  };
-
   const doDownloadPODetail = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
+    if (!csvPoId.trim()) { setPreviewError('Please enter a Purchase Order ID.'); return; }
     setCsvPoBusy(true);
     setPreviewError('');
     try {
       const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/csv`, `PO-${csvPoId.trim()}-detail.csv`);
+      await downloadExternalCsv(`${api}/purchase-orders/${csvPoId.trim()}/csv`, `PO-${csvPoId.trim()}-detail.csv`);
     } catch (e: any) {
       setPreviewError(e?.message || 'Failed to download PO CSV');
     } finally {
@@ -521,13 +504,12 @@ export default function InventoryReportsPage() {
   };
 
   const doDownloadPOBarcodes = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
+    if (!csvPoId.trim()) { setPreviewError('Please enter a Purchase Order ID.'); return; }
     setCsvPoBarcodeBusy(true);
     setPreviewError('');
     try {
       const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/barcodes/csv`, `PO-${csvPoId.trim()}-barcodes.csv`);
+      await downloadExternalCsv(`${api}/purchase-orders/${csvPoId.trim()}/barcodes/csv`, `PO-${csvPoId.trim()}-barcodes.csv`);
     } catch (e: any) {
       setPreviewError(e?.message || 'Failed to download PO Barcodes CSV');
     } finally {
@@ -1630,7 +1612,7 @@ export default function InventoryReportsPage() {
                       <input
                         value={csvPoId}
                         onChange={(e) => setCsvPoId(e.target.value)}
-                        placeholder="e.g. 123 or PO-20260310-000012"
+                        placeholder="e.g. 123"
                         className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
                       />
                     </div>
