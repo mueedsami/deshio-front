@@ -306,7 +306,7 @@ function posReceiptBody(order: any) {
     ${r.notes ? `<div class="note">Note: ${escapeHtml(r.notes)}</div>` : ''}
 
     <div class="policy">
-      Items sold cannot be returned but may only be exchanged in their unworn condition with tags and original receipt within 7 days. Discount &amp; Offer items cannot be exchanged.
+      Items sold cannot be returned but may only be exchanged in their unworn condition with tags and original receipt within 7 days. Discount &amp; Offer items cannot be exchanged.Jewellery items & Jamdani sarees cannot be exchanged.
     </div>
 
     <div class="footer">
@@ -442,8 +442,8 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     .credits {
       margin-top: 4px;
       text-align: center;
-      font-size: 10px;
-      font-weight: 600;
+      font-size: 11px;
+      font-weight: 700;
       color: #444;
     }
 
