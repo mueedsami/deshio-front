@@ -397,6 +397,8 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   const [installmentMethodId, setInstallmentMethodId] = useState<number | ''>('');
   const [installmentRef, setInstallmentRef] = useState('');
   const [installmentNotes, setInstallmentNotes] = useState('');
+  const [installmentCollectedBy, setInstallmentCollectedBy] = useState('');
+  const [installmentNextCollectionDate, setInstallmentNextCollectionDate] = useState('');
   const [installmentMethods, setInstallmentMethods] = useState<PaymentMethod[]>([]);
   const [isCollectingInstallment, setIsCollectingInstallment] = useState(false);
 
@@ -1068,6 +1070,19 @@ const derivePaymentStatus = (order: any) => {
     return [...DEFAULT_COURIERS];
   }, [DEFAULT_COURIERS]);
 
+
+  const normalizeDateInput = (value: any): string => {
+    if (!value) return '';
+    const raw = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return '';
+    const y = dt.getFullYear();
+    const m = String(dt.getMonth() + 1).padStart(2, '0');
+    const d = String(dt.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   const loadAvailableCouriers = async () => {
     try {
       const list = await orderService.getAvailableCouriers();
@@ -1097,8 +1112,8 @@ const derivePaymentStatus = (order: any) => {
         const inst = await orderService.getAll({
           order_type: 'counter',
           installment_only: true,
-          sort_by: 'created_at',
-          sort_order: 'desc',
+          sort_by: 'next_payment_due',
+          sort_order: 'asc',
           per_page: 1000,
         });
 
@@ -1122,7 +1137,16 @@ const derivePaymentStatus = (order: any) => {
         allOrders = [...(social.data || []), ...(ecommerce.data || [])];
       }
 
-      allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      if (viewMode === 'installments') {
+        allOrders.sort((a: any, b: any) => {
+          const aDue = new Date(a?.installment_info?.next_payment_due || a?.next_payment_due || '9999-12-31').getTime();
+          const bDue = new Date(b?.installment_info?.next_payment_due || b?.next_payment_due || '9999-12-31').getTime();
+          if (aDue !== bDue) return aDue - bDue;
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        });
+      } else {
+        allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      }
 
       const transformedOrders = allOrders.map((o: any) => transformOrder(o));
       const hydrated = await hydrateCouriersFromDB(transformedOrders);
@@ -1411,6 +1435,8 @@ const derivePaymentStatus = (order: any) => {
       setInstallmentAmountInput((suggested || 0).toFixed(2));
       setInstallmentNotes('');
       setInstallmentRef('');
+      setInstallmentCollectedBy(userName || '');
+      setInstallmentNextCollectionDate(normalizeDateInput(info?.next_payment_due) || '');
       setShowInstallmentModal(true);
     } catch (e: any) {
       console.error('Failed to open installment modal:', e);
@@ -1433,6 +1459,21 @@ const derivePaymentStatus = (order: any) => {
       return;
     }
 
+    const collectedBy = installmentCollectedBy.trim();
+    if (!collectedBy) {
+      alert('Please enter the collector name');
+      return;
+    }
+
+    const currentOutstanding = parseMoney(selectedBackendOrder?.outstanding_amount);
+    const remainingAfterPayment = Math.max(0, currentOutstanding - amt);
+    const nextCollectionDate = normalizeDateInput(installmentNextCollectionDate);
+
+    if (remainingAfterPayment > 0 && !nextCollectionDate) {
+      alert('Please enter the next collection date');
+      return;
+    }
+
     setIsCollectingInstallment(true);
     try {
       await paymentService.addInstallmentPayment(installmentOrderId, {
@@ -1440,6 +1481,8 @@ const derivePaymentStatus = (order: any) => {
         amount: amt,
         transaction_reference: installmentRef ? installmentRef.trim() : undefined,
         notes: installmentNotes ? installmentNotes.trim() : undefined,
+        collected_by_name: collectedBy,
+        next_collection_date: remainingAfterPayment > 0 ? nextCollectionDate : undefined,
       });
 
       // Refresh list + details
@@ -3744,6 +3787,29 @@ const derivePaymentStatus = (order: any) => {
               </div>
 
               <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Collected By</label>
+                <input
+                  value={installmentCollectedBy}
+                  onChange={(e) => setInstallmentCollectedBy(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                  placeholder="Enter collector name"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Next Collection Date</label>
+                <input
+                  type="date"
+                  value={installmentNextCollectionDate}
+                  onChange={(e) => setInstallmentNextCollectionDate(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                />
+                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
+                  Required when there is still due remaining after this collection.
+                </p>
+              </div>
+
+              <div>
                 <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Notes (optional)</label>
                 <textarea
                   value={installmentNotes}
@@ -4268,6 +4334,13 @@ const derivePaymentStatus = (order: any) => {
                                     {p.created_at ? new Date(p.created_at).toLocaleString('en-GB') : ''}
                                     {p.transaction_reference ? ` • Ref: ${p.transaction_reference}` : ''}
                                   </p>
+                                  {(p.collected_by_name || p.next_collection_date) && (
+                                    <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                                      {p.collected_by_name ? `Collected by: ${p.collected_by_name}` : ''}
+                                      {p.collected_by_name && p.next_collection_date ? ' • ' : ''}
+                                      {p.next_collection_date ? `Next: ${new Date(p.next_collection_date).toLocaleDateString('en-GB')}` : ''}
+                                    </p>
+                                  )}
                                 </div>
                                 <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-300">
                                   {statusLabel(p.status || '')}

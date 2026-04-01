@@ -144,19 +144,34 @@ export default function AmountDetailsPage() {
     [paymentMethods, codPaymentMethod]
   );
 
-  const installmentAmount = useMemo(() => {
+  const suggestedInstallmentAmount = useMemo(() => {
     if (paymentOption !== 'installment') return 0;
     const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
     if (total <= 0) return 0;
     return Math.ceil((total / n) * 100) / 100;
   }, [paymentOption, installmentCount, total]);
 
+  const [installmentPayNow, setInstallmentPayNow] = useState('');
+
+  useEffect(() => {
+    if (paymentOption !== 'installment') {
+      setInstallmentPayNow('');
+      return;
+    }
+
+    setInstallmentPayNow((prev) => {
+      const prevNum = parseNumber(prev);
+      if (prevNum > 0) return prev;
+      return suggestedInstallmentAmount > 0 ? String(suggestedInstallmentAmount) : '';
+    });
+  }, [paymentOption, suggestedInstallmentAmount]);
+
   const advance = useMemo(() => {
     if (paymentOption === 'none') return 0;
     if (paymentOption === 'full') return total;
-    if (paymentOption === 'installment') return installmentAmount;
+    if (paymentOption === 'installment') return parseNumber(installmentPayNow);
     return parseNumber(advanceAmount);
-  }, [paymentOption, total, advanceAmount, installmentAmount]);
+  }, [paymentOption, total, advanceAmount, installmentPayNow]);
 
   const codAmount = useMemo(() => {
     if (paymentOption === 'full') return 0;
@@ -213,7 +228,7 @@ export default function AmountDetailsPage() {
         displayToast('Total installments must be at least 2', 'error');
         return;
       }
-      if (installmentAmount <= 0) {
+      if (advance <= 0) {
         displayToast('Installment amount is invalid', 'error');
         return;
       }
@@ -270,7 +285,7 @@ export default function AmountDetailsPage() {
           ? {
               installment_plan: {
                 total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: installmentAmount,
+                installment_amount: suggestedInstallmentAmount,
                 // Some backends validate date; omit instead of null
                 start_date: undefined,
               },
@@ -278,7 +293,7 @@ export default function AmountDetailsPage() {
           : {}),
         notes:
           (orderData.notes || 'Social Commerce order.') +
-          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid now)` : `Cash on delivery ৳${codAmount.toFixed(2)}`}.`,
+          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid now ৳${advance.toFixed(2)})` : `Cash on delivery ৳${codAmount.toFixed(2)}`}.`,
       };
 
       console.log('📦 Creating order:', orderPayload);
@@ -419,7 +434,7 @@ export default function AmountDetailsPage() {
       if (paymentOption === 'installment') {
         const firstPayment: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
-          amount: installmentAmount,
+          amount: advance,
           auto_complete: true,
           notes: paymentNotes || `Installment/EMI - 1st installment of ${installmentCount} via ${selectedMethod?.name}`,
           payment_data: {},
@@ -470,7 +485,7 @@ export default function AmountDetailsPage() {
           : paymentOption === 'partial'
             ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${installmentAmount.toFixed(2)} (1st paid).`
+              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
               : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
@@ -757,7 +772,7 @@ export default function AmountDetailsPage() {
                               className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                             />
                             <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400">
-                              Per installment: <span className="font-semibold">৳{installmentAmount.toFixed(2)}</span> (1st paid now)
+                              Suggested per installment: <span className="font-semibold">৳{suggestedInstallmentAmount.toFixed(2)}</span>
                             </p>
                           </div>
                         )}
@@ -839,12 +854,16 @@ export default function AmountDetailsPage() {
                               <span className="font-medium">{installmentCount}</span>
                             </div>
                             <div className="flex justify-between">
+                              <span>Suggested / Installment</span>
+                              <span className="font-medium">৳{suggestedInstallmentAmount.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between">
                               <span>1st Installment (Now)</span>
-                              <span className="font-medium">৳{installmentAmount.toFixed(2)}</span>
+                              <span className="font-medium">৳{advance.toFixed(2)}</span>
                             </div>
                             <div className="flex justify-between">
                               <span>Remaining (Later)</span>
-                              <span className="font-medium">৳{Math.max(0, total - installmentAmount).toFixed(2)}</span>
+                              <span className="font-medium">৳{Math.max(0, total - advance).toFixed(2)}</span>
                             </div>
                           </>
                         ) : (

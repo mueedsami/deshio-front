@@ -74,6 +74,8 @@ export interface InstallmentPaymentRequest {
   external_reference?: string;
   auto_complete?: boolean;
   notes?: string;
+  collected_by_name?: string;
+  next_collection_date?: string;
   payment_data?: PaymentData;
 }
 
@@ -300,7 +302,7 @@ class PaymentService {
    *
    * Endpoint: POST /api/orders/{order}/payments/installment/setup
    */
-  async setupInstallmentPlan(orderId: number, payload: SetupInstallmentPlanRequest): Promise<any> {
+  async setupInstallmentPlan(orderId: number, payload: InstallmentPlanRequest): Promise<any> {
     try {
       const response = await axiosInstance.post(`/orders/${orderId}/payments/installment/setup`, payload);
       if (!response.data?.success) {

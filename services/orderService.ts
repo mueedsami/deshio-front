@@ -67,6 +67,9 @@ export interface OrderPayment {
   payment_type: string;
   status: string;
   processed_by?: string;
+  transaction_reference?: string;
+  collected_by_name?: string;
+  next_collection_date?: string | null;
   created_at: string;
 }
 
@@ -121,6 +124,7 @@ export interface Order {
   installment_plan?: {
     total_installments?: number;
     installment_amount?: string | number;
+    next_payment_due?: string | null;
     start_date?: string | null;
   } | null;
 

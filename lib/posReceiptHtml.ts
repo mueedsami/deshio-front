@@ -68,7 +68,9 @@ type PaymentMap = {
   OTHERS: Array<{ name: string; amount: number }>;
 };
 
-function normalizeMethodLabel(raw: unknown): 'CASH' | 'CARD' | 'BKASH' | 'NAGAD' | '' {
+type KnownPaymentLabel = 'CASH' | 'CARD' | 'BKASH' | 'NAGAD';
+
+function normalizeMethodLabel(raw: unknown): KnownPaymentLabel | '' {
   const m = String(raw || '').toLowerCase().trim();
   if (!m) return '';
 
@@ -101,7 +103,7 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return 0;
 
     let added = 0;
-    const pairs: Array<[keyof PaymentMap, any]> = [
+    const pairs: Array<[KnownPaymentLabel, any]> = [
       ['CASH', obj.cash ?? obj.cash_paid ?? obj.cashPaid],
       ['CARD', obj.card ?? obj.card_paid ?? obj.cardPaid],
       ['BKASH', obj.bkash ?? obj.bkash_paid ?? obj.bkashPaid],
