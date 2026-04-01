@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
-import { Plus, Search, ChevronLeft, ChevronRight, Filter, Grid, List, RefreshCw, Minus, X } from 'lucide-react';
+import { Plus, Search, ChevronLeft, ChevronRight, Filter, Grid, List, RefreshCw, Minus, X, Minimize2, Maximize2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import ProductListItem from '@/components/ProductListItem';
@@ -57,6 +57,7 @@ export default function ProductPage() {
   const [maxPrice, setMaxPrice] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [socialQueueMinimized, setSocialQueueMinimized] = useState(false);
   const itemsPerPage = 10;
 
   const SOCIAL_COMMERCE_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
@@ -183,6 +184,7 @@ const goToPage = useCallback(
     if (!isSocialQueueMode) {
       setQueuedForSocialCount(0);
       setQueuedForSocialItems([]);
+      setSocialQueueMinimized(false);
       return;
     }
     const queue = readSocialSelectionQueue();
@@ -1225,101 +1227,143 @@ const goToPage = useCallback(
 
 
       {isSocialQueueMode && redirectPath && (
-        <div className="fixed bottom-4 left-4 right-4 md:left-auto md:w-[430px] z-40">
-          <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-2xl overflow-hidden">
-            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-gray-900 dark:text-white">Social Commerce Queue</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {queuedForSocialItems.length} product{queuedForSocialItems.length !== 1 ? 's' : ''} • {queuedForSocialCount} total item{queuedForSocialCount !== 1 ? 's' : ''}
-                </p>
-              </div>
-              <button
-                onClick={handleClearSocialQueue}
-                type="button"
-                className="px-2.5 py-1.5 text-xs font-semibold border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
-              >
-                Clear
-              </button>
-            </div>
-
-            <div className="max-h-64 overflow-y-auto p-3 space-y-2">
-              {queuedForSocialItems.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 text-center">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">No products queued yet</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Click “Select” on products to add them here.</p>
+        <div className={`fixed bottom-4 left-4 right-4 md:left-auto z-40 ${socialQueueMinimized ? 'md:w-[300px]' : 'md:w-[430px]'}`}>
+          {socialQueueMinimized ? (
+            <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-2xl overflow-hidden">
+              <div className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Social Commerce Queue</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                    {queuedForSocialItems.length} product{queuedForSocialItems.length !== 1 ? 's' : ''} • {queuedForSocialCount} total item{queuedForSocialCount !== 1 ? 's' : ''}
+                  </p>
                 </div>
-              ) : (
-                queuedForSocialItems.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-2.5"
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setSocialQueueMinimized(false)}
+                    type="button"
+                    className="h-9 w-9 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+                    title="Expand queue"
                   >
-                    <div className="flex items-center gap-2">
-                      <img
-                        src={item.image || FALLBACK_IMAGE_URL}
-                        alt={item.name || `#${item.id}`}
-                        className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-gray-700"
-                        onError={(e) => {
-                          e.currentTarget.src = FALLBACK_IMAGE_URL;
-                        }}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.name || `#${item.id}`}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{item.sku || `ID: ${item.id}`}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveQueuedItem(Number(item.id))}
-                        className="h-7 w-7 flex items-center justify-center rounded-md text-gray-500 hover:text-red-600 hover:bg-white dark:hover:bg-gray-800"
-                        title="Remove from queue"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+                    <Maximize2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleReturnToSocialCommerce}
+                    type="button"
+                    className="px-3 py-2 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors disabled:opacity-50"
+                    disabled={queuedForSocialItems.length === 0}
+                    title="Return to Social Commerce with selected products"
+                  >
+                    Back ({queuedForSocialCount})
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white/95 dark:bg-gray-800/95 backdrop-blur shadow-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900 dark:text-white">Social Commerce Queue</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    {queuedForSocialItems.length} product{queuedForSocialItems.length !== 1 ? 's' : ''} • {queuedForSocialCount} total item{queuedForSocialCount !== 1 ? 's' : ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSocialQueueMinimized(true)}
+                    type="button"
+                    className="h-9 w-9 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+                    title="Minimize queue"
+                  >
+                    <Minimize2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={handleClearSocialQueue}
+                    type="button"
+                    className="px-2.5 py-1.5 text-xs font-semibold border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
 
-                    <div className="mt-2 flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) - 1))}
-                        className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200"
-                        title="Decrease quantity"
-                      >
-                        <Minus className="w-4 h-4" />
-                      </button>
-                      <input
-                        type="number"
-                        min={1}
-                        value={Math.max(1, Number(item.qty) || 1)}
-                        onChange={(e) => handleQueueQtyChange(Number(item.id), Number(e.target.value))}
-                        className="w-16 h-8 text-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) + 1))}
-                        className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200 font-bold"
-                        title="Increase quantity"
-                      >
-                        +
-                      </button>
-                    </div>
+              <div className="max-h-64 overflow-y-auto p-3 space-y-2">
+                {queuedForSocialItems.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 p-4 text-center">
+                    <p className="text-sm text-gray-600 dark:text-gray-300">No products queued yet</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Click “Select” on products to add them here.</p>
                   </div>
-                ))
-              )}
-            </div>
+                ) : (
+                  queuedForSocialItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-2.5"
+                    >
+                      <div className="flex items-center gap-2">
+                        <img
+                          src={item.image || FALLBACK_IMAGE_URL}
+                          alt={item.name || `#${item.id}`}
+                          className="w-10 h-10 rounded-lg object-cover border border-gray-200 dark:border-gray-700"
+                          onError={(e) => {
+                            e.currentTarget.src = FALLBACK_IMAGE_URL;
+                          }}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{item.name || `#${item.id}`}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{item.sku || `ID: ${item.id}`}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveQueuedItem(Number(item.id))}
+                          className="h-7 w-7 flex items-center justify-center rounded-md text-gray-500 hover:text-red-600 hover:bg-white dark:hover:bg-gray-800"
+                          title="Remove from queue"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
 
-            <div className="px-3 pb-3 pt-2 border-t border-gray-200 dark:border-gray-700">
-              <button
-                onClick={handleReturnToSocialCommerce}
-                type="button"
-                className="w-full px-3 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors disabled:opacity-50"
-                disabled={queuedForSocialItems.length === 0}
-                title="Return to Social Commerce with selected products"
-              >
-                Back to Social Commerce ({queuedForSocialCount})
-              </button>
+                      <div className="mt-2 flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) - 1))}
+                          className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200"
+                          title="Decrease quantity"
+                        >
+                          <Minus className="w-4 h-4" />
+                        </button>
+                        <input
+                          type="number"
+                          min={1}
+                          value={Math.max(1, Number(item.qty) || 1)}
+                          onChange={(e) => handleQueueQtyChange(Number(item.id), Number(e.target.value))}
+                          className="w-16 h-8 text-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleQueueQtyChange(Number(item.id), Math.max(1, Number(item.qty || 1) + 1))}
+                          className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-700 dark:text-gray-200 font-bold"
+                          title="Increase quantity"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="px-3 pb-3 pt-2 border-t border-gray-200 dark:border-gray-700">
+                <button
+                  onClick={handleReturnToSocialCommerce}
+                  type="button"
+                  className="w-full px-3 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 text-sm font-semibold rounded-xl hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors disabled:opacity-50"
+                  disabled={queuedForSocialItems.length === 0}
+                  title="Return to Social Commerce with selected products"
+                >
+                  Back to Social Commerce ({queuedForSocialCount})
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
 
