@@ -16,22 +16,19 @@ export interface ProductVariant {
 
 export interface ProductGroup {
   sku: string;
-  base_name: string;
-  representative_id: number;
-  category: {
-    id: number;
-    title: string;
-  };
-  vendor: string;
-  variation_count: number;
-  price_range: {
-    min: number;
-    max: number;
-  };
-  total_stock: number;
-  primary_image: string | null;
-  // UI legacy support (optional/deprecated)
-  variants?: ProductVariant[];
+  baseName: string;
+  totalVariants: number;
+  variants: ProductVariant[];
+  primaryImage: string | null;
+  categoryPath: string;
+  category_id: number; // required
+  hasVariations: boolean;
+  // Optional UI metadata (not required by backend)
+  vendorId?: number;
+  vendorName?: string | null;
+  sellingPrice?: number | null;
+  inStock?: boolean | null;
+  stockQuantity?: number | null;
 }
 
 

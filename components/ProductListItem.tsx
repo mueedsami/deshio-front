@@ -80,8 +80,8 @@ export default function ProductListItem({
     }
   };
 
-   // Group variants by color for display
-  const variantsByColor = (productGroup.variants || []).reduce((acc, variant) => {
+  // Group variants by color for display
+  const variantsByColor = productGroup.variants.reduce((acc, variant) => {
     const color = variant.color || 'No Color';
     if (!acc[color]) {
       acc[color] = [];
@@ -90,10 +90,8 @@ export default function ProductListItem({
     return acc;
   }, {} as Record<string, ProductVariant[]>);
 
-   const hasMultipleVariants = productGroup.variation_count > 1;
-  const firstVariant = (productGroup.variants && productGroup.variants.length > 0) 
-    ? productGroup.variants[0] 
-    : { id: productGroup.representative_id, name: productGroup.base_name, sku: productGroup.sku, image: productGroup.primary_image };
+  const hasMultipleVariants = productGroup.hasVariations;
+  const firstVariant = productGroup.variants[0];
 
   return (
     <>
@@ -104,12 +102,12 @@ export default function ProductListItem({
           type="button"
           onClick={() => onView(firstVariant.id)}
           className="flex-shrink-0 rounded-lg overflow-hidden hover:opacity-80 transition-opacity group"
-          aria-label={`View ${productGroup.base_name}`}
+          aria-label={`View ${productGroup.baseName}`}
         >
           <div className="relative">
             <img
-              src={productGroup.primary_image || ERROR_IMG_SRC}
-              alt={productGroup.base_name}
+              src={productGroup.primaryImage || ERROR_IMG_SRC}
+              alt={productGroup.baseName}
               className="w-24 h-24 object-cover group-hover:scale-105 transition-transform duration-200"
               onError={(e) => {
                 e.currentTarget.src = ERROR_IMG_SRC;
@@ -117,7 +115,7 @@ export default function ProductListItem({
             />
             {hasMultipleVariants && (
               <div className="absolute top-1 right-1 bg-gray-900 text-white text-xs font-bold px-1.5 py-0.5 rounded">
-                {productGroup.variation_count}
+                {productGroup.totalVariants}
               </div>
             )}
           </div>
@@ -128,39 +126,30 @@ export default function ProductListItem({
           <div className="flex items-start justify-between gap-3 mb-2">
             <div className="flex-1 min-w-0">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white truncate mb-1 hover:text-gray-700 dark:hover:text-gray-300 cursor-pointer" onClick={() => onView(firstVariant.id)}>
-                {productGroup.base_name}
+                {productGroup.baseName}
               </h3>
               <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 mb-2">
-                <span className="truncate">{productGroup.category?.title}</span>
-                {productGroup.vendor && (
-                  <>
-                    <span className="text-gray-300 dark:text-gray-600">•</span>
-                    <span className="truncate">{productGroup.vendor}</span>
-                  </>
-                )}
+                <span className="truncate">{productGroup.categoryPath}</span>
               </div>
             
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
                 <span
                   className={`inline-flex items-center px-2.5 py-1 rounded-md font-medium ${
-                    productGroup.total_stock === 0
+                    productGroup.inStock === false || productGroup.stockQuantity === 0
                       ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                      : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                      : productGroup.sellingPrice != null
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
+                        : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  {productGroup.total_stock === 0
-                    ? 'Out of stock'
-                    : productGroup.price_range.min === productGroup.price_range.max
-                      ? `৳${Number(productGroup.price_range.min).toFixed(2)}`
-                      : `৳${Number(productGroup.price_range.min).toFixed(2)} - ৳${Number(productGroup.price_range.max).toFixed(2)}`}
+                  {productGroup.inStock === false || productGroup.stockQuantity === 0
+                    ? 'Not in stock'
+                    : productGroup.sellingPrice != null
+                      ? `৳${Number(productGroup.sellingPrice).toFixed(2)}`
+                      : 'Checking stock...'}
                 </span>
-                {productGroup.total_stock > 0 && (
-                  <span className="text-gray-500 dark:text-gray-400">
-                    Qty: {productGroup.total_stock}
-                  </span>
-                )}
               </div>
-            </div>
+</div>
           </div>
           
           <div className="flex flex-wrap items-center gap-2">
@@ -169,7 +158,7 @@ export default function ProductListItem({
             </span>
             {hasMultipleVariants && (
               <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-300 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400">
-                 {productGroup.variation_count} Variant{productGroup.variation_count > 1 ? 's' : ''}
+                 {productGroup.totalVariants} Variant{productGroup.totalVariants > 1 ? 's' : ''}
               </span>
             )}
           </div>
@@ -244,19 +233,15 @@ export default function ProductListItem({
                 <div className="my-1 border-t border-gray-200 dark:border-gray-700"></div>
                 <button
                   onClick={() => {
-                    if (confirm(`Delete ${hasMultipleVariants ? 'all variants of' : ''} "${productGroup.base_name}"?${hasMultipleVariants ? ` This will delete ${productGroup.variation_count} products.` : ''}`)) {
-                      if (productGroup.variants && productGroup.variants.length > 0) {
-                        productGroup.variants.forEach(v => onDelete(v.id));
-                      } else {
-                        onDelete(productGroup.representative_id);
-                      }
+                    if (confirm(`Delete ${hasMultipleVariants ? 'all variants of' : ''} "${productGroup.baseName}"?${hasMultipleVariants ? ` This will delete ${productGroup.totalVariants} products.` : ''}`)) {
+                      productGroup.variants.forEach(v => onDelete(v.id));
                     }
                     setShowDropdown(false);
                     setTimeout(() => setIsDropdownMounted(false), 200);
                   }}
                   className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                 >
-                  Delete {hasMultipleVariants ? `All (${productGroup.variation_count})` : ''}
+                  Delete {hasMultipleVariants ? `All (${productGroup.totalVariants})` : ''}
                 </button>
               </div>,
               document.body
@@ -269,7 +254,7 @@ export default function ProductListItem({
         <div className="border-t border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-900/50">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-              Available Variations ({productGroup.variation_count})
+              Available Variations ({productGroup.totalVariants})
             </h4>
             <button
               onClick={() => onAddVariation(productGroup)}
