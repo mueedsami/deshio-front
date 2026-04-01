@@ -40,13 +40,12 @@ export default function ProductPage() {
 
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [productGroups, setProductGroups] = useState<ProductGroup[]>([]);
+  const [totalGroups, setTotalGroups] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [categories, setCategories] = useState<Category[]>([]);
   const [vendorsById, setVendorsById] = useState<Record<number, string>>({});
-  const [catalogMetaById, setCatalogMetaById] = useState<Record<number, { selling_price: number | null; in_stock: boolean; stock_quantity: number }>>({});
   const [searchQuery, setSearchQuery] = useState('');
-  const [serverSearchIds, setServerSearchIds] = useState<number[] | null>(null);
-  const [serverSearchLoading, setServerSearchLoading] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
@@ -57,7 +56,7 @@ export default function ProductPage() {
   const [maxPrice, setMaxPrice] = useState<string>('');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
-  const itemsPerPage = 10;
+  const itemsPerPage = 20; // Increased to be more efficient with server pagination
 
   const SOCIAL_COMMERCE_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 
@@ -190,57 +189,37 @@ const goToPage = useCallback(
     setQueuedForSocialCount(getQueuedUnitsCount(queue));
   }, [isSocialQueueMode]);
 
-  // ✅ Backend-powered multi-language search (Bangla/Roman/English + fuzzy)
+  // ✅ Server-side grouped search with debounce
   useEffect(() => {
-    const q = searchQuery.trim();
-    if (!q || q.length < 2) {
-      setServerSearchIds(null);
-      return;
-    }
+    const handler = setTimeout(() => {
+      fetchData();
+    }, 400);
 
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      try {
-        setServerSearchLoading(true);
-        const hits = await productService.advancedSearchAll(
-          {
-            query: q,
-            is_archived: false,
-            enable_fuzzy: true,
-            fuzzy_threshold: 60,
-            search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-            per_page: 50,
-          },
-          { max_items: 12000 }
-        );
-        if (!cancelled) {
-          setServerSearchIds(Array.isArray(hits) && hits.length > 0 ? hits.map((h: any) => h.id) : null);
-        }
-      } catch (e) {
-        console.warn('Server search failed, falling back to local filter', e);
-        if (!cancelled) setServerSearchIds(null);
-      } finally {
-        if (!cancelled) setServerSearchLoading(false);
-      }
-    }, 350);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [searchQuery]);
+    return () => clearTimeout(handler);
+  }, [searchQuery, selectedCategory, selectedVendor, minPrice, maxPrice, currentPage]);
 
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const [productsData, categoriesData, vendorsData] = await Promise.all([
-        productService.getAllAll({ is_archived: false }, { max_items: 200000 }),
-        // Only count/show active categories in product list stats & filters
+      // Fetch groups and supporting data
+      const [groupsResponse, categoriesData, vendorsData] = await Promise.all([
+        productService.searchGrouped({
+          query: searchQuery || undefined,
+          category_id: selectedCategory ? Number(selectedCategory) : undefined,
+          vendor_id: selectedVendor ? Number(selectedVendor) : undefined,
+          min_price: minPrice ? Number(minPrice) : undefined,
+          max_price: maxPrice ? Number(maxPrice) : undefined,
+          page: currentPage,
+          per_page: itemsPerPage,
+          is_archived: false,
+        }),
         categoryService.getTree(true),
         vendorService.getAll(),
       ]);
 
-      setProducts(Array.isArray(productsData) ? productsData : []);
+      setTotalGroups(groupsResponse?.meta?.total || 0);
+      setTotalPages(groupsResponse?.meta?.last_page || 1);
+
       setCategories(Array.isArray(categoriesData) ? categoriesData : []);
       const vendorsArr: Vendor[] = Array.isArray(vendorsData) ? vendorsData : [];
       const vmap: Record<number, string> = {};
@@ -251,442 +230,40 @@ const goToPage = useCallback(
       setVendorsList(
         vendorsArr
           .filter((v) => v && v.is_active)
-          .slice()
           .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
       );
     } catch (err) {
       console.error('Error fetching data:', err);
       setToast({ message: 'Failed to load products', type: 'error' });
-      setProducts([]);
-      setCategories([]);
-      setVendorsById({});
-      setVendorsList([]);
-      setCatalogMetaById({});
     } finally {
       setIsLoading(false);
     }
   };
 
+  // Search filter - Now mostly handled server-side, but keep for any edge cases if needed
+  // In the new model, we rely on server-side search which is triggered by the useEffect above.
+  
   const handleRefresh = async () => {
     await fetchData();
     setToast({ message: 'Products refreshed successfully', type: 'success' });
   };
 
-  const getCategoryPath = (categoryId: number): string => {
-    const findPath = (cats: Category[], id: number, path: string[] = []): string[] | null => {
-      for (const cat of cats) {
-        const newPath = [...path, cat.title];
-        if (String(cat.id) === String(id)) {
-          return newPath;
-        }
-        const childCategories = cat.children || cat.all_children || [];
-        if (childCategories.length > 0) {
-          const found = findPath(childCategories, id, newPath);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-
-    const path = findPath(categories, categoryId);
-    return path ? path.join(' > ') : 'Uncategorized';
-  };
-
-  /**
-   * Robustly extract variant attributes.
-   * - Prefer custom_fields (backend truth)
-   * - Fallback to parsing the product name (common pattern: "Base - Color - Size")
-   */
-  const parseVariantFromName = (name: string): { base?: string; color?: string; size?: string } => {
-    const raw = (name || '').trim();
-    if (!raw) return {};
-
-    // Split by hyphen with optional spaces around it
-    const parts = raw.split(/\s*-\s*/).map(p => p.trim()).filter(Boolean);
-    if (parts.length >= 3) {
-      const size = parts[parts.length - 1];
-      const color = parts[parts.length - 2];
-      const base = parts.slice(0, parts.length - 2).join(' - ').trim();
-      return { base, color, size };
-    }
-
-    if (parts.length === 2) {
-      const base = parts[0];
-      const maybe = parts[1];
-      const looksLikeSize = /^(\d{1,3}|xs|s|m|l|xl|xxl|xxxl)$/i.test(maybe);
-      return looksLikeSize ? { base, size: maybe } : { base, color: maybe };
-    }
-
-    return { base: raw };
-  };
-
-  const getColorAndSize = (product: Product): { color?: string; size?: string } => {
-    // 1) Prefer explicit custom fields when available
-    const colorField = product.custom_fields?.find(cf =>
-      String(cf.field_title || '').trim().toLowerCase() === 'color'
-    );
-    const sizeField = product.custom_fields?.find(cf =>
-      String(cf.field_title || '').trim().toLowerCase() === 'size'
-    );
-
-    const color = colorField?.value;
-    const size = sizeField?.value;
-
-    if (color || size) {
-      return { color, size };
-    }
-
-    // 2) Fallback: infer from the name
-    const parsed = parseVariantFromName(product.name);
-    return { color: parsed.color, size: parsed.size };
-  };
-
-  /**
-   * Base name for a single product.
-   * Uses custom_fields if present; otherwise parses the name.
-   */
-  const getBaseName = (product: Product): string => {
-    const { color, size } = getColorAndSize(product);
-    const original = (product.name || '').trim();
-    let name = original;
-
-    // If the backend has custom fields, we can safely strip suffixes.
-    if (color && size) {
-      const pattern = new RegExp(`\\s*-\\s*${String(color).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\s*-\\s*${String(size).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
-      name = name.replace(pattern, '');
-    } else if (color) {
-      const pattern = new RegExp(`\\s*-\\s*${String(color).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
-      name = name.replace(pattern, '');
-    } else if (size) {
-      const pattern = new RegExp(`\\s*-\\s*${String(size).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}$`, 'i');
-      name = name.replace(pattern, '');
-    } else {
-      // Fallback: parse "Base - Color - Size" naming
-      const parsed = parseVariantFromName(original);
-      if (parsed.base) name = parsed.base;
-    }
-
-    return (name || original).trim();
-  };
-
-  /**
-   * Determine a stable base name for a whole SKU group.
-   * If variants use a consistent naming scheme ("Base - Color - Size"),
-   * we pick the most common parsed base across variants.
-   */
-  const getGroupBaseName = (variants: { name: string }[], fallbackName: string) => {
-    const bases = variants
-      .map(v => (parseVariantFromName(v.name).base || '').trim())
-      .filter(Boolean);
-    if (bases.length === 0) return fallbackName;
-
-    const counts = new Map<string, number>();
-    const originalMap = new Map<string, string>();
-    bases.forEach(b => {
-      const key = b.toLowerCase();
-      counts.set(key, (counts.get(key) || 0) + 1);
-      if (!originalMap.has(key)) originalMap.set(key, b);
-    });
-
-    // Pick most frequent; tie-breaker: shortest (cleanest)
-    let bestKey = '';
-    let bestCount = -1;
-    let bestLen = Infinity;
-    for (const [key, c] of counts.entries()) {
-      const candidate = originalMap.get(key) || key;
-      const len = candidate.length;
-      if (c > bestCount || (c === bestCount && len < bestLen)) {
-        bestKey = key;
-        bestCount = c;
-        bestLen = len;
-      }
-    }
-    return (originalMap.get(bestKey) || fallbackName).trim();
-  };
-
-  // Enhanced image URL processing
-  const getImageUrl = (imagePath: string | null | undefined): string | null => {
-    if (!imagePath) return null;
-    
-    // If it's already a full URL, return as-is
-    if (imagePath.startsWith('http')) return imagePath;
-    
-    // If it's a storage path, construct the full URL
-    const baseUrl = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || '';
-    return `${baseUrl}/storage/${imagePath}`;
-  };
-
-  // Group products with better image handling
-  const productGroups = useMemo((): ProductGroup[] => {
-    const groups = new Map<string, ProductGroup>();
-
-    products.forEach((product) => {
-      const sku = product.sku;
-      const { color, size } = getColorAndSize(product);
-      const baseName = getBaseName(product);
-      
-      // Find primary image or use first active image
-      const primaryImage = product.images?.find(img => img.is_primary && img.is_active) || 
-                          product.images?.find(img => img.is_active) ||
-                          product.images?.[0];
-      
-      const imageUrl = primaryImage ? getImageUrl(primaryImage.image_path) : null;
-
-      // Determine grouping key
-      // ✅ Group by SKU so "Air Jordan - Black - 39" and "Air Jordan - Red - 40"
-      // show as ONE product with variations.
-      const groupKey = (sku && String(sku).trim()) ? String(sku).trim() : `product-${product.id}`;
-
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, {
-          sku: String(sku || ''),
-          baseName,
-          totalVariants: 0,
-          variants: [],
-          primaryImage: imageUrl,
-          categoryPath: getCategoryPath(product.category_id),
-          category_id: product.category_id,
-          hasVariations: false,
-          vendorId: product.vendor_id,
-          vendorName: vendorsById[product.vendor_id] ?? null,
-        });
-      }
-
-      const group = groups.get(groupKey)!;
-      
-      // Get variant-specific image
-      const variantPrimaryImage = product.images?.find(img => img.is_primary && img.is_active) ||
-                                  product.images?.find(img => img.is_active) ||
-                                  product.images?.[0];
-      const variantImageUrl = variantPrimaryImage ? getImageUrl(variantPrimaryImage.image_path) : null;
-
-      group.variants.push({
-        id: product.id,
-        name: product.name,
-        sku: product.sku,
-        color,
-        size,
-        image: variantImageUrl,
-      });
-    });
-
-    // Calculate variants and mark groups with variations
-    groups.forEach(group => {
-      // Base name should be derived from the whole group, not only the first product.
-      group.baseName = getGroupBaseName(group.variants, group.baseName);
-
-      // Any group with more than 1 item should be treated as having variations
-      group.totalVariants = group.variants.length;
-      group.hasVariations = group.variants.length > 1;
-
-      // If the group's primary image is missing, pick first available variant image
-      if (!group.primaryImage) {
-        group.primaryImage = group.variants.find(v => v.image)?.image || null;
-      }
-    });
-
-    return Array.from(groups.values());
-  }, [products, categories, vendorsById]);
-
-  // Enhanced filtering with category + vendor + search support (price is handled separately)
-  const baseFilteredGroups = useMemo(() => {
-    let filtered = productGroups;
-
-    // Category filter
-    if (selectedCategory) {
-      filtered = filtered.filter((group) => String(group.category_id) === selectedCategory);
-    }
-
-    // Vendor filter
-    if (selectedVendor) {
-      filtered = filtered.filter((group) => String(group.vendorId ?? '') === selectedVendor);
-    }
-
-    // Search filter
-    const q = searchQuery.toLowerCase().trim();
-    if (q) {
-      // If backend search has returned IDs, prefer it (fixes roman->Bangla mismatch).
-      if (Array.isArray(serverSearchIds)) {
-        const idSet = new Set(serverSearchIds);
-        filtered = filtered.filter((group) => group.variants.some((v) => idSet.has(v.id)));
-      } else {
-        // Fallback: local string filter
-        filtered = filtered.filter((group) => {
-          const nameMatch = group.baseName.toLowerCase().includes(q);
-          const skuMatch = group.sku.toLowerCase().includes(q);
-          const categoryMatch = group.categoryPath.toLowerCase().includes(q);
-          const vendorMatch = (group.vendorName || '').toLowerCase().includes(q);
-          const colorMatch = group.variants.some((v) => v.color?.toLowerCase().includes(q));
-          const sizeMatch = group.variants.some((v) => v.size?.toLowerCase().includes(q));
-
-          return nameMatch || skuMatch || categoryMatch || vendorMatch || colorMatch || sizeMatch;
-        });
-      }
-    }
-
-    return filtered;
-  }, [productGroups, searchQuery, selectedCategory, selectedVendor, serverSearchIds]);
-
-  const priceFilterActive = Boolean(minPrice || maxPrice);
-
-  // If price filter is active, fetch catalog meta for all candidate items so filtering is accurate
-  useEffect(() => {
-    if (!priceFilterActive) return;
-
-    const ids = baseFilteredGroups
-      .map((g) => g?.variants?.[0]?.id)
-      .filter((id): id is number => typeof id === 'number');
-
-    const missing = ids.filter((id) => !catalogMetaById[id]);
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-
-    const run = async () => {
-      const chunkSize = 4;
-
-      for (let i = 0; i < missing.length; i += chunkSize) {
-        if (cancelled) return;
-        const chunk = missing.slice(i, i + chunkSize);
-
-        const results = await Promise.all(
-          chunk.map(async (id) => {
-            try {
-              const detail: any = await catalogService.getProduct(id);
-              return {
-                id,
-                selling_price: typeof detail?.selling_price === 'number' ? detail.selling_price : null,
-                in_stock: Boolean(detail?.in_stock),
-                stock_quantity: typeof detail?.stock_quantity === 'number' ? detail.stock_quantity : 0,
-              };
-            } catch (e) {
-              return null;
-            }
-          })
-        );
-
-        if (cancelled) return;
-
-        setCatalogMetaById((prev) => {
-          const next = { ...prev };
-          results.forEach((r) => {
-            if (r) next[r.id] = r;
-          });
-          return next;
-        });
-      }
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [priceFilterActive, baseFilteredGroups, catalogMetaById]);
-
-  // Apply price filter using cached catalog meta
-  const filteredGroups = useMemo(() => {
-    if (!priceFilterActive) return baseFilteredGroups;
-
-    const min = minPrice ? Number(minPrice) : null;
-    const max = maxPrice ? Number(maxPrice) : null;
-
-    return baseFilteredGroups.filter((group) => {
-      const id = group?.variants?.[0]?.id;
-      if (typeof id !== 'number') return false;
-
-      const meta = catalogMetaById[id];
-      if (!meta || typeof meta.selling_price !== 'number') return false;
-
-      const p = meta.selling_price;
-      if (min !== null && Number.isFinite(min) && p < min) return false;
-      if (max !== null && Number.isFinite(max) && p > max) return false;
-      return true;
-    });
-  }, [baseFilteredGroups, priceFilterActive, minPrice, maxPrice, catalogMetaById]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredGroups.length / itemsPerPage));
-
-  // Clamp page if filters reduce results
+  // Clamp page if filters reduce results (handled by server now, but good practice)
   useEffect(() => {
     if (currentPage > totalPages) {
-      goToPage(totalPages);
+      goToPage(totalPages || 1);
     }
   }, [currentPage, totalPages, goToPage]);
-  const paginatedGroups = filteredGroups.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
 
-  // Fetch selling price + stock info (only for visible items, cached)
-  useEffect(() => {
-    const ids = paginatedGroups
-      .map((g) => g?.variants?.[0]?.id)
-      .filter((id): id is number => typeof id === 'number');
+  const paginatedGroups = productGroups;
 
-    const missing = ids.filter((id) => !catalogMetaById[id]);
-    if (missing.length === 0) return;
-
-    let cancelled = false;
-
-    const run = async () => {
-      const chunkSize = 4;
-
-      for (let i = 0; i < missing.length; i += chunkSize) {
-        const chunk = missing.slice(i, i + chunkSize);
-
-        const results = await Promise.all(
-          chunk.map(async (id) => {
-            try {
-              const detail: any = await catalogService.getProduct(id);
-              const p = detail?.product ?? detail?.data?.product ?? detail?.data ?? detail;
-
-              const selling = Number(p?.selling_price ?? p?.sellingPrice ?? NaN);
-              const inStock = Boolean(p?.in_stock ?? p?.inStock ?? false);
-              const stockQty = Number(p?.stock_quantity ?? p?.stockQuantity ?? 0);
-
-              if (!Number.isFinite(selling) && inStock) {
-                // If backend doesn't provide selling price, treat as unknown
-                return { id, meta: { selling_price: null, in_stock: inStock, stock_quantity: stockQty } };
-              }
-
-              return {
-                id,
-                meta: {
-                  selling_price: Number.isFinite(selling) ? selling : null,
-                  in_stock: inStock,
-                  stock_quantity: Number.isFinite(stockQty) ? stockQty : 0,
-                },
-              };
-            } catch (e) {
-              return null;
-            }
-          })
-        );
-
-        if (cancelled) return;
-
-        setCatalogMetaById((prev) => {
-          const next = { ...prev };
-          results.forEach((r) => {
-            if (r) next[r.id] = r.meta;
-          });
-          return next;
-        });
-      }
-    };
-
-    run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [paginatedGroups, catalogMetaById]);
+  // Fetching individual stock info is now redundant as server returns total_stock 
+  // and variations. But we might need individual variant details for selection modals.
+  // We'll lazy load them if needed.
 
   const handleDelete = async (id: number) => {
     try {
       await productService.delete(id);
-      setProducts((prev) => prev.filter((p) => p.id !== id));
       setToast({ message: 'Product deleted successfully', type: 'success' });
       
       // Refresh data to update counts
@@ -728,20 +305,8 @@ const goToPage = useCallback(
   };
 
   const handleAddVariation = (group: ProductGroup) => {
-    // Clear any existing session data
-    sessionStorage.removeItem('editProductId');
-    sessionStorage.removeItem('productMode');
-    sessionStorage.removeItem('baseSku');
-    sessionStorage.removeItem('baseName');
-    sessionStorage.removeItem('categoryId');
-    
-    // Store variation data in sessionStorage
-    sessionStorage.setItem('productMode', 'addVariation');
-    sessionStorage.setItem('baseSku', group.sku);
-    sessionStorage.setItem('baseName', group.baseName);
-    sessionStorage.setItem('categoryId', group.category_id.toString());
-    
-    router.push('/product/add');
+    // Navigate to create page with SKU prefilled as a variation
+    router.push(`/product/create?sku=${group.sku}&variation=true`);
   };
 
   const handleReturnToSocialCommerce = () => {
@@ -831,6 +396,8 @@ const goToPage = useCallback(
     return flatten(categories);
   }, [categories]);
 
+  const hasActiveFilters = Boolean(searchQuery || selectedCategory || selectedVendor || minPrice || maxPrice);
+
   const clearFilters = () => {
     setSearchQuery('');
     setSelectedCategory('');
@@ -841,7 +408,11 @@ const goToPage = useCallback(
     updateQueryParams({ q: null, category: null, vendor: null, minPrice: null, maxPrice: null, page: '1' });
   };
 
-  const hasActiveFilters = Boolean(searchQuery || selectedCategory || selectedVendor || minPrice || maxPrice);
+  const stats = {
+    totalGroups,
+    displayedCount: productGroups.length,
+    totalPages
+  };
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -945,17 +516,17 @@ const goToPage = useCallback(
                 {/* Stats Bar */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Products</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{products.length}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Total Groups</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{totalGroups}</p>
                   </div>
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Product Groups</p>
-                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{productGroups.length}</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Items per Page</p>
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">{itemsPerPage}</p>
                   </div>
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">With Variations</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">Current Page</p>
                     <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                      {productGroups.filter(g => g.hasVariations).length}
+                      {currentPage} of {totalPages}
                     </p>
                   </div>
                   <div className="bg-white dark:bg-gray-800 rounded-lg p-4 border border-gray-200 dark:border-gray-700 shadow-sm">
@@ -1117,7 +688,7 @@ const goToPage = useCallback(
                     <p className="text-gray-500 dark:text-gray-400">Loading products...</p>
                   </div>
                 </div>
-              ) : filteredGroups.length === 0 ? (
+              ) : productGroups.length === 0 ? (
                 <div className="bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600 p-12 text-center shadow-sm">
                   <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
                     <Search className="w-8 h-8 text-gray-400" />
@@ -1151,13 +722,8 @@ const goToPage = useCallback(
                 <div className={viewMode === 'grid' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-4'}>
                   {paginatedGroups.map((group) => (
                     <ProductListItem
-                      key={`${group.sku}-${group.variants[0].id}`}
-                      productGroup={{
-                        ...group,
-                        sellingPrice: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.selling_price ?? null : null,
-                        inStock: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.in_stock ?? null : null,
-                        stockQuantity: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.stock_quantity ?? null : null,
-                      }}
+                      key={`${group.sku}-${group.representative_id}`}
+                      productGroup={group}
                       onDelete={handleDelete}
                       onEdit={handleEdit}
                       onView={handleView}
@@ -1173,7 +739,11 @@ const goToPage = useCallback(
               {totalPages > 1 && (
                 <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Showing <span className="font-medium text-gray-900 dark:text-white">{((currentPage - 1) * itemsPerPage) + 1}</span> to <span className="font-medium text-gray-900 dark:text-white">{Math.min(currentPage * itemsPerPage, filteredGroups.length)}</span> of <span className="font-medium text-gray-900 dark:text-white">{filteredGroups.length}</span> groups
+                    Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
+                    <span className="font-medium">
+                      {Math.min(currentPage * itemsPerPage, totalGroups)}
+                    </span>{' '}
+                    of <span className="font-medium">{totalGroups}</span> products
                   </p>
                   <div className="flex gap-2">
                     <button

@@ -655,6 +655,38 @@ export const productService = {
       return { data: [], total: 0 };
     }
   },
+
+  /** Improved grouped search by SKU */
+  async searchGrouped(params: {
+    query?: string;
+    category_id?: string | number;
+    vendor_id?: string | number;
+    min_price?: string | number;
+    max_price?: string | number;
+    is_archived?: boolean;
+    page?: number;
+    per_page?: number;
+    group_by_sku?: boolean;
+  }): Promise<{ 
+    items: ProductGroup[]; 
+    pagination: { total: number; current_page: number; last_page: number; per_page: number } 
+  }> {
+    try {
+      const response = await axiosInstance.post('/products/search', {
+        ...params,
+        group_by_sku: params.group_by_sku ?? true
+      });
+      const result = response.data;
+      if (!result.success) throw new Error(result.message || 'Search failed');
+      return {
+        items: result.data.items || [],
+        pagination: result.data.pagination
+      };
+    } catch (error: any) {
+      console.error('Grouped search error:', error);
+      return { items: [], pagination: { total: 0, current_page: 1, last_page: 1, per_page: 20 } };
+    }
+  },
 };
 
 export default productService;
