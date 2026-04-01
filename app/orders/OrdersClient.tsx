@@ -945,9 +945,17 @@ const derivePaymentStatus = (order: any) => {
       notes: order.notes || '',
       shipping_address: order.shipping_address ?? null,
 
-            createdAt: order.created_at,
+      createdAt: order.created_at,
       orderDateRaw: order.order_date,
     };
+  };
+
+  const getInstallmentNextCollectionDate = (order: Order) => {
+    const raw = order.installmentInfo?.next_payment_due;
+    if (!raw) return '—';
+
+    const dt = new Date(raw);
+    return Number.isNaN(dt.getTime()) ? String(raw) : dt.toLocaleDateString('en-GB');
   };
 
   const recalcOrderTotals = (order: Order): Order => {
@@ -1110,7 +1118,6 @@ const derivePaymentStatus = (order: any) => {
 
       if (viewMode === 'installments') {
         const inst = await orderService.getAll({
-          order_type: 'counter',
           installment_only: true,
           sort_by: 'next_payment_due',
           sort_order: 'asc',
@@ -3187,7 +3194,7 @@ const derivePaymentStatus = (order: any) => {
 
                 {viewMode === 'installments' && (
                   <span className="text-[10px] text-gray-600 dark:text-gray-400 ml-1">
-                    Showing counter installment orders only
+                    Showing installment orders only
                   </span>
                 )}
               </div>
@@ -3517,6 +3524,11 @@ const derivePaymentStatus = (order: any) => {
                               {order.amounts.due > 0 && (
                                 <p className="text-[11px] text-red-600 dark:text-red-400">Due: ৳{order.amounts.due.toFixed(2)}</p>
                               )}
+                              {viewMode === 'installments' && order.isInstallment && (
+                                <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-0.5">
+                                  Next Collection: {getInstallmentNextCollectionDate(order)}
+                                </p>
+                              )}
                             </div>
                           </div>
 
@@ -3581,6 +3593,11 @@ const derivePaymentStatus = (order: any) => {
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Date
                         </th>
+                        {viewMode === 'installments' && (
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
+                            Next Collection
+                          </th>
+                        )}
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase">
                           Status
                         </th>
@@ -3669,6 +3686,14 @@ const derivePaymentStatus = (order: any) => {
                             <p className="text-sm text-gray-700 dark:text-gray-300">{order.date}</p>
                           </td>
 
+                          {viewMode === 'installments' && (
+                            <td className="px-4 py-3">
+                              <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                                {getInstallmentNextCollectionDate(order)}
+                              </p>
+                            </td>
+                          )}
+
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-1">
                               {getOrderStatusBadge(order.status)}
@@ -3684,7 +3709,6 @@ const derivePaymentStatus = (order: any) => {
                             {order.isInstallment && (
                               <p className="text-[10px] text-amber-700 dark:text-amber-300">
                                 EMI {Number(order.installmentInfo?.paid_installments ?? 0)}/{Number(order.installmentInfo?.total_installments ?? 0) || '-'}
-                                {order.installmentInfo?.next_payment_due ? ` • Next: ${new Date(order.installmentInfo.next_payment_due).toLocaleDateString('en-GB')}` : ''}
                               </p>
                             )}
                           </td>
