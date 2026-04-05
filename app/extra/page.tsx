@@ -47,6 +47,9 @@ export default function DefectsPage() {
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [expandedDefect, setExpandedDefect] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'defects' | 'used'>('all');
+  const [extraItemsSearch, setExtraItemsSearch] = useState('');
+  const [currentExtraItemsPage, setCurrentExtraItemsPage] = useState(1);
+  const [extraItemsPerPage, setExtraItemsPerPage] = useState(10);
   
   // Defect Identification
   const [barcodeInput, setBarcodeInput] = useState('');
@@ -396,11 +399,19 @@ export default function DefectsPage() {
   };
 
   const toggleSelectAll = () => {
-    if (selectedDefectsForVendor.length === pendingDefects.length) {
-      setSelectedDefectsForVendor([]);
-    } else {
-      setSelectedDefectsForVendor(pendingDefects.map(d => d.id));
-    }
+    const visibleIds = filteredPendingDefects.map(d => d.id);
+
+    if (visibleIds.length === 0) return;
+
+    setSelectedDefectsForVendor((prev) => {
+      const allVisibleSelected = visibleIds.every((id) => prev.includes(id));
+
+      if (allVisibleSelected) {
+        return prev.filter((id) => !visibleIds.includes(id));
+      }
+
+      return Array.from(new Set([...prev, ...visibleIds]));
+    });
   };
 
   const handleReturnToVendor = async (vendorId: number, notes: string) => {
@@ -475,9 +486,9 @@ export default function DefectsPage() {
   const pendingDefects = defects.filter(d => {
     const isPending = d.status === 'pending' || d.status === 'approved';
     if (!isPending) return false;
-    
+
     if (filterType === 'all') return true;
-    
+
     const hasUsedTag = d.returnReason?.includes('USED_ITEM');
     // An item is a defect if:
     // 1. It has "DEFECT" tag in description, OR
@@ -485,15 +496,56 @@ export default function DefectsPage() {
     // 3. It doesn't have USED_ITEM tag and has some description
     const hasDefectTag = d.returnReason?.includes('DEFECT') || 
                          (d.returnReason && !d.returnReason.startsWith('USED_ITEM') && d.returnReason.trim().length > 0);
-    
+
     if (filterType === 'used') return hasUsedTag;
     if (filterType === 'defects') return hasDefectTag;
-    
+
     return true;
   });
-  
+
+  const normalizedExtraItemsSearch = extraItemsSearch.trim().toLowerCase();
+
+  const filteredPendingDefects = pendingDefects.filter((d) => {
+    if (!normalizedExtraItemsSearch) return true;
+
+    const searchableFields = [
+      d.productName,
+      d.barcode,
+      d.store,
+      d.addedBy,
+      d.returnReason,
+      d.productId?.toString(),
+    ];
+
+    return searchableFields.some((field) =>
+      field?.toString().toLowerCase().includes(normalizedExtraItemsSearch)
+    );
+  });
+
+  const totalExtraItemsPages = Math.max(1, Math.ceil(filteredPendingDefects.length / extraItemsPerPage));
+  const safeCurrentExtraItemsPage = Math.min(currentExtraItemsPage, totalExtraItemsPages);
+  const extraItemsStartIndex = (safeCurrentExtraItemsPage - 1) * extraItemsPerPage;
+  const paginatedPendingDefects = filteredPendingDefects.slice(
+    extraItemsStartIndex,
+    extraItemsStartIndex + extraItemsPerPage
+  );
+
+  const allVisibleExtraItemsSelected =
+    filteredPendingDefects.length > 0 &&
+    filteredPendingDefects.every((d) => selectedDefectsForVendor.includes(d.id));
+
   const soldDefects = defects.filter(d => d.status === 'sold');
   const returnedDefects = defects.filter(d => d.status === 'returned_to_vendor');
+
+  useEffect(() => {
+    setCurrentExtraItemsPage(1);
+  }, [filterType, selectedStore, extraItemsSearch, extraItemsPerPage]);
+
+  useEffect(() => {
+    if (currentExtraItemsPage > totalExtraItemsPages) {
+      setCurrentExtraItemsPage(totalExtraItemsPages);
+    }
+  }, [currentExtraItemsPage, totalExtraItemsPages]);
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -696,7 +748,7 @@ export default function DefectsPage() {
                     <div className="p-4 border-b border-gray-200 dark:border-gray-700">
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="font-semibold text-gray-900 dark:text-white">
-                          Extra Items ({pendingDefects.length})
+                          Extra Items ({filteredPendingDefects.length})
                         </h3>
                         <div className="flex items-center gap-2">
                           {selectedDefectsForVendor.length > 0 && (
@@ -749,25 +801,25 @@ export default function DefectsPage() {
                           </button>
                         </div>
                         
-                        {pendingDefects.length > 0 && (
+                        {filteredPendingDefects.length > 0 && (
                           <button
                             onClick={toggleSelectAll}
                             className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium"
                           >
-                            {selectedDefectsForVendor.length === pendingDefects.length ? 'Deselect All' : 'Select All'}
+                            {allVisibleExtraItemsSelected ? 'Deselect All' : 'Select All'}
                           </button>
                         )}
                       </div>
                     </div>
 
-                    <div className="divide-y divide-gray-200 dark:divide-gray-700">
-                      {pendingDefects.length === 0 ? (
+                    <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[70vh] overflow-y-auto">
+                      {filteredPendingDefects.length === 0 ? (
                         <div className="p-8 text-center">
                           <Package className="w-12 h-12 mx-auto mb-2 text-gray-400" />
                           <p className="text-gray-500 dark:text-gray-400">No extra items found</p>
                         </div>
                       ) : (
-                        pendingDefects.map((defect) => {
+                        paginatedPendingDefects.map((defect) => {
                           const hasUsedTag = defect.returnReason?.includes('USED_ITEM');
                           const hasDefectTag = defect.returnReason?.includes('DEFECT') || 
                                               (defect.returnReason && !defect.returnReason.startsWith('USED_ITEM') && defect.returnReason.trim().length > 0);
@@ -944,6 +996,33 @@ export default function DefectsPage() {
                         })
                       )}
                     </div>
+
+                    {filteredPendingDefects.length > extraItemsPerPage && (
+                      <div className="flex flex-col gap-3 border-t border-gray-200 dark:border-gray-700 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Use search, page buttons, or increase the page size to browse all extra items quickly.
+                        </p>
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <button
+                            onClick={() => setCurrentExtraItemsPage((prev) => Math.max(1, prev - 1))}
+                            disabled={safeCurrentExtraItemsPage === 1}
+                            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                          >
+                            Previous
+                          </button>
+                          <span className="text-sm text-gray-600 dark:text-gray-300 min-w-[90px] text-center">
+                            {safeCurrentExtraItemsPage} / {totalExtraItemsPages}
+                          </span>
+                          <button
+                            onClick={() => setCurrentExtraItemsPage((prev) => Math.min(totalExtraItemsPages, prev + 1))}
+                            disabled={safeCurrentExtraItemsPage === totalExtraItemsPages}
+                            className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Sold Items */}
