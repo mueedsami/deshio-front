@@ -76,11 +76,15 @@ export interface AdjustStockData {
 
 export interface BatchFilters {
   product_id?: number;
+  product_ids?: string | number[];
   store_id?: number;
   status?: 'available' | 'expired' | 'low_stock' | 'out_of_stock' | 'inactive';
   barcode?: string;
   expiring_days?: number;
   search?: string;
+  min_sell_price?: number;
+  max_sell_price?: number;
+  exact_price?: number;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
   per_page?: number;

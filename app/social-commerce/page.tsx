@@ -103,6 +103,7 @@ export default function SocialCommercePage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
+  const [exactPrice, setExactPrice] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
   const [cart, setCart] = useState<CartProduct[]>([]);
@@ -116,11 +117,7 @@ export default function SocialCommercePage() {
   const [selectedStore, setSelectedStore] = useState('');
   const [isLoadingData, setIsLoadingData] = useState(false);
 
-  // ✅ Store batches cache for Social Commerce search
-  // We load ALL available batches for the selected store (paged) once, then filter locally.
-  const [storeAvailableBatches, setStoreAvailableBatches] = useState<any[]>([]);
-  const [storeBatchesStoreId, setStoreBatchesStoreId] = useState<number | null>(null);
-  const [isLoadingBatches, setIsLoadingBatches] = useState<boolean>(false);
+  // Batches are loaded dynamically via search
   const batchesLoadRef = useRef<Promise<any[]> | null>(null);
 
   // 🧑‍💼 Existing customer + last order summary states
@@ -201,6 +198,7 @@ export default function SocialCommercePage() {
         searchQuery,
         minPrice,
         maxPrice,
+        exactPrice,
         cart,
       };
       sessionStorage.setItem(SC_DRAFT_STORAGE_KEY, JSON.stringify(draft));
@@ -482,24 +480,19 @@ export default function SocialCommercePage() {
         storesData = (response as any).data;
       }
 
-      // Prefer "Main Store" as the default store (falls back to the first store)
+      // Prefer "Office" as the fixed store
       const normalized = (s: any) => String(s ?? '').toLowerCase().trim();
-      const mainStore = storesData.find(
-        (s) =>
-          s?.is_main === true ||
-          normalized(s?.name) === 'main store' ||
-          normalized(s?.code) === 'main' ||
-          normalized(s?.slug) === 'main'
+      const officeStore = storesData.find(
+        (s) => normalized(s?.name).includes('office')
       );
 
-      // Put Main Store on top (UI dropdown stays the same, but feels nicer)
-      const sortedStores = mainStore
-        ? [mainStore, ...storesData.filter((s) => s?.id !== mainStore?.id)]
-        : storesData;
+      const targetStore = officeStore || storesData[0];
 
-      setStores(sortedStores);
-      if (sortedStores.length > 0) {
-        setSelectedStore(String((mainStore ?? sortedStores[0]).id));
+      if (targetStore) {
+        setStores([targetStore]);
+        setSelectedStore(String(targetStore.id));
+      } else {
+        setStores([]);
       }
     } catch (error) {
       console.error('Error fetching stores:', error);
@@ -583,53 +576,6 @@ export default function SocialCommercePage() {
   };
 
 
-  const ensureStoreBatchesLoaded = async (storeId: number): Promise<any[]> => {
-    // Already loaded for this store
-    if (storeBatchesStoreId === storeId && Array.isArray(storeAvailableBatches) && storeAvailableBatches.length) {
-      return storeAvailableBatches;
-    }
-
-    // If there is an in-flight request, await it (prevents duplicate loads on fast typing)
-    if (batchesLoadRef.current) {
-      try {
-        return await batchesLoadRef.current;
-      } catch {
-        // fallthrough and retry
-      }
-    }
-
-    const task = (async () => {
-      setIsLoadingBatches(true);
-      try {
-        const items = await batchService.getBatchesAll(
-          {
-            store_id: storeId,
-            status: 'available',
-            sort_by: 'sell_price',
-            sort_order: 'asc',
-          },
-          {
-            // Backend validation: per_page must be <= 100
-            per_page: 100,
-            max_pages: 5000,
-            max_items: 500000,
-          }
-        );
-
-        // Keep only batches that actually have quantity
-        const available = (items || []).filter((b: any) => Number(b?.quantity ?? 0) > 0);
-        setStoreAvailableBatches(available);
-        setStoreBatchesStoreId(storeId);
-        return available;
-      } finally {
-        setIsLoadingBatches(false);
-        batchesLoadRef.current = null;
-      }
-    })();
-
-    batchesLoadRef.current = task;
-    return await task;
-  };
 
   const matchesOneCharQuery = (batch: any, q: string) => {
     const needle = String(q || '').trim().toLowerCase();
@@ -906,6 +852,7 @@ export default function SocialCommercePage() {
         if (typeof d.searchQuery === 'string') setSearchQuery(d.searchQuery);
         if (typeof d.minPrice === 'string') setMinPrice(d.minPrice);
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
+        if (typeof d.exactPrice === 'string') setExactPrice(d.exactPrice);
         if (Array.isArray(d.cart)) setCart(d.cart);
       }
     } catch (e) {
@@ -941,6 +888,7 @@ export default function SocialCommercePage() {
     searchQuery,
     minPrice,
     maxPrice,
+    exactPrice,
     cart,
   ]);
 
@@ -956,12 +904,17 @@ export default function SocialCommercePage() {
         const storeId = Number(selectedStore);
         if (!Number.isFinite(storeId) || storeId <= 0) return;
 
-        const batches = await ensureStoreBatchesLoaded(storeId);
         const ids = queued.map((q: any) => Number(q?.id || 0)).filter((id: number) => id > 0);
         if (!ids.length) {
           clearQueuedSelections();
           return;
         }
+
+        const batches = await batchService.getBatchesAll({
+          store_id: storeId,
+          status: 'available',
+          product_ids: ids.join(',')
+        });
 
         const idSet = new Set(ids);
         const matchedBatches = (batches || []).filter((b: any) => {
@@ -1131,9 +1084,6 @@ export default function SocialCommercePage() {
     if (!selectedStore) {
       setAvailableBatchCount(null);
       setSearchResults([]);
-      // reset batch cache
-      setStoreAvailableBatches([]);
-      setStoreBatchesStoreId(null);
       batchesLoadRef.current = null;
       return;
     }
@@ -1142,8 +1092,6 @@ export default function SocialCommercePage() {
     fetchStoreBatchCount(selectedStore);
 
     // Reset cache when store changes (batches will be loaded on-demand when searching)
-    setStoreAvailableBatches([]);
-    setStoreBatchesStoreId(null);
     batchesLoadRef.current = null;
 
     // Do not auto-load batches/products; wait for user to type or set price filters
@@ -1210,7 +1158,7 @@ export default function SocialCommercePage() {
 
   
   useEffect(() => {
-    const hasPriceFilter = Boolean(minPrice.trim() || maxPrice.trim());
+    const hasPriceFilter = Boolean(minPrice.trim() || maxPrice.trim() || exactPrice.trim());
 
     if (!selectedStore) {
       setSearchResults([]);
@@ -1229,131 +1177,104 @@ export default function SocialCommercePage() {
         return;
       }
 
-      const min = minPrice.trim() !== '' && Number.isFinite(Number(minPrice)) ? Number(minPrice) : null;
-      const max = maxPrice.trim() !== '' && Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : null;
+      const min = minPrice.trim() !== '' && Number.isFinite(Number(minPrice)) ? Number(minPrice) : undefined;
+      const max = maxPrice.trim() !== '' && Number.isFinite(Number(maxPrice)) ? Number(maxPrice) : undefined;
+      const exact = exactPrice.trim() !== '' && Number.isFinite(Number(exactPrice)) ? Number(exactPrice) : undefined;
 
       const q = String(searchQuery || '').trim();
 
       setIsSearching(true);
 
       try {
-        // ✅ Always work against the FULL available batch list for the selected store (paged).
-        const batches = await ensureStoreBatchesLoaded(storeId);
+        let batches: any[] = [];
+        let productMap = new Map<number, any>();
+        let relevanceMap = new Map<number, { score: number; stage: string }>();
 
-        // ✅ Price-only filter
-        if (!q) {
-          const filtered = batches.filter((b: any) => {
-            const price = parseSellPrice(b.sell_price);
-            return withinPriceRange(price, min, max);
-          });
+        // ✅ If there's a search query, use advancedSearch to find products first
+        if (q) {
+          const hits = await productService.advancedSearchAll(
+            {
+              query: q,
+              is_archived: false,
+              enable_fuzzy: true,
+              fuzzy_threshold: 60,
+              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
+              per_page: 80,
+            },
+            { max_items: 200, max_pages: 5 } // Fetching a reasonable max chunk of products
+          );
 
-          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'price', defaultScore: 0 });
+          if (hits.length === 0) {
+            setSearchResults([]);
+            return;
+          }
 
-          results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
-          setSearchResults(results);
-          return;
+          for (const h of hits) {
+            if (!h?.id) continue;
+            const pid = Number(h.id);
+            productMap.set(pid, h);
+            relevanceMap.set(pid, {
+              score: Number((h as any)?.relevance_score ?? 0) || 0,
+              stage: String((h as any)?.search_stage ?? 'advanced'),
+            });
+          }
+
+          const productIds = Array.from(productMap.keys()).join(',');
+          
+          // Download batches *ONLY* for the matched product IDs
+          batches = await batchService.getBatchesAll({
+            store_id: storeId,
+            status: 'available',
+            product_ids: productIds,
+            min_sell_price: min,
+            max_sell_price: max,
+            exact_price: exact,
+          }, { max_items: 2000 }); // safety cap
+        } else {
+          // ✅ Price-only search
+          batches = await batchService.getBatchesAll({
+            store_id: storeId,
+            status: 'available',
+            min_sell_price: min,
+            max_sell_price: max,
+            exact_price: exact,
+          }, { max_items: 50 }); // cap size for price-only searches to keep UI fast
         }
 
-        // ✅ 1-character query: fast local filter (avoid flooding backend on extremely broad searches)
-        if (q.length === 1) {
-          const filtered = batches.filter((b: any) => matchesOneCharQuery(b, q)).filter((b: any) => {
-            const price = parseSellPrice(b.sell_price);
-            return withinPriceRange(price, min, max);
-          });
-
-          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'local', defaultScore: 0 });
-
-          results.sort((a: any, b: any) => Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0));
-          setSearchResults(results);
-          return;
-        }
-
-        // ✅ Main search (multi-language + fuzzy): use Product Advanced Search
-        // Then map products -> filter the store's batches locally (exact coverage, no silent paging loss).
-        const hits = await productService.advancedSearchAll(
-          {
-            query: q,
-            is_archived: false,
-            enable_fuzzy: true,
-            fuzzy_threshold: 60,
-            search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-            // Backend validation: per_page must be <= 100
-            per_page: 100,
-          },
-          { max_items: 50000, max_pages: 500 }
-        );
-
-        if (!hits.length) {
-          setSearchResults([]);
-          return;
-        }
-
-        const productMap = new Map<number, any>();
-        const relevanceMap = new Map<number, { score: number; stage: string }>();
-        for (const h of hits) {
-          if (!h?.id) continue;
-          const pid = Number(h.id);
-          productMap.set(pid, h);
-          relevanceMap.set(pid, {
-            score: Number((h as any)?.relevance_score ?? 0) || 0,
-            stage: String((h as any)?.search_stage ?? 'advanced'),
-          });
-        }
-
-        const filteredBatches = batches.filter((b: any) => {
-          const pid = Number(b?.product?.id ?? b?.product_id ?? 0);
-          if (!pid || !productMap.has(pid)) return false;
-          const price = parseSellPrice(b.sell_price);
-          return withinPriceRange(price, min, max);
-        });
-
-        const results = buildProductResultsFromBatches(filteredBatches, {
+        const results = buildProductResultsFromBatches(batches, {
           productOverrides: productMap,
           relevanceOverrides: relevanceMap,
-          defaultStage: 'advanced',
+          defaultStage: q ? 'advanced' : 'price',
           defaultScore: 0,
         });
 
+        // Optional local sanity filter for price
+        const finalResults = results.filter((p: any) => {
+          const price = Number(p?.attributes?.Price ?? p?.minPrice ?? 0);
+          if (exact !== undefined && price !== exact) return false;
+          if (min !== undefined && price < min) return false;
+          if (max !== undefined && price > max) return false;
+          return true;
+        });
+
         // Sort: best match first, then cheaper batches first
-        results.sort((a: any, b: any) => {
+        finalResults.sort((a: any, b: any) => {
           const d = Number(b?.relevance_score ?? 0) - Number(a?.relevance_score ?? 0);
           if (d !== 0) return d;
           return Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0);
         });
 
-        setSearchResults(results);
+        setSearchResults(finalResults);
       } catch (error) {
         console.error('❌ Social commerce search failed:', error);
-        // Fallback: local filtering on already-loaded batches (name/sku contains)
-        try {
-          const storeId2 = Number(selectedStore);
-          const batches = (storeBatchesStoreId === storeId2 && storeAvailableBatches.length)
-            ? storeAvailableBatches
-            : await ensureStoreBatchesLoaded(storeId2);
-
-          const needle = String(searchQuery || '').trim().toLowerCase();
-          const filtered = batches.filter((b: any) => {
-            const prod = b?.product ?? {};
-            const name = String(prod?.name ?? '').toLowerCase();
-            const sku = String(prod?.sku ?? '').toLowerCase();
-            const ok = name.includes(needle) || sku.includes(needle);
-            if (!ok) return false;
-            const price = parseSellPrice(b.sell_price);
-            return withinPriceRange(price, min, max);
-          });
-
-          const results = buildProductResultsFromBatches(filtered, { defaultStage: 'fallback', defaultScore: 0 });
-          setSearchResults(results);
-        } catch {
-          setSearchResults([]);
-        }
+        setSearchResults([]);
       } finally {
         setIsSearching(false);
       }
     }, 350);
 
     return () => clearTimeout(delayDebounce);
-  }, [selectedStore, searchQuery, minPrice, maxPrice]);
+  }, [selectedStore, searchQuery, minPrice, maxPrice, exactPrice]);
 
   useEffect(() => {
     if (selectedProduct && quantity) {
@@ -1374,6 +1295,7 @@ export default function SocialCommercePage() {
     setSearchQuery('');
     setMinPrice('');
     setMaxPrice('');
+    setExactPrice('');
     setSearchResults([]);
     setQuantity('1');
     setDiscountPercent('');
@@ -1696,20 +1618,14 @@ export default function SocialCommercePage() {
                 </div>
                 <div className="w-full sm:w-auto">
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    Store <span className="text-red-500">*</span>
+                    Store
                   </label>
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="">Select Store</option>
-                    {stores.map((store) => (
-                      <option key={store.id} value={store.id}>
-                        {store.name}
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    value={stores.length > 0 ? stores[0].name : 'Loading...'}
+                    readOnly
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
+                  />
                   {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading store info...</p>}
                   {selectedStore && !isLoadingData && typeof availableBatchCount === 'number' && (
                     <p className="mt-1 text-xs text-green-600">{availableBatchCount} batches available</p>
@@ -2147,7 +2063,7 @@ export default function SocialCommercePage() {
                           !selectedStore
                             ? 'Select a store first...'
                             : isSearching
-                            ? (isLoadingBatches ? 'Loading store batches...' : 'Searching...')
+                            ? 'Searching...'
                             : 'Type to search product...'
                         }
                         value={searchQuery}
@@ -2155,15 +2071,15 @@ export default function SocialCommercePage() {
                         disabled={!selectedStore}
                         className="flex-1 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                       />
-                      <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-2 sm:flex-shrink-0">
+                      <div className="grid grid-cols-3 gap-2 sm:flex sm:items-center sm:gap-2 sm:flex-shrink-0">
                         <input
                           type="number"
                           inputMode="numeric"
                           placeholder="Min ৳"
                           value={minPrice}
                           onChange={(e) => setMinPrice(e.target.value)}
-                          disabled={!selectedStore}
-                          className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={!selectedStore || !!exactPrice}
+                          className="w-full sm:w-20 px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
                         />
                         <input
                           type="number"
@@ -2171,8 +2087,24 @@ export default function SocialCommercePage() {
                           placeholder="Max ৳"
                           value={maxPrice}
                           onChange={(e) => setMaxPrice(e.target.value)}
+                          disabled={!selectedStore || !!exactPrice}
+                          className="w-full sm:w-20 px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        />
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          placeholder="Exact ৳"
+                          value={exactPrice}
+                          onChange={(e) => {
+                            setExactPrice(e.target.value);
+                            if (e.target.value) {
+                              setMinPrice('');
+                              setMaxPrice('');
+                            }
+                          }}
                           disabled={!selectedStore}
-                          className="w-full sm:w-24 px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Search for a specific exact price. Disables Min/Max."
+                          className="w-full sm:w-24 px-2 py-2 text-sm border border-blue-300 dark:border-blue-600 rounded bg-blue-50 dark:bg-blue-900/30 text-gray-900 dark:text-white placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-blue-500"
                         />
                       </div>
 
@@ -2210,7 +2142,7 @@ export default function SocialCommercePage() {
                     
                     {selectedStore && isSearching && (searchQuery || minPrice || maxPrice) && (
                       <div className="text-center py-8 text-sm text-gray-500 dark:text-gray-400">
-                        {isLoadingBatches ? 'Loading store batches...' : 'Searching...'}
+                        Searching...
                       </div>
                     )}
 
@@ -2225,49 +2157,64 @@ export default function SocialCommercePage() {
                     )}
 
                     {searchResults.length > 0 && (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-60 md:max-h-80 overflow-y-auto mb-4 p-1">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-h-[28rem] overflow-y-auto mb-4 p-2">
                         {searchResults.map((product) => (
                           <div
                             key={`${product.id}`}
                             onClick={() => handleProductSelect(product)}
-                            className="relative border border-gray-200 dark:border-gray-600 rounded p-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                            className="group relative flex flex-col border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 p-3 shadow-sm cursor-pointer hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200"
                           >
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                openProductPreview(product);
-                              }}
-                              className="absolute right-2 top-2 z-10 inline-flex items-center justify-center rounded bg-white/90 p-1.5 text-gray-800 shadow-sm ring-1 ring-gray-200 hover:bg-white dark:bg-gray-900/80 dark:text-gray-100 dark:ring-gray-700"
-                              title="Preview image"
-                            >
-                              <Eye className="h-4 w-4" />
-                            </button>
-                            <img
-                              src={product.attributes.mainImage}
-                              alt={product.name}
-                              className="w-full h-24 sm:h-32 object-cover rounded mb-2"
-                            />
-                            <p className="text-xs text-gray-900 dark:text-white font-medium truncate">
-                              {product.name}
-                            </p>
-                            {Number(product.batchesCount ?? 0) > 1 && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400 truncate">
-                                Batches: {product.batchesCount}
-                              </p>
-                            )}
-                            <p className="text-xs text-gray-600 dark:text-gray-400">
-                              {formatPriceRangeLabel(product)}
-                            </p>
-                            <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                              Available: {product.available}
-                            </p>
-                            {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
-                              <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                                Expires in {product.daysUntilExpiry} days
-                              </p>
-                            )}
+                            <div className="relative w-full aspect-square mb-3 overflow-hidden rounded bg-gray-50 dark:bg-gray-900/50">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openProductPreview(product);
+                                }}
+                                className="absolute right-2 top-2 z-10 p-1.5 rounded-full bg-white/90 dark:bg-gray-900/90 text-gray-700 dark:text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-white dark:hover:bg-gray-800 shadow-sm"
+                                title="Preview image"
+                              >
+                                <Eye className="h-4 w-4" />
+                              </button>
+                              <img
+                                src={product.attributes.mainImage}
+                                alt={product.name}
+                                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-col justify-between">
+                              <div>
+                                <h3 className="text-sm font-semibold text-gray-900 dark:text-white line-clamp-2 leading-tight mb-1" title={product.name}>
+                                  {product.name}
+                                </h3>
+                                {product.sku && (
+                                  <p className="text-[10px] text-gray-500 font-mono mb-2">{product.sku}</p>
+                                )}
+                              </div>
+                              <div className="mt-auto pt-2 border-t border-gray-100 dark:border-gray-700/50">
+                                <div className="flex justify-between items-end mb-1">
+                                  <p className="text-sm font-bold text-gray-900 dark:text-white">
+                                    {formatPriceRangeLabel(product)}
+                                  </p>
+                                  {Number(product.batchesCount ?? 0) > 1 && (
+                                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                                      {product.batchesCount} Batches
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className={`font-medium ${product.available > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
+                                    {product.available > 0 ? `Stock: ${product.available}` : 'Out of Stock'}
+                                  </span>
+                                  {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
+                                    <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                                      Exp: {product.daysUntilExpiry}d
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         ))}
                       </div>
