@@ -21,14 +21,15 @@ export interface ProductGroup {
   variants: ProductVariant[];
   primaryImage: string | null;
   categoryPath: string;
-  category_id: number; // required
+  category_id: number;
   hasVariations: boolean;
-  // Optional UI metadata (not required by backend)
   vendorId?: number;
   vendorName?: string | null;
   sellingPrice?: number | null;
   inStock?: boolean | null;
   stockQuantity?: number | null;
+  /** Per-store stock breakdown, filled by /products/grouped */
+  stockByStore?: { store_id: number; store_name: string; stock: number }[];
 }
 
 

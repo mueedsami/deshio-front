@@ -84,6 +84,62 @@ export interface CreateProductWithVariantsData extends CreateProductData {
 
 export type SearchField = 'name' | 'sku' | 'description' | 'category' | 'custom_fields';
 
+// ── Grouped product (returned by /products/grouped) ──────────────────────────
+
+export interface GroupedProductVariant {
+  id: number;
+  name: string;
+  sku: string | null;
+  image: string | null;
+  custom_fields: { field_id: number; field_title: string | null; value: any }[];
+  selling_price: number | null;
+  stock: number;
+  created_at: string;
+}
+
+export interface GroupedProduct {
+  rep_id: number;
+  sku: string | null;
+  base_name: string;
+  category_id: number;
+  category_path: string;
+  vendor_id: number | null;
+  vendor_name: string | null;
+  primary_image: string | null;
+  variants: GroupedProductVariant[];
+  total_variants: number;
+  has_variations: boolean;
+  selling_price: number | null;
+  total_stock: number;
+  in_stock: boolean;
+  /** Array of { store_id, store_name, stock } — aggregated across all variants in the SKU group */
+  stock_per_store: { store_id: number; store_name: string; stock: number }[];
+}
+
+export interface GroupedProductsResponse {
+  data: GroupedProduct[];
+  pagination: {
+    total: number;
+    per_page: number;
+    current_page: number;
+    last_page: number;
+    from: number | null;
+    to: number | null;
+  };
+  total_groups: number;
+}
+
+export interface GetGroupedProductsParams {
+  page?: number;
+  per_page?: number;
+  q?: string;
+  category_id?: number | string;
+  vendor_id?: number | string;
+  min_price?: number | string;
+  max_price?: number | string;
+  is_archived?: boolean;
+}
+
 export interface ProductSearchHit extends Product {
   search_stage?: string;
   base_score?: number;
@@ -653,6 +709,35 @@ export const productService = {
     } catch (error: any) {
       console.error('Search by custom field error:', error);
       return { data: [], total: 0 };
+    }
+  },
+
+  /** Grouped products — server-side SKU grouping, pagination, search & filters */
+  async getGroupedProducts(params: GetGroupedProductsParams = {}): Promise<GroupedProductsResponse> {
+    try {
+      // Strip undefined / empty-string values so they don't pollute the query string
+      const cleanParams: Record<string, any> = {};
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== null && v !== '') cleanParams[k] = v;
+      }
+
+      const response = await axiosInstance.get('/products/grouped', { params: cleanParams });
+      const result = response.data ?? {};
+
+      return {
+        data: Array.isArray(result.data) ? result.data : [],
+        pagination: result.pagination ?? {
+          total: 0, per_page: 20, current_page: 1, last_page: 1, from: null, to: null,
+        },
+        total_groups: Number(result.total_groups ?? result.pagination?.total ?? 0),
+      };
+    } catch (error: any) {
+      console.error('getGroupedProducts error:', error);
+      return {
+        data: [],
+        pagination: { total: 0, per_page: 20, current_page: 1, last_page: 1, from: null, to: null },
+        total_groups: 0,
+      };
     }
   },
 };

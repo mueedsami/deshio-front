@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
-import { MoreVertical, Edit, Trash2, Eye, Plus } from 'lucide-react';
+import { MoreVertical, Edit, Trash2, Eye, Plus, Package } from 'lucide-react';
 import type { ProductGroup, ProductVariant } from '@/types/product';
 import ImageLightboxModal from '@/components/ImageLightboxModal';
 
@@ -152,14 +152,37 @@ export default function ProductListItem({
 </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 mt-1">
             <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-mono">
               SKU: {productGroup.sku}
             </span>
             {hasMultipleVariants && (
               <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-300 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400">
-                 {productGroup.totalVariants} Variant{productGroup.totalVariants > 1 ? 's' : ''}
+                {productGroup.totalVariants} Variant{productGroup.totalVariants > 1 ? 's' : ''}
               </span>
+            )}
+            {/* ── Per-store stock pills ── */}
+            {productGroup.stockByStore && productGroup.stockByStore.length > 0 && (
+              <>
+                <span className="text-gray-300 dark:text-gray-600 select-none">|</span>
+                <span className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
+                  <Package className="w-3 h-3" />
+                </span>
+                {productGroup.stockByStore.map((s) => (
+                  <span
+                    key={s.store_id}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium ${
+                      s.stock > 0
+                        ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
+                        : 'bg-gray-100 dark:bg-gray-700/50 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700'
+                    }`}
+                    title={`${s.store_name}: ${s.stock} unit${s.stock !== 1 ? 's' : ''}`}
+                  >
+                    <span className="max-w-[80px] truncate">{s.store_name}</span>
+                    <span className="font-semibold">{s.stock}</span>
+                  </span>
+                ))}
+              </>
             )}
           </div>
         </div>
