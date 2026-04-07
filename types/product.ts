@@ -12,6 +12,7 @@ export interface ProductVariant {
   color?: string;
   size?: string;
   image?: string | null;
+  stock?: number;  // total units in stock for this specific variant
 }
 
 export interface ProductGroup {

@@ -32,6 +32,7 @@ function toProductGroup(g: GroupedProduct): ProductGroup {
     color: v.custom_fields?.find((cf) => cf.field_title?.toLowerCase() === 'color')?.value,
     size:  v.custom_fields?.find((cf) => cf.field_title?.toLowerCase() === 'size')?.value,
     image: v.image,
+    stock: v.stock,   // ← per-variant stock count from backend
   }));
 
   return {

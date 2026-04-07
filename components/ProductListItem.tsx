@@ -317,9 +317,23 @@ export default function ProductListItem({
                       key={variant.id}
                       className="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
                     >
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300 min-w-[48px]">
                         {variant.size || 'One Size'}
                       </span>
+
+                      {/* Stock count badge */}
+                      {variant.stock !== undefined && (
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
+                            variant.stock > 0
+                              ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                              : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
+                          }`}
+                        >
+                          {variant.stock > 0 ? `${variant.stock} pcs` : 'Out'}
+                        </span>
+                      )}
+
                       <div className="flex gap-1 ml-auto">
                         <button
                           onClick={() => onEdit && onEdit(variant.id)}
