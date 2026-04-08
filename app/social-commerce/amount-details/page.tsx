@@ -61,7 +61,7 @@ export default function AmountDetailsPage() {
   const [paymentNotes, setPaymentNotes] = useState('');
 
   // Intended courier marker (saved after order creation)
-  const [intendedCourier, setIntendedCourier] = useState('');
+  const [intendedCourier, setIntendedCourier] = useState('pathao');
 
   const courierOptions = useMemo(() => {
     return ['pathao', 'Sundarban', 'Pending', 'Partial Order'];
@@ -490,6 +490,7 @@ export default function AmountDetailsPage() {
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
+      sessionStorage.removeItem('socialCommerceDraftV1');
 
       setTimeout(() => {
         window.location.href = '/orders';

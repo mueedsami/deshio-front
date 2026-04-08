@@ -1564,7 +1564,6 @@ export default function SocialCommercePage() {
       );
 
       console.log('✅ Order data prepared, redirecting...');
-      sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
       window.location.href = '/social-commerce/amount-details';
     } catch (error) {
       console.error('❌ Error:', error);
