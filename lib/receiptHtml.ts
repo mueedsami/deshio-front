@@ -75,7 +75,7 @@ function receiptBody(r: ReceiptOrder) {
           <td><b>Grand Total</b></td>
           <td class="right"><b>${escapeHtml(money(r.totals?.total ?? 0))}</b></td>
         </tr>
-        ${(r.totals?.paid ?? 0) > 0 ? `<tr><td>Paid</td><td class="right">${escapeHtml(money(r.totals?.paid ?? 0))}</td></tr>` : ''}
+        ${(r.totals?.paid ?? 0) > 0 ? `<tr><td>${(r.totals?.due ?? 0) > 0 ? 'Advance Deducted' : 'Paid'}</td><td class="right">${(r.totals?.due ?? 0) > 0 ? '-' : ''}${escapeHtml(money(r.totals?.paid ?? 0))}</td></tr>` : ''}
         ${(r.totals?.due ?? 0) > 0 ? `<tr><td>Due</td><td class="right">${escapeHtml(money(r.totals?.due ?? 0))}</td></tr>` : ''}
       </tbody>
     </table>
