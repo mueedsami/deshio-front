@@ -57,6 +57,7 @@ function toProductGroup(g: GroupedProduct): ProductGroup {
 
 const ITEMS_PER_PAGE = 20;
 const SOCIAL_COMMERCE_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
+const globalPageCache = new Map<string, GroupedProduct[]>();
 
 export default function ProductPage() {
   const router       = useRouter();
@@ -98,7 +99,7 @@ export default function ProductPage() {
 
   // ── "Flooding" prefetch cache ─────────────────────────────────────────────
   // key = JSON.stringify({ page, q, category, vendor, minPrice, maxPrice })
-  const pageCache = useRef<Map<string, GroupedProduct[]>>(new Map());
+  const pageCache = useRef<Map<string, GroupedProduct[]>>(globalPageCache);
   const prefetchController = useRef<AbortController | null>(null);
 
   // ── Social commerce queue state ──────────────────────────────────────────
@@ -330,9 +331,6 @@ export default function ProductPage() {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // Clear page cache whenever filters change (different query = different data)
-    pageCache.current.clear();
-
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       loadPage(currentPage, searchQuery, selectedCategory, selectedVendor, minPrice, maxPrice, true);

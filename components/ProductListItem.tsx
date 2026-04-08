@@ -30,7 +30,13 @@ export default function ProductListItem({
   selectable,
 }: ProductListItemProps) {
   const [showDropdown, setShowDropdown] = useState(false);
-  const [showVariations, setShowVariations] = useState(false);
+  const storageKey = `expanded_group_${productGroup.sku}`;
+  const [showVariations, setShowVariations] = useState(() => {
+    if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem(storageKey) === 'true';
+    }
+    return false;
+  });
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [lightboxTitle, setLightboxTitle] = useState<string>('');
   const [isDropdownMounted, setIsDropdownMounted] = useState(false);
@@ -77,6 +83,18 @@ export default function ProductListItem({
       setShowDropdown(false);
       // Wait for animation to complete before unmounting
       setTimeout(() => setIsDropdownMounted(false), 200);
+    }
+  };
+
+  const handleToggleVariations = () => {
+    const nextState = !showVariations;
+    setShowVariations(nextState);
+    if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
+      if (nextState) {
+        sessionStorage.setItem(storageKey, 'true');
+      } else {
+        sessionStorage.removeItem(storageKey);
+      }
     }
   };
 
@@ -192,7 +210,7 @@ export default function ProductListItem({
           {/* View Variations Button */}
           {hasMultipleVariants && (
             <button
-              onClick={() => setShowVariations(!showVariations)}
+              onClick={handleToggleVariations}
               className="px-4 py-2 text-sm font-medium bg-gray-900 hover:bg-gray-700 text-white rounded-lg transition-colors shadow-sm"
             >
               {showVariations ? 'Hide' : 'View'} Variations
