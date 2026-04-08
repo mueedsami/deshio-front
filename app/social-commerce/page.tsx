@@ -1377,8 +1377,18 @@ export default function SocialCommercePage() {
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
 
   const handleConfirmOrder = async () => {
-    if (!userName || !userPhone) {
+    let cleanPhone = userPhone ? userPhone.replace(/\D/g, '') : '';
+    if (cleanPhone.startsWith('880')) {
+      cleanPhone = '0' + cleanPhone.slice(3);
+    }
+
+    if (!userName || !cleanPhone) {
       alert('Please fill in customer name and phone number');
+      return;
+    }
+
+    if (cleanPhone.length !== 11) {
+      alert('Mobile number must be exactly 11 digits.');
       return;
     }
     if (cart.length === 0) {
@@ -1474,7 +1484,7 @@ export default function SocialCommercePage() {
       const shipping_address = isInternational
         ? {
             name: userName,
-            phone: userPhone,
+            phone: cleanPhone,
             street: deliveryAddress,
             city: internationalCity,
             state: state || undefined,
@@ -1485,7 +1495,7 @@ export default function SocialCommercePage() {
             // Domestic
             const base: any = {
               name: userName,
-              phone: userPhone,
+              phone: cleanPhone,
               street: streetAddress,
               postal_code: postalCode || undefined,
             };
@@ -1512,7 +1522,7 @@ export default function SocialCommercePage() {
         customer: {
           name: userName,
           email: userEmail || undefined,
-          phone: userPhone,
+          phone: cleanPhone,
           // UI display only
           address: formattedCustomerAddress,
         },
