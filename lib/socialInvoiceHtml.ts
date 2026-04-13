@@ -1,8 +1,5 @@
 // lib/socialInvoiceHtml.ts
-// Social commerce invoice (A5 / Half A4), corporate style.
-// - Includes Delivery Fee
-// - No VAT row
-// - Invoice No = part after 'ORD' prefix from Order No
+// Social commerce invoice (A5 / Half A4), compact and print-friendly.
 
 import { normalizeOrderForReceipt } from '@/lib/receipt';
 
@@ -27,12 +24,14 @@ function invoiceNoFromOrderNo(orderNo?: string) {
   return inv || String(orderNo).trim();
 }
 
-function fmtDate(iso?: string) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  const pad = (x: number) => String(x).padStart(2, '0');
-  return `${pad(d.getDate())}-${d.toLocaleString('en-US', { month: 'short' })}-${d.getFullYear()}`;
+function paymentStatus(total: number, paid: number, due: number) {
+  if (due <= 0 && total > 0) return 'Paid';
+  if (paid > 0 && due > 0) return 'Partial';
+  return 'Due';
+}
+
+function compactAddress(lines: string[]) {
+  return lines.filter(Boolean).join('<br/>');
 }
 
 function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
@@ -42,37 +41,37 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
   <meta charset="utf-8" />
   <title>${escapeHtml(title)}</title>
   <style>
-    @page { size: A5 portrait; margin: 7mm; }
-    html, body { width: 148mm; }
-    body { font-family: Arial, Helvetica, sans-serif; color:#111; margin:0; font-size: 11px; }
+    @page { size: A5 portrait; margin: 8mm; }
     * { box-sizing: border-box; }
-    .sheet { width: 100%; max-width: 134mm; margin: 0 auto; }
-    .row { display:flex; gap: 8px; align-items: stretch; }
-    .col { flex: 1; min-width: 0; }
-    .triple { display:grid; grid-template-columns: 1fr 1.05fr 1fr; gap: 8px; align-items: stretch; }
-    .header { display:flex; align-items:flex-start; justify-content:space-between; gap: 10px; }
-    .brandWrap { display:flex; flex-direction:column; align-items:flex-start; }
-    .logo { height: 34px; width: auto; object-fit: contain; margin: 0 0 4px; }
-    .brand { font-size: 18px; font-weight: 800; margin:0; letter-spacing: 0.3px; line-height:1; }
-    .brandSub { font-size: 11px; margin-top: 2px; }
-    .muted { color:#555; }
-    .box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
-    .metaGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; font-size: 11px; }
-    .metaGrid .k { color:#555; }
-    .metaGrid .v { text-align:right; font-weight: 600; }
-    .sectionTitle { font-size: 11px; font-weight: 700; margin: 0 0 5px; }
-    .addr { font-size: 11px; line-height: 1.3; }
-    table { width:100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
-    th { text-align:left; padding: 6px 5px; border-bottom: 1px solid #111; }
-    td { padding: 5px; border-bottom: 1px solid #eee; vertical-align: top; }
-    .right { text-align:right; }
-    .totals { width: 58%; margin-left: auto; margin-top: 8px; }
-    .totals td { border: none; padding: 3px 5px; }
-    .totals tr:last-child td { border-top: 1px solid #111; padding-top: 6px; }
-    .notesBox { margin-top: 10px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
-    .notesText { font-size: 11px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
-    .footer { margin-top: 10px; font-size: 10px; color:#444; text-align:center; }
-    .spacer { height: 8px; }
+    html, body { margin: 0; padding: 0; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #111827; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { width: 100%; }
+    .header { text-align: center; margin-bottom: 8px; }
+    .logoWrap { height: 42px; display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
+    .logo { max-height: 38px; max-width: 140px; object-fit: contain; }
+    .title { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.8px; }
+    .subtitle { margin-top: 2px; font-size: 10px; color: #6b7280; }
+    .seller { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
+    .sellerTitle, .sectionTitle { font-size: 11px; font-weight: 700; margin: 0 0 5px; color: #111827; }
+    .sellerBody, .bodyText { font-size: 11px; line-height: 1.38; color: #1f2937; }
+    .infoGrid { display: grid; grid-template-columns: 1.45fr 1fr; gap: 8px; margin-bottom: 8px; align-items: start; }
+    .stack { display: grid; gap: 8px; }
+    .box { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; min-height: 74px; }
+    .metaRow { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; font-size: 11px; }
+    .metaLabel { color: #6b7280; }
+    .metaValue { font-weight: 700; text-align: right; }
+    .terms { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #d1d5db; }
+    table { width: 100%; border-collapse: collapse; margin-top: 2px; font-size: 11px; }
+    th { text-align: left; font-size: 10.5px; color: #374151; font-weight: 700; padding: 7px 6px; border-bottom: 1px solid #111827; }
+    td { padding: 7px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    .right { text-align: right; }
+    .muted { color: #6b7280; }
+    .totalsWrap { width: 52%; margin-left: auto; margin-top: 8px; }
+    .totalsWrap table { margin-top: 0; }
+    .totalsWrap td { border-bottom: none; padding: 3px 4px; }
+    .totalsWrap tr.grand td { border-top: 1px solid #111827; padding-top: 6px; font-weight: 800; }
+    .notesBox { margin-top: 8px; border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; }
+    .footer { margin-top: 8px; text-align: center; font-size: 10px; color: #6b7280; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
 </head>
@@ -84,13 +83,13 @@ ${inner}
 
 function companyInfoBlock() {
   return `
-    <div class="box">
-      <div class="sectionTitle">Seller</div>
-      <div class="addr">
+    <div class="seller">
+      <div class="sellerTitle">Seller</div>
+      <div class="sellerBody">
         <b>Deshio-দেশীয়</b><br/>
         House: 4, Road: 1, Dhaka Housing, Adabor, Mohammadpur, Dhaka-1207.<br/>
         Mobile: 01711-585400<br/>
-        BIN : 007243936-0402
+        BIN: 007243936-0402
       </div>
     </div>
   `;
@@ -100,27 +99,16 @@ function render(order: any) {
   const r = normalizeOrderForReceipt(order);
   const orderNo = r.orderNo || '';
   const invNo = invoiceNoFromOrderNo(orderNo);
-  const date = fmtDate(r.dateTime);
-
   const sub = Number(r.totals?.subtotal ?? 0);
   const disc = Number(r.totals?.discount ?? 0);
-  const delivery = Number(r.totals?.shipping ?? 0); // Delivery Fee
-  // VAT is intentionally ignored
+  const delivery = Number(r.totals?.shipping ?? 0);
   const grand = Number(r.totals?.total ?? Math.max(0, sub - disc + delivery));
-  const paid = Number(r.totals?.paid ?? Math.max(0, grand - Number(r.totals?.due ?? 0)));
+  const paid = Number(r.totals?.paid ?? 0);
   const due = Number(r.totals?.due ?? Math.max(0, grand - paid));
-  const notes = String(r.notes || '').trim();
-  const paymentTerms = due > 0 ? `Partial payment received. Due amount: ৳${money(due)}` : 'Paid in full';
-  const productDescription = (r.items || [])
-    .map((it: any) => [it.name, it.variant].filter(Boolean).join(' - '))
-    .filter(Boolean)
-    .join(', ');
+  const status = paymentStatus(grand, paid, due);
 
-  const billToLines = [
-    r.customerName ? `<b>${escapeHtml(r.customerName)}</b>` : '<b>Customer</b>',
-    r.customerPhone ? `Phone: ${escapeHtml(r.customerPhone)}` : '',
-    ...(r.customerAddressLines || []).map((x: string) => escapeHtml(x)),
-  ].filter(Boolean);
+  const customerAddress = compactAddress(r.customerAddressLines || []);
+  const noteText = escapeHtml(r.notes || '').replace(/\n/g, '<br/>');
 
   const items = (r.items || []).map((it: any, i: number) => {
     const desc = [it.name, it.variant].filter(Boolean).join(' - ');
@@ -136,79 +124,80 @@ function render(order: any) {
   }).join('');
 
   return `
-    <div class="sheet">
+    <div class="page">
       <div class="header">
-        <div class="brandWrap">
-          <img src="/logo.png" alt="Deshio logo" class="logo" />
-          <h1 class="brand">INVOICE</h1>
-          <div class="brandSub muted">Social Commerce Order</div>
+        <div class="logoWrap">
+          <img class="logo" src="/logo.png" alt="Logo" />
         </div>
-        <div style="flex:1; max-width: 68mm;">
-          ${companyInfoBlock()}
+        <h1 class="title">INVOICE</h1>
+        <div class="subtitle">Social Commerce Order</div>
+      </div>
+
+      ${companyInfoBlock()}
+
+      <div class="infoGrid">
+        <div class="stack">
+          <div class="box">
+            <div class="sectionTitle">Bill To</div>
+            <div class="bodyText">
+              ${r.customerName ? `<b>${escapeHtml(r.customerName)}</b><br/>` : ''}
+              ${r.customerPhone ? `Phone: ${escapeHtml(r.customerPhone)}<br/>` : ''}
+              ${customerAddress || '<span class="muted">No address provided</span>'}
+            </div>
+          </div>
+
+          ${noteText ? `
+            <div class="box">
+              <div class="sectionTitle">Order Notes</div>
+              <div class="bodyText">${noteText}</div>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="box">
+          <div class="sectionTitle">Invoice Details</div>
+          <div class="metaRow"><span class="metaLabel">Invoice No</span><span class="metaValue">${escapeHtml(invNo)}</span></div>
+          <div class="metaRow"><span class="metaLabel">Order No</span><span class="metaValue">${escapeHtml(orderNo)}</span></div>
+          <div class="metaRow"><span class="metaLabel">Status</span><span class="metaValue">${escapeHtml(status)}</span></div>
+          <div class="metaRow"><span class="metaLabel">Paid Amount</span><span class="metaValue">৳${escapeHtml(money(paid))}</span></div>
+          <div class="metaRow"><span class="metaLabel">Due Amount</span><span class="metaValue">৳${escapeHtml(money(due))}</span></div>
+
+          <div class="terms">
+            <div class="sectionTitle" style="margin-bottom:4px;">Payment Terms</div>
+            <div class="bodyText">${due > 0 ? `Partial payment received. Remaining due: <b>৳${escapeHtml(money(due))}</b>.` : 'Paid in full.'}</div>
+          </div>
         </div>
       </div>
 
-      <div class="spacer"></div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width: 30px;" class="right">#</th>
+            <th>Item</th>
+            <th style="width: 48px;" class="right">Qty</th>
+            <th style="width: 72px;" class="right">Unit</th>
+            <th style="width: 82px;" class="right">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${items || `<tr><td colspan="5" class="muted">No items</td></tr>`}
+        </tbody>
+      </table>
 
-      <div class="triple">
-      <div class="box">
-        <div class="sectionTitle">Bill To</div>
-        <div class="addr">${billToLines.join('<br/>')}</div>
+      <div class="totalsWrap">
+        <table>
+          <tbody>
+            <tr><td>Subtotal</td><td class="right">${escapeHtml(money(sub))}</td></tr>
+            <tr><td>Delivery Fee</td><td class="right">${escapeHtml(money(delivery))}</td></tr>
+            <tr><td>Paid Amount</td><td class="right">${escapeHtml(money(paid))}</td></tr>
+            <tr><td>Due Amount</td><td class="right">${escapeHtml(money(due))}</td></tr>
+            ${disc > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(disc))}</td></tr>` : ''}
+            <tr class="grand"><td>Grand Total</td><td class="right">${escapeHtml(money(grand))}</td></tr>
+          </tbody>
+        </table>
       </div>
 
-      <div class="box">
-        <div class="sectionTitle">Product Description</div>
-        <div class="notesText">${escapeHtml(productDescription || 'No product description available')}</div>
-      </div>
-
-      <div class="box">
-        <div class="sectionTitle">Invoice Details</div>
-        <div class="metaGrid">
-          <div class="k">Invoice No</div><div class="v">${escapeHtml(invNo)}</div>
-          <div class="k">Order No</div><div class="v">${escapeHtml(orderNo)}</div>
-          <div class="k">Date</div><div class="v">${escapeHtml(date)}</div>
-          ${r.storeName ? `<div class="k">Store</div><div class="v">${escapeHtml(r.storeName)}</div>` : ''}
-          <div class="k">Payment Terms</div><div class="v">${escapeHtml(paymentTerms)}</div>
-        </div>
-      </div>
-    </div>
-
-    <table>
-      <thead>
-        <tr>
-          <th style="width:36px;" class="right">#</th>
-          <th>Item</th>
-          <th style="width:60px;" class="right">Qty</th>
-          <th style="width:90px;" class="right">Unit</th>
-          <th style="width:100px;" class="right">Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${items || `<tr><td colspan="5" class="muted">No items</td></tr>`}
-      </tbody>
-    </table>
-
-    <table class="totals">
-      <tbody>
-        <tr><td>Subtotal</td><td class="right">${escapeHtml(money(sub))}</td></tr>
-        <tr><td>Delivery Fee</td><td class="right">${escapeHtml(money(delivery))}</td></tr>
-        ${disc > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(disc))}</td></tr>` : ''}
-        <tr><td>Paid Amount</td><td class="right">${escapeHtml(money(paid))}</td></tr>
-        <tr><td><b>Due Amount</b></td><td class="right"><b>${escapeHtml(money(due))}</b></td></tr>
-        <tr><td><b>Grand Total</b></td><td class="right"><b>${escapeHtml(money(grand))}</b></td></tr>
-      </tbody>
-    </table>
-
-    ${notes ? `
-      <div class="notesBox">
-        <div class="sectionTitle">Order Notes</div>
-        <div class="notesText">${escapeHtml(notes)}</div>
-      </div>
-    ` : ''}
-
-    <div class="footer">
-      This is a computer-generated invoice. Please keep it for your records.
-    </div>
+      <div class="footer">This is a computer-generated invoice. Please keep it for your records.</div>
     </div>
   `;
 }
