@@ -297,8 +297,7 @@ export default function AmountDetailsPage() {
           paymentNotes?.trim() ? `Payment Note: ${paymentNotes.trim()}` : '',
         ]
           .filter(Boolean)
-          .join('
-'),
+          .join(''),
       };
 
       console.log('📦 Creating order:', orderPayload);
