@@ -1,5 +1,5 @@
 // lib/socialInvoiceHtml.ts
-// Social commerce invoice (A5 / Half A4), compact and print-friendly.
+// Social commerce invoice (A5 / Half A4), clean two-column header and compact items table.
 
 import { normalizeOrderForReceipt } from '@/lib/receipt';
 
@@ -44,33 +44,114 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     @page { size: A5 portrait; margin: 8mm; }
     * { box-sizing: border-box; }
     html, body { margin: 0; padding: 0; }
-    body { font-family: Arial, Helvetica, sans-serif; color: #111827; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #111827;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
     .page { width: 100%; }
-    .header { text-align: center; margin-bottom: 8px; }
-    .logoWrap { height: 42px; display: flex; align-items: center; justify-content: center; margin-bottom: 4px; }
-    .logo { max-height: 38px; max-width: 140px; object-fit: contain; }
-    .title { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 0.8px; }
+    .topRow {
+      display: grid;
+      grid-template-columns: 1fr 1.15fr;
+      gap: 12px;
+      align-items: start;
+      margin-bottom: 8px;
+    }
+    .brandBlock { padding-top: 2px; }
+    .brandLine {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .logo {
+      max-height: 30px;
+      max-width: 108px;
+      object-fit: contain;
+      display: block;
+    }
+    .brandText {
+      font-size: 16px;
+      font-weight: 800;
+      color: #ea580c;
+      letter-spacing: 0.2px;
+      line-height: 1;
+    }
+    .title { margin: 6px 0 0; font-size: 17px; font-weight: 800; letter-spacing: 0.8px; }
     .subtitle { margin-top: 2px; font-size: 10px; color: #6b7280; }
-    .seller { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; }
-    .sellerTitle, .sectionTitle { font-size: 11px; font-weight: 700; margin: 0 0 5px; color: #111827; }
-    .sellerBody, .bodyText { font-size: 11px; line-height: 1.38; color: #1f2937; }
-    .infoGrid { display: grid; grid-template-columns: 1.45fr 1fr; gap: 8px; margin-bottom: 8px; align-items: start; }
+    .seller {
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 8px 10px;
+      min-height: 72px;
+    }
+    .sellerTitle, .sectionTitle {
+      font-size: 11px;
+      font-weight: 700;
+      margin: 0 0 5px;
+      color: #111827;
+    }
+    .sellerBody, .bodyText {
+      font-size: 11px;
+      line-height: 1.36;
+      color: #1f2937;
+    }
+    .infoGrid {
+      display: grid;
+      grid-template-columns: 1.35fr 0.9fr;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: start;
+    }
     .stack { display: grid; gap: 8px; }
-    .box { border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; min-height: 74px; }
-    .metaRow { display: flex; justify-content: space-between; gap: 12px; padding: 1px 0; font-size: 11px; }
+    .box {
+      border: 1px solid #d1d5db;
+      border-radius: 10px;
+      padding: 8px 10px;
+    }
+    .metaRow {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 1px 0;
+      font-size: 11px;
+    }
     .metaLabel { color: #6b7280; }
     .metaValue { font-weight: 700; text-align: right; }
-    .terms { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #d1d5db; }
     table { width: 100%; border-collapse: collapse; margin-top: 2px; font-size: 11px; }
-    th { text-align: left; font-size: 10.5px; color: #374151; font-weight: 700; padding: 7px 6px; border-bottom: 1px solid #111827; }
-    td { padding: 7px 6px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    th {
+      text-align: left;
+      font-size: 10.5px;
+      color: #374151;
+      font-weight: 700;
+      padding: 7px 6px;
+      border-bottom: 1px solid #111827;
+    }
+    td {
+      padding: 7px 6px;
+      border-bottom: 1px solid #e5e7eb;
+      vertical-align: top;
+    }
     .right { text-align: right; }
     .muted { color: #6b7280; }
-    .totalsWrap { width: 52%; margin-left: auto; margin-top: 8px; }
+    .qtyBadge {
+      display: inline-block;
+      min-width: 30px;
+      text-align: center;
+      border: 1px solid #d1d5db;
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-weight: 700;
+    }
+    .totalsWrap { width: 48%; margin-left: auto; margin-top: 8px; }
     .totalsWrap table { margin-top: 0; }
     .totalsWrap td { border-bottom: none; padding: 3px 4px; }
-    .totalsWrap tr.grand td { border-top: 1px solid #111827; padding-top: 6px; font-weight: 800; }
-    .notesBox { margin-top: 8px; border: 1px solid #d1d5db; border-radius: 10px; padding: 8px 10px; }
+    .totalsWrap tr.grand td {
+      border-top: 1px solid #111827;
+      padding-top: 6px;
+      font-weight: 800;
+    }
     .footer { margin-top: 8px; text-align: center; font-size: 10px; color: #6b7280; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
@@ -116,24 +197,24 @@ function render(order: any) {
       <tr>
         <td class="right">${i + 1}</td>
         <td>${escapeHtml(desc)}</td>
-        <td class="right">${escapeHtml(it.qty)}</td>
-        <td class="right">${escapeHtml(money(it.unitPrice))}</td>
-        <td class="right">${escapeHtml(money(it.lineTotal))}</td>
+        <td class="right"><span class="qtyBadge">${escapeHtml(it.qty)}</span></td>
       </tr>
     `;
   }).join('');
 
   return `
     <div class="page">
-      <div class="header">
-        <div class="logoWrap">
-          <img class="logo" src="/logo.png" alt="Logo" />
+      <div class="topRow">
+        <div class="brandBlock">
+          <div class="brandLine">
+            <img class="logo" src="/logo.png" alt="Logo" />
+            <div class="brandText">দেশীয়</div>
+          </div>
+          <h1 class="title">INVOICE</h1>
+          <div class="subtitle">Social Commerce Order</div>
         </div>
-        <h1 class="title">INVOICE</h1>
-        <div class="subtitle">Social Commerce Order</div>
+        ${companyInfoBlock()}
       </div>
-
-      ${companyInfoBlock()}
 
       <div class="infoGrid">
         <div class="stack">
@@ -161,11 +242,6 @@ function render(order: any) {
           <div class="metaRow"><span class="metaLabel">Status</span><span class="metaValue">${escapeHtml(status)}</span></div>
           <div class="metaRow"><span class="metaLabel">Paid Amount</span><span class="metaValue">৳${escapeHtml(money(paid))}</span></div>
           <div class="metaRow"><span class="metaLabel">Due Amount</span><span class="metaValue">৳${escapeHtml(money(due))}</span></div>
-
-          <div class="terms">
-            <div class="sectionTitle" style="margin-bottom:4px;">Payment Terms</div>
-            <div class="bodyText">${due > 0 ? `Partial payment received. Remaining due: <b>৳${escapeHtml(money(due))}</b>.` : 'Paid in full.'}</div>
-          </div>
         </div>
       </div>
 
@@ -174,13 +250,11 @@ function render(order: any) {
           <tr>
             <th style="width: 30px;" class="right">#</th>
             <th>Item</th>
-            <th style="width: 48px;" class="right">Qty</th>
-            <th style="width: 72px;" class="right">Unit</th>
-            <th style="width: 82px;" class="right">Amount</th>
+            <th style="width: 56px;" class="right">Qty</th>
           </tr>
         </thead>
         <tbody>
-          ${items || `<tr><td colspan="5" class="muted">No items</td></tr>`}
+          ${items || `<tr><td colspan="3" class="muted">No items</td></tr>`}
         </tbody>
       </table>
 
@@ -189,8 +263,6 @@ function render(order: any) {
           <tbody>
             <tr><td>Subtotal</td><td class="right">${escapeHtml(money(sub))}</td></tr>
             <tr><td>Delivery Fee</td><td class="right">${escapeHtml(money(delivery))}</td></tr>
-            <tr><td>Paid Amount</td><td class="right">${escapeHtml(money(paid))}</td></tr>
-            <tr><td>Due Amount</td><td class="right">${escapeHtml(money(due))}</td></tr>
             ${disc > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(disc))}</td></tr>` : ''}
             <tr class="grand"><td>Grand Total</td><td class="right">${escapeHtml(money(grand))}</td></tr>
           </tbody>

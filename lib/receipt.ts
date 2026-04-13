@@ -127,14 +127,31 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
 
   const shippingAddress = order?.shipping_address || order?.shippingAddress;
   if (shippingAddress && typeof shippingAddress === 'object') {
-    if (shippingAddress.address) addrLines.push(safeString(shippingAddress.address));
+    const line1 =
+      shippingAddress.address ||
+      shippingAddress.street ||
+      shippingAddress.address_line1 ||
+      shippingAddress.address_line_1 ||
+      shippingAddress.line1;
+    const line2 =
+      shippingAddress.address_line2 ||
+      shippingAddress.address_line_2 ||
+      shippingAddress.line2 ||
+      shippingAddress.landmark;
+
+    if (line1) addrLines.push(safeString(line1));
+    if (line2) addrLines.push(safeString(line2));
+
     const areaLine = [shippingAddress.area, shippingAddress.zone].filter(Boolean).join(', ');
     if (areaLine) addrLines.push(areaLine);
-    const cityLine = [shippingAddress.city, shippingAddress.district].filter(Boolean).join(', ');
+    const cityLine = [shippingAddress.city, shippingAddress.district, shippingAddress.state].filter(Boolean).join(', ');
     if (cityLine) addrLines.push(cityLine);
-    const divLine = [shippingAddress.division, shippingAddress.postal_code || shippingAddress.postalCode].filter(Boolean).join(' - ');
-    if (divLine) addrLines.push(divLine);
+    const countryPostal = [shippingAddress.country, shippingAddress.postal_code || shippingAddress.postalCode].filter(Boolean).join(' - ');
+    if (countryPostal) addrLines.push(countryPostal);
   }
+
+  const orderLevelCustomerAddr = safeString(order?.customer_address || order?.customerAddress);
+  if (orderLevelCustomerAddr) addrLines.push(orderLevelCustomerAddr);
 
   const customerAddr = safeString(order?.customer?.address);
   if (customerAddr) addrLines.push(customerAddr);
