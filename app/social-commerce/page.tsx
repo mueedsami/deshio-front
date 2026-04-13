@@ -74,6 +74,7 @@ export default function SocialCommercePage() {
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
   const [socialId, setSocialId] = useState('');
+  const [orderNotes, setOrderNotes] = useState('');
 
   const [isInternational, setIsInternational] = useState(false);
 
@@ -182,6 +183,7 @@ export default function SocialCommercePage() {
         userEmail,
         userPhone,
         socialId,
+        orderNotes,
         isInternational,
         usePathaoAutoLocation,
         pathaoCityId,
@@ -836,6 +838,7 @@ export default function SocialCommercePage() {
         if (typeof d.userEmail === 'string') setUserEmail(d.userEmail);
         if (typeof d.userPhone === 'string') setUserPhone(d.userPhone);
         if (typeof d.socialId === 'string') setSocialId(d.socialId);
+        if (typeof d.orderNotes === 'string') setOrderNotes(d.orderNotes);
         if (typeof d.isInternational === 'boolean') setIsInternational(d.isInternational);
         if (typeof d.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(d.usePathaoAutoLocation);
         if (typeof d.pathaoCityId === 'string') setPathaoCityId(d.pathaoCityId);
@@ -872,6 +875,7 @@ export default function SocialCommercePage() {
     userEmail,
     userPhone,
     socialId,
+    orderNotes,
     isInternational,
     usePathaoAutoLocation,
     pathaoCityId,
@@ -1516,6 +1520,9 @@ export default function SocialCommercePage() {
             return base;
           })();
 
+      const baseNote = `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`;
+      const customerNote = orderNotes.trim();
+
       const orderData = {
         order_type: 'social_commerce',
         store_id: parseInt(selectedStore),
@@ -1527,6 +1534,7 @@ export default function SocialCommercePage() {
           address: formattedCustomerAddress,
         },
         shipping_address,
+        customer_order_note: customerNote || undefined,
         // ✅ Separate products and services
         items: cart
           .filter((item) => !item.isService)
@@ -1550,7 +1558,8 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        notes: `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`,
+        notes: customerNote ? `${baseNote}
+Customer Note: ${customerNote}` : baseNote,
       };
 
       sessionStorage.setItem(
@@ -1816,6 +1825,17 @@ export default function SocialCommercePage() {
                           value={socialId}
                           onChange={(e) => setSocialId(e.target.value)}
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Order Notes</label>
+                        <textarea
+                          placeholder="Any customer note, delivery instruction, size note, page note, etc."
+                          value={orderNotes}
+                          onChange={(e) => setOrderNotes(e.target.value)}
+                          rows={3}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 resize-y"
                         />
                       </div>
                     </div>

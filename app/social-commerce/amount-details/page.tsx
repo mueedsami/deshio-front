@@ -291,9 +291,14 @@ export default function AmountDetailsPage() {
               },
             }
           : {}),
-        notes:
-          (orderData.notes || 'Social Commerce order.') +
-          ` Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid now ৳${advance.toFixed(2)})` : `Cash on delivery ৳${codAmount.toFixed(2)}`}.`,
+        notes: [
+          orderData.notes || 'Social Commerce order.',
+          `Payment: ${paymentOption === 'full' ? 'Full' : paymentOption === 'partial' ? `Advance ৳${advance.toFixed(2)} + COD ৳${codAmount.toFixed(2)}` : paymentOption === 'installment' ? `${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid now ৳${advance.toFixed(2)})` : `Cash on delivery ৳${codAmount.toFixed(2)}`}.`,
+          paymentNotes?.trim() ? `Payment Note: ${paymentNotes.trim()}` : '',
+        ]
+          .filter(Boolean)
+          .join('
+'),
       };
 
       console.log('📦 Creating order:', orderPayload);

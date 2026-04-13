@@ -62,6 +62,8 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     .totals { width: 60%; margin-left: auto; margin-top: 10px; }
     .totals td { border: none; padding: 4px 6px; }
     .totals tr:last-child td { border-top: 1px solid #111; padding-top: 8px; }
+    .notesBox { margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; }
+    .notesText { font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
     .footer { margin-top: 14px; font-size: 11px; color:#444; text-align:center; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
@@ -97,6 +99,9 @@ function render(order: any) {
   const delivery = Number(r.totals?.shipping ?? 0); // Delivery Fee
   // VAT is intentionally ignored
   const grand = Number(r.totals?.total ?? Math.max(0, sub - disc + delivery));
+  const paid = Number(r.totals?.paid ?? Math.max(0, grand - Number(r.totals?.due ?? 0)));
+  const due = Number(r.totals?.due ?? Math.max(0, grand - paid));
+  const notes = String(r.notes || '').trim();
 
   const billToLines = [
     r.customerName ? `<b>${escapeHtml(r.customerName)}</b>` : '<b>Customer</b>',
@@ -167,9 +172,18 @@ function render(order: any) {
         <tr><td>Subtotal</td><td class="right">${escapeHtml(money(sub))}</td></tr>
         <tr><td>Delivery Fee</td><td class="right">${escapeHtml(money(delivery))}</td></tr>
         ${disc > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(disc))}</td></tr>` : ''}
+        <tr><td>Paid Amount</td><td class="right">${escapeHtml(money(paid))}</td></tr>
+        <tr><td><b>Due Amount</b></td><td class="right"><b>${escapeHtml(money(due))}</b></td></tr>
         <tr><td><b>Grand Total</b></td><td class="right"><b>${escapeHtml(money(grand))}</b></td></tr>
       </tbody>
     </table>
+
+    ${notes ? `
+      <div class="notesBox">
+        <div class="sectionTitle">Order Notes</div>
+        <div class="notesText">${escapeHtml(notes)}</div>
+      </div>
+    ` : ''}
 
     <div class="footer">
       This is a computer-generated invoice. Please keep it for your records.
