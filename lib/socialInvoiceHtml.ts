@@ -42,29 +42,37 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
   <meta charset="utf-8" />
   <title>${escapeHtml(title)}</title>
   <style>
-    @page { size: A5; margin: 10mm; }
-    body { font-family: Arial, Helvetica, sans-serif; color:#111; }
-    .row { display:flex; gap: 12px; }
-    .col { flex: 1; }
-    .brand { font-size: 22px; font-weight: 800; margin:0; letter-spacing: 0.3px; }
-    .brandSub { font-size: 12px; margin-top: 2px; }
+    @page { size: A5 portrait; margin: 7mm; }
+    html, body { width: 148mm; }
+    body { font-family: Arial, Helvetica, sans-serif; color:#111; margin:0; font-size: 11px; }
+    * { box-sizing: border-box; }
+    .sheet { width: 100%; max-width: 134mm; margin: 0 auto; }
+    .row { display:flex; gap: 8px; align-items: stretch; }
+    .col { flex: 1; min-width: 0; }
+    .triple { display:grid; grid-template-columns: 1fr 1.05fr 1fr; gap: 8px; align-items: stretch; }
+    .header { display:flex; align-items:flex-start; justify-content:space-between; gap: 10px; }
+    .brandWrap { display:flex; flex-direction:column; align-items:flex-start; }
+    .logo { height: 34px; width: auto; object-fit: contain; margin: 0 0 4px; }
+    .brand { font-size: 18px; font-weight: 800; margin:0; letter-spacing: 0.3px; line-height:1; }
+    .brandSub { font-size: 11px; margin-top: 2px; }
     .muted { color:#555; }
-    .box { border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; }
-    .metaGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; font-size: 12px; }
+    .box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
+    .metaGrid { display:grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; font-size: 11px; }
     .metaGrid .k { color:#555; }
     .metaGrid .v { text-align:right; font-weight: 600; }
-    .sectionTitle { font-size: 12px; font-weight: 700; margin: 0 0 6px; }
-    .addr { font-size: 12px; line-height: 1.35; }
-    table { width:100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
-    th { text-align:left; padding: 8px 6px; border-bottom: 1px solid #111; }
-    td { padding: 7px 6px; border-bottom: 1px solid #eee; vertical-align: top; }
+    .sectionTitle { font-size: 11px; font-weight: 700; margin: 0 0 5px; }
+    .addr { font-size: 11px; line-height: 1.3; }
+    table { width:100%; border-collapse: collapse; margin-top: 8px; font-size: 11px; }
+    th { text-align:left; padding: 6px 5px; border-bottom: 1px solid #111; }
+    td { padding: 5px; border-bottom: 1px solid #eee; vertical-align: top; }
     .right { text-align:right; }
-    .totals { width: 60%; margin-left: auto; margin-top: 10px; }
-    .totals td { border: none; padding: 4px 6px; }
-    .totals tr:last-child td { border-top: 1px solid #111; padding-top: 8px; }
-    .notesBox { margin-top: 12px; border: 1px solid #e5e7eb; border-radius: 10px; padding: 10px; }
-    .notesText { font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
-    .footer { margin-top: 14px; font-size: 11px; color:#444; text-align:center; }
+    .totals { width: 58%; margin-left: auto; margin-top: 8px; }
+    .totals td { border: none; padding: 3px 5px; }
+    .totals tr:last-child td { border-top: 1px solid #111; padding-top: 6px; }
+    .notesBox { margin-top: 10px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
+    .notesText { font-size: 11px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+    .footer { margin-top: 10px; font-size: 10px; color:#444; text-align:center; }
+    .spacer { height: 8px; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
 </head>
@@ -102,6 +110,11 @@ function render(order: any) {
   const paid = Number(r.totals?.paid ?? Math.max(0, grand - Number(r.totals?.due ?? 0)));
   const due = Number(r.totals?.due ?? Math.max(0, grand - paid));
   const notes = String(r.notes || '').trim();
+  const paymentTerms = due > 0 ? `Partial payment received. Due amount: ৳${money(due)}` : 'Paid in full';
+  const productDescription = (r.items || [])
+    .map((it: any) => [it.name, it.variant].filter(Boolean).join(' - '))
+    .filter(Boolean)
+    .join(', ');
 
   const billToLines = [
     r.customerName ? `<b>${escapeHtml(r.customerName)}</b>` : '<b>Customer</b>',
@@ -123,31 +136,39 @@ function render(order: any) {
   }).join('');
 
   return `
-    <div class="row">
-      <div class="col">
-        <h1 class="brand">INVOICE</h1>
-        <div class="brandSub muted">Social Commerce Order</div>
+    <div class="sheet">
+      <div class="header">
+        <div class="brandWrap">
+          <img src="/logo.png" alt="Deshio logo" class="logo" />
+          <h1 class="brand">INVOICE</h1>
+          <div class="brandSub muted">Social Commerce Order</div>
+        </div>
+        <div style="flex:1; max-width: 68mm;">
+          ${companyInfoBlock()}
+        </div>
       </div>
-      <div class="col">
-        ${companyInfoBlock()}
-      </div>
-    </div>
 
-    <div style="height:10px;"></div>
+      <div class="spacer"></div>
 
-    <div class="row">
-      <div class="col box">
+      <div class="triple">
+      <div class="box">
         <div class="sectionTitle">Bill To</div>
         <div class="addr">${billToLines.join('<br/>')}</div>
       </div>
 
-      <div class="col box">
+      <div class="box">
+        <div class="sectionTitle">Product Description</div>
+        <div class="notesText">${escapeHtml(productDescription || 'No product description available')}</div>
+      </div>
+
+      <div class="box">
         <div class="sectionTitle">Invoice Details</div>
         <div class="metaGrid">
           <div class="k">Invoice No</div><div class="v">${escapeHtml(invNo)}</div>
           <div class="k">Order No</div><div class="v">${escapeHtml(orderNo)}</div>
           <div class="k">Date</div><div class="v">${escapeHtml(date)}</div>
           ${r.storeName ? `<div class="k">Store</div><div class="v">${escapeHtml(r.storeName)}</div>` : ''}
+          <div class="k">Payment Terms</div><div class="v">${escapeHtml(paymentTerms)}</div>
         </div>
       </div>
     </div>
@@ -187,6 +208,7 @@ function render(order: any) {
 
     <div class="footer">
       This is a computer-generated invoice. Please keep it for your records.
+    </div>
     </div>
   `;
 }
