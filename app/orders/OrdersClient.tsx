@@ -312,7 +312,9 @@ export default function OrdersDashboard() {
   const pathaoInFlightRef = useRef<Set<string>>(new Set());
 
   const [search, setSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState(getTodayFilterValue());
+  const [dateFilter, setDateFilter] = useState('');
+  const [dateFromFilter, setDateFromFilter] = useState('');
+  const [dateToFilter, setDateToFilter] = useState('');
 
   // ✅ NEW: Order type filter (All / Social / E-Com)
   const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
@@ -540,6 +542,8 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
     batchStatus?: 'pending' | 'processing' | 'completed' | 'cancelled' | 'preparing' | 'error';
     details: Array<{ orderId?: number; orderNumber?: string; status: 'success' | 'failed'; message: string }>;
   }>({ show: false, current: 0, total: 0, success: 0, failed: 0, batchCode: undefined, batchStatus: 'preparing', details: [] });
+  const [pathaoSyncQueue, setPathaoSyncQueue] = useState<Record<string, { startedAt: number; orderId?: number }>>({});
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
 
   // ✅ QZ / printer state
   const [qzConnected, setQzConnected] = useState(false);
@@ -555,6 +559,92 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
 
   const isSingleLoading = (orderId: number, action: 'print' | 'pathao') =>
     singleActionLoading?.orderId === orderId && singleActionLoading?.action === action;
+
+  const queuePathaoStatusSync = useCallback(
+    (items: Array<string | { orderNumber?: string; orderId?: number }>) => {
+      setPathaoSyncQueue((prev) => {
+        const next = { ...prev };
+        const now = Date.now();
+
+        items.forEach((item) => {
+          const orderNumber = typeof item === 'string' ? item : item?.orderNumber;
+          const orderId = typeof item === 'string' ? undefined : item?.orderId;
+          if (!orderNumber) return;
+
+          if (pathaoLookupByOrderNumber[orderNumber]?.is_sent_via_pathao) {
+            delete next[orderNumber];
+            return;
+          }
+
+          next[orderNumber] = {
+            startedAt: prev[orderNumber]?.startedAt ?? now,
+            orderId: orderId ?? prev[orderNumber]?.orderId,
+          };
+        });
+
+        return next;
+      });
+    },
+    [pathaoLookupByOrderNumber]
+  );
+
+  const refreshPathaoStatuses = useCallback(
+    async (orderNumbers?: string[]) => {
+      const unique = Array.from(new Set((orderNumbers || []).filter(Boolean)));
+      if (unique.length === 0) return {} as Record<string, PathaoBulkLookupItem>;
+
+      setIsPathaoLookupLoading(true);
+      try {
+        const merged: Record<string, PathaoBulkLookupItem> = {};
+
+        for (let i = 0; i < unique.length; i += 100) {
+          const chunk = unique.slice(i, i + 100);
+          const res = await pathaoOrderLookupService.lookupBulk(chunk);
+          (res.data || []).forEach((item) => {
+            if (item?.order_number) merged[item.order_number] = item;
+          });
+        }
+
+        if (Object.keys(merged).length > 0) {
+          setPathaoLookupByOrderNumber((prev) => ({ ...prev, ...merged }));
+        }
+
+        return merged;
+      } catch (error) {
+        console.error('Failed to refresh Pathao statuses:', error);
+        return {} as Record<string, PathaoBulkLookupItem>;
+      } finally {
+        setIsPathaoLookupLoading(false);
+      }
+    },
+    []
+  );
+
+  const handleRefreshStatuses = useCallback(async () => {
+    const visibleOrderNumbers = Array.from(new Set((filteredOrders || []).map((o) => o.orderNumber).filter(Boolean)));
+    if (visibleOrderNumbers.length === 0) return;
+
+    setIsRefreshingStatus(true);
+    try {
+      await loadOrders();
+      await refreshPathaoStatuses(visibleOrderNumbers);
+    } finally {
+      setIsRefreshingStatus(false);
+    }
+  }, [filteredOrders, refreshPathaoStatuses]);
+
+  const pathaoSyncOrderNumbers = useMemo(() => Object.keys(pathaoSyncQueue), [pathaoSyncQueue]);
+  const pathaoSyncingSet = useMemo(() => new Set(pathaoSyncOrderNumbers), [pathaoSyncOrderNumbers]);
+  const pathaoSyncProgress = useMemo(() => {
+    const total = pathaoSyncOrderNumbers.length;
+    const success = pathaoSyncOrderNumbers.filter((orderNumber) => pathaoLookupByOrderNumber[orderNumber]?.is_sent_via_pathao).length;
+    return {
+      total,
+      success,
+      processing: Math.max(0, total - success),
+      percent: total > 0 ? Math.round((success / total) * 100) : 0,
+    };
+  }, [pathaoLookupByOrderNumber, pathaoSyncOrderNumbers]);
 
   useEffect(() => {
     const name = localStorage.getItem('userName') || '';
@@ -1111,7 +1201,7 @@ const derivePaymentStatus = (order: any) => {
   };
 
   // ✅ Social Commerce + E-Commerce orders
-  const loadOrders = async () => {
+  const loadOrders = useCallback(async () => {
     setIsLoading(true);
     try {
       let allOrders: any[] = [];
@@ -1166,7 +1256,7 @@ const derivePaymentStatus = (order: any) => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [viewMode]);
 
   // ✅ QZ Tray status / printers
   const checkPrinterStatus = async () => {
@@ -1232,15 +1322,40 @@ const derivePaymentStatus = (order: any) => {
       );
     }
 
-    if (dateFilter.trim()) {
+    if (dateFilter.trim() || dateFromFilter.trim() || dateToFilter.trim()) {
       filtered = filtered.filter((o) => {
-        const orderDate = o.date;
-        let filterDateFormatted = dateFilter;
-        if (dateFilter.includes('-') && dateFilter.split('-')[0].length === 4) {
-          const [year, month, day] = dateFilter.split('-');
-          filterDateFormatted = `${day}/${month}/${year}`;
+        const raw = String(o.orderDateRaw || '').trim();
+        if (!raw) return false;
+
+        const orderDate = new Date(raw);
+        if (Number.isNaN(orderDate.getTime())) return false;
+
+        const normalizedOrder = new Date(orderDate.getFullYear(), orderDate.getMonth(), orderDate.getDate()).getTime();
+
+        if (dateFilter.trim()) {
+          const todayDate = new Date(dateFilter);
+          if (Number.isNaN(todayDate.getTime())) return false;
+          const normalizedToday = new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate()).getTime();
+          return normalizedOrder === normalizedToday;
         }
-        return orderDate === filterDateFormatted;
+
+        let pass = true;
+
+        if (dateFromFilter.trim()) {
+          const fromDate = new Date(dateFromFilter);
+          if (Number.isNaN(fromDate.getTime())) return false;
+          const normalizedFrom = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate()).getTime();
+          pass = pass && normalizedOrder >= normalizedFrom;
+        }
+
+        if (dateToFilter.trim()) {
+          const toDate = new Date(dateToFilter);
+          if (Number.isNaN(toDate.getTime())) return false;
+          const normalizedTo = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate()).getTime();
+          pass = pass && normalizedOrder <= normalizedTo;
+        }
+
+        return pass;
       });
     }
 
@@ -1267,7 +1382,7 @@ const derivePaymentStatus = (order: any) => {
     }
 
     setFilteredOrders(filtered);
-  }, [search, dateFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
+  }, [search, dateFilter, dateFromFilter, dateToFilter, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
 
   // 🧾 Bulk lookup Pathao status for displayed orders
   const filteredOrderNumbers = useMemo(() => {
@@ -1275,54 +1390,92 @@ const derivePaymentStatus = (order: any) => {
   }, [filteredOrders]);
 
   useEffect(() => {
+    const unique = Array.from(new Set(filteredOrderNumbers));
+    if (unique.length === 0) return;
+
+    const missing = unique.filter(
+      (n) => !pathaoLookupByOrderNumber[n] && !pathaoInFlightRef.current.has(n)
+    );
+
+    if (missing.length === 0) return;
+
+    missing.forEach((n) => pathaoInFlightRef.current.add(n));
+
+    refreshPathaoStatuses(missing).finally(() => {
+      missing.forEach((n) => pathaoInFlightRef.current.delete(n));
+    });
+  }, [filteredOrderNumbers, pathaoLookupByOrderNumber, refreshPathaoStatuses]);
+
+  // Re-check visible Pathao-intended orders periodically so the green badge appears automatically
+  useEffect(() => {
+    if (viewMode !== 'online') return;
+
+    const candidates = Array.from(
+      new Set(
+        (filteredOrders || [])
+          .filter((o) => normalizeCourier(o.intendedCourier) === 'pathao' && !pathaoLookupByOrderNumber[o.orderNumber]?.is_sent_via_pathao)
+          .map((o) => o.orderNumber)
+          .filter(Boolean)
+      )
+    );
+
+    if (candidates.length === 0) return;
+
+    const intervalId = window.setInterval(() => {
+      refreshPathaoStatuses(candidates);
+    }, 10000);
+
+    return () => window.clearInterval(intervalId);
+  }, [filteredOrders, pathaoLookupByOrderNumber, refreshPathaoStatuses, viewMode]);
+
+  // Aggressive short-term polling right after sending to Pathao
+  useEffect(() => {
+    if (viewMode !== 'online') return;
+    if (pathaoSyncOrderNumbers.length === 0) return;
+
     let cancelled = false;
 
-    const run = async () => {
-      const unique = Array.from(new Set(filteredOrderNumbers));
-      if (unique.length === 0) return;
+    const tick = async () => {
+      const now = Date.now();
+      const activeEntries = Object.entries(pathaoSyncQueue).filter(([, meta]) => now - meta.startedAt < 90 * 1000);
+      const expiredOrderNumbers = Object.entries(pathaoSyncQueue)
+        .filter(([, meta]) => now - meta.startedAt >= 90 * 1000)
+        .map(([orderNumber]) => orderNumber);
 
-      // Only fetch missing and not-in-flight order numbers
-      const missing = unique.filter(
-        (n) => !pathaoLookupByOrderNumber[n] && !pathaoInFlightRef.current.has(n)
-      );
+      if (expiredOrderNumbers.length > 0) {
+        setPathaoSyncQueue((prev) => {
+          const next = { ...prev };
+          expiredOrderNumbers.forEach((orderNumber) => delete next[orderNumber]);
+          return next;
+        });
+      }
 
-      if (missing.length === 0) return;
+      const activeOrderNumbers = activeEntries.map(([orderNumber]) => orderNumber);
+      if (activeOrderNumbers.length === 0) return;
 
-      // Mark in-flight to avoid duplicate concurrent requests
-      missing.forEach((n) => pathaoInFlightRef.current.add(n));
-      setIsPathaoLookupLoading(true);
+      const refreshed = await refreshPathaoStatuses(activeOrderNumbers);
+      if (cancelled) return;
 
-      try {
-        for (let i = 0; i < missing.length; i += 100) {
-          if (cancelled) return;
-          const chunk = missing.slice(i, i + 100);
-          const res = await pathaoOrderLookupService.lookupBulk(chunk);
-          if (cancelled) return;
+      const sentNow = activeOrderNumbers.filter((orderNumber) => refreshed[orderNumber]?.is_sent_via_pathao);
 
-          const next: Record<string, PathaoBulkLookupItem> = {};
-          (res.data || []).forEach((item) => {
-            if (item?.order_number) next[item.order_number] = item;
-          });
-
-          if (Object.keys(next).length > 0) {
-            setPathaoLookupByOrderNumber((prev) => ({ ...prev, ...next }));
-          }
-        }
-      } catch (e) {
-        console.error('Failed to bulk lookup Pathao orders:', e);
-      } finally {
-        // Clear in-flight markers
-        missing.forEach((n) => pathaoInFlightRef.current.delete(n));
-        if (!cancelled) setIsPathaoLookupLoading(false);
+      if (sentNow.length > 0) {
+        setPathaoSyncQueue((prev) => {
+          const next = { ...prev };
+          sentNow.forEach((orderNumber) => delete next[orderNumber]);
+          return next;
+        });
+        await loadOrders();
       }
     };
 
-    run();
+    tick();
+    const intervalId = window.setInterval(tick, 3000);
 
     return () => {
       cancelled = true;
+      window.clearInterval(intervalId);
     };
-  }, [filteredOrderNumbers, pathaoLookupByOrderNumber]);
+  }, [loadOrders, pathaoSyncOrderNumbers, pathaoSyncQueue, refreshPathaoStatuses, viewMode]);
 
   const handleViewDetails = async (order: Order) => {
     setIsLoadingDetails(true);
@@ -1885,6 +2038,26 @@ const derivePaymentStatus = (order: any) => {
 
   const getDeliveryBadge = (orderNumber: string) => {
     const info = pathaoLookupByOrderNumber[orderNumber];
+    const isSyncing = pathaoSyncingSet.has(orderNumber);
+
+    if (info?.is_sent_via_pathao) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
+          <Truck className="h-3 w-3" />
+          Pathao
+        </span>
+      );
+    }
+
+    if (isSyncing) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+          <Loader className="h-3 w-3 animate-spin" />
+          Processing
+        </span>
+      );
+    }
+
     if (!info) {
       return isPathaoLookupLoading ? (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
@@ -1895,15 +2068,6 @@ const derivePaymentStatus = (order: any) => {
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
           <Package className="h-3 w-3" />
           —
-        </span>
-      );
-    }
-
-    if (info.is_sent_via_pathao) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">
-          <Truck className="h-3 w-3" />
-          Pathao
         </span>
       );
     }
@@ -2165,6 +2329,7 @@ const derivePaymentStatus = (order: any) => {
         console.warn('Failed to set intended courier for bulk Pathao send:', e);
       }
 
+      queuePathaoStatusSync(selectedOrdersList.map((o) => ({ orderNumber: o.orderNumber, orderId: o.id })));
       await loadOrders();
     } catch (error: any) {
       console.error('Bulk send to Pathao error:', error);
@@ -2424,6 +2589,7 @@ const derivePaymentStatus = (order: any) => {
         console.warn('Failed to set intended courier for this order:', e);
       }
 
+      queuePathaoStatusSync([{ orderNumber: order.orderNumber, orderId: order.id }]);
       await loadOrders();
     } catch (error: any) {
       console.error('Single send to Pathao error:', error);
@@ -3161,6 +3327,8 @@ const derivePaymentStatus = (order: any) => {
                     setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
+                    setDateFromFilter('');
+                    setDateToFilter('');
                     setSelectedOrders(new Set());
                   }}
                   className={`px-3 py-1.5 rounded border text-xs font-semibold transition-colors ${
@@ -3181,6 +3349,8 @@ const derivePaymentStatus = (order: any) => {
                     setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
+                    setDateFromFilter('');
+                    setDateToFilter('');
                     setSelectedOrders(new Set());
                   }}
                   className={`px-3 py-1.5 rounded border text-xs font-semibold transition-colors ${
@@ -3291,12 +3461,59 @@ const derivePaymentStatus = (order: any) => {
                   />
                 </div>
 
-                <input
-                  type="date"
-                  value={dateFilter}
-                  onChange={(e) => setDateFilter(e.target.value)}
-                  className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
-                />
+                <div className="flex flex-col md:flex-row gap-2 w-full md:w-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDateFilter(getTodayFilterValue());
+                      setDateFromFilter('');
+                      setDateToFilter('');
+                    }}
+                    className={`px-3 py-2 text-sm border rounded font-medium transition-colors ${
+                      dateFilter === getTodayFilterValue()
+                        ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white'
+                        : 'bg-white text-black border-gray-300 hover:bg-gray-50 dark:bg-gray-900 dark:text-white dark:border-gray-700 dark:hover:bg-gray-800'
+                    }`}
+                  >
+                    Today
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={dateFromFilter}
+                      onChange={(e) => {
+                        setDateFilter('');
+                        setDateFromFilter(e.target.value);
+                      }}
+                      className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                    />
+                    <span className="text-xs text-gray-500 dark:text-gray-400">to</span>
+                    <input
+                      type="date"
+                      value={dateToFilter}
+                      onChange={(e) => {
+                        setDateFilter('');
+                        setDateToFilter(e.target.value);
+                      }}
+                      className="w-full md:w-auto px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                    />
+                  </div>
+
+                  {(dateFilter || dateFromFilter || dateToFilter) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDateFilter('');
+                        setDateFromFilter('');
+                        setDateToFilter('');
+                      }}
+                      className="px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
 
                 {/* ✅ NEW: Order type filter */}
                 <select
@@ -3331,9 +3548,22 @@ const derivePaymentStatus = (order: any) => {
                 </select>
               </div>
 
-              <p className="text-xs text-gray-500 dark:text-gray-500">
-                Showing {filteredOrders.length} of {orders.length} orders
-              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-xs text-gray-500 dark:text-gray-500">
+                  Showing {filteredOrders.length} of {orders.length} orders
+                  {dateFilter ? ' • Today filter applied' : (dateFromFilter || dateToFilter) ? ` • Date range: ${dateFromFilter || '...'} to ${dateToFilter || '...'}` : ''}
+                </p>
+                {viewMode === 'online' && (
+                  <button
+                    onClick={handleRefreshStatuses}
+                    disabled={isRefreshingStatus}
+                    className="inline-flex items-center gap-1 rounded border border-gray-300 dark:border-gray-700 px-2 py-1 text-[11px] font-medium text-black dark:text-white hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
+                    {isRefreshingStatus ? 'Refreshing' : 'Refresh Status'}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Bulk Actions */}
@@ -3416,6 +3646,31 @@ const derivePaymentStatus = (order: any) => {
                       {pathaoProgress.batchStatus ? ` • ${pathaoProgress.batchStatus}` : ''}
                     </p>
                   ) : null}
+                </div>
+              )}
+
+              {pathaoSyncProgress.total > 0 && (
+                <div className="mb-2 border border-amber-200 dark:border-amber-900/40 rounded px-3 py-1.5 bg-amber-50/60 dark:bg-amber-950/20">
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[10px] font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1">
+                      <Truck className="w-3 h-3" />
+                      Pathao status sync {pathaoSyncProgress.success}/{pathaoSyncProgress.total}
+                    </p>
+                    <span className="text-[10px] font-medium text-amber-800 dark:text-amber-300">
+                      {pathaoSyncProgress.percent}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-amber-200/70 dark:bg-amber-900/40 rounded-full h-1">
+                    <div
+                      className="bg-amber-600 dark:bg-amber-300 h-1 rounded-full transition-all"
+                      style={{ width: `${pathaoSyncProgress.percent}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-[10px] text-amber-800/80 dark:text-amber-300/80">
+                    {pathaoSyncProgress.processing > 0
+                      ? `${pathaoSyncProgress.processing} order(s) still syncing from Pathao...`
+                      : 'All recently sent Pathao orders are updated.'}
+                  </p>
                 </div>
               )}
 
