@@ -1676,9 +1676,10 @@ const derivePaymentStatus = (order: any) => {
     if (orderTypeLower === 'social_commerce' || orderTypeLower === 'social') {
       try {
         const fullOrder = await orderService.getById(order.id);
+        const fo = fullOrder as any;
         const sa: any =
-          fullOrder.shipping_address && typeof fullOrder.shipping_address === 'object'
-            ? fullOrder.shipping_address
+          fo.shipping_address && typeof fo.shipping_address === 'object'
+            ? fo.shipping_address
             : {};
 
         const isIntl = !!sa?.country && !sa?.pathao_city_id;
@@ -1686,7 +1687,7 @@ const derivePaymentStatus = (order: any) => {
         const looksLikeService = (it: any) =>
           Boolean(it?.service_id || it?.is_service || it?.isService);
 
-        const cartItems = (fullOrder.items ?? [])
+        const cartItems = (fo.items ?? [])
           .filter((it: any) => !looksLikeService(it))
           .map((it: any) => ({
             id: it.id,
@@ -1703,12 +1704,12 @@ const derivePaymentStatus = (order: any) => {
 
         const prefill = {
           editOrderId: order.id,
-          editOrderNumber: fullOrder.order_number,
-          userName: fullOrder.customer_name ?? fullOrder.customer?.name ?? '',
-          userPhone: fullOrder.customer_phone ?? fullOrder.customer?.phone ?? '',
-          userEmail: fullOrder.customer_email ?? fullOrder.customer?.email ?? '',
-          socialId: fullOrder.social_id ?? '',
-          orderNotes: fullOrder.notes ?? fullOrder.customer_notes ?? '',
+          editOrderNumber: fo.order_number,
+          userName: fo.customer_name ?? fo.customer?.name ?? '',
+          userPhone: fo.customer_phone ?? fo.customer?.phone ?? '',
+          userEmail: fo.customer_email ?? fo.customer?.email ?? '',
+          socialId: fo.social_id ?? '',
+          orderNotes: fo.notes ?? fo.customer_notes ?? '',
           isInternational: isIntl,
           usePathaoAutoLocation: !sa.pathao_city_id,
           pathaoCityId: sa.pathao_city_id ? String(sa.pathao_city_id) : '',
@@ -1721,7 +1722,7 @@ const derivePaymentStatus = (order: any) => {
           internationalCity: sa.city ?? '',
           internationalPostalCode: sa.postal_code ?? '',
           deliveryAddress: sa.street ?? sa.address ?? '',
-          storeId: fullOrder.store?.id ? String(fullOrder.store.id) : '',
+          storeId: fo.store?.id ? String(fo.store.id) : '',
           cart: cartItems,
         };
 
