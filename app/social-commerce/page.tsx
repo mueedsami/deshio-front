@@ -60,6 +60,7 @@ interface PathaoArea {
 
 const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
+const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
 
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
@@ -67,6 +68,21 @@ export default function SocialCommercePage() {
   const [availableBatchCount, setAvailableBatchCount] = useState<number | null>(null);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [stores, setStores] = useState<any[]>([]);
+
+  // Edit-order mode (navigated from orders page for social commerce orders)
+  const [editOrderId, setEditOrderId] = useState<number | null>(null);
+  const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
+
+  // Multi-product staging: collect several products before adding them all to cart at once
+  interface StagingItem {
+    id: string;
+    product: any;
+    quantity: number;
+    discountPercent: string;
+    discountTk: string;
+    amount: string;
+  }
+  const [stagingQueue, setStagingQueue] = useState<StagingItem[]>([]);
 
   const [date, setDate] = useState(getTodayDate());
   const [salesBy, setSalesBy] = useState('');
@@ -825,6 +841,39 @@ export default function SocialCommercePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
+      // ── Check for edit-order prefill first (overrides any draft) ──
+      const editRaw = sessionStorage.getItem(SC_EDIT_PREFILL_KEY);
+      if (editRaw) {
+        sessionStorage.removeItem(SC_EDIT_PREFILL_KEY);
+        // Also clear any stale draft so prefill values win
+        sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
+        const ep = JSON.parse(editRaw);
+        if (ep && typeof ep === 'object') {
+          if (typeof ep.editOrderId === 'number') setEditOrderId(ep.editOrderId);
+          if (typeof ep.editOrderNumber === 'string') setEditOrderNumber(ep.editOrderNumber);
+          if (typeof ep.userName === 'string') setUserName(ep.userName);
+          if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
+          if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
+          if (typeof ep.socialId === 'string') setSocialId(ep.socialId);
+          if (typeof ep.orderNotes === 'string') setOrderNotes(ep.orderNotes);
+          if (typeof ep.isInternational === 'boolean') setIsInternational(ep.isInternational);
+          if (typeof ep.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(ep.usePathaoAutoLocation);
+          if (typeof ep.pathaoCityId === 'string') setPathaoCityId(ep.pathaoCityId);
+          if (typeof ep.pathaoZoneId === 'string') setPathaoZoneId(ep.pathaoZoneId);
+          if (typeof ep.pathaoAreaId === 'string') setPathaoAreaId(ep.pathaoAreaId);
+          if (typeof ep.streetAddress === 'string') setStreetAddress(ep.streetAddress);
+          if (typeof ep.postalCode === 'string') setPostalCode(ep.postalCode);
+          if (typeof ep.country === 'string') setCountry(ep.country);
+          if (typeof ep.state === 'string') setState(ep.state);
+          if (typeof ep.internationalCity === 'string') setInternationalCity(ep.internationalCity);
+          if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
+          if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
+          if (Array.isArray(ep.cart)) setCart(ep.cart);
+        }
+        draftHydratedRef.current = true;
+        return;
+      }
+
       const raw = sessionStorage.getItem(SC_DRAFT_STORAGE_KEY);
       if (!raw) {
         draftHydratedRef.current = true;
@@ -1357,6 +1406,71 @@ export default function SocialCommercePage() {
     setCart(cart.filter((item) => item.id !== id));
   };
 
+  // ── Multi-product staging ──────────────────────────────────────────────────
+  const addToStaging = () => {
+    if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
+      alert('Please select a product and enter quantity');
+      return;
+    }
+    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const qty = parseInt(quantity);
+    const discPer = parseFloat(discountPercent) || 0;
+    const discTk = parseFloat(discountTk) || 0;
+    if (qty > selectedProduct.available && !selectedProduct.isDefective) {
+      alert(`Only ${selectedProduct.available} units available in this store`);
+      return;
+    }
+    const finalAmount = calculateAmount(price, qty, discPer, discTk);
+    setStagingQueue((prev) => [
+      ...prev,
+      {
+        id: `stg-${Date.now()}-${Math.random()}`,
+        product: selectedProduct,
+        quantity: qty,
+        discountPercent,
+        discountTk,
+        amount: finalAmount.toFixed(2),
+      },
+    ]);
+    // Reset selection so user can immediately search next product
+    setSelectedProduct(null);
+    setQuantity('');
+    setDiscountPercent('');
+    setDiscountTk('');
+    setAmount('0.00');
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  const removeStagingItem = (id: string) => {
+    setStagingQueue((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const addAllStagedToCart = () => {
+    if (stagingQueue.length === 0) return;
+    const newItems: CartProduct[] = stagingQueue.map((s) => {
+      const price = Number(String(s.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+      const discPer = parseFloat(s.discountPercent) || 0;
+      const discTk = parseFloat(s.discountTk) || 0;
+      const baseAmount = price * s.quantity;
+      const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
+      return {
+        id: Date.now() + Math.random(),
+        product_id: s.product.id,
+        batch_id: null,
+        productName: s.product.name,
+        quantity: s.quantity,
+        unit_price: price,
+        discount_amount: discountValue,
+        amount: baseAmount - discountValue,
+        isDefective: s.product.isDefective,
+        defectId: s.product.defectId,
+      };
+    });
+    setCart((prev) => [...prev, ...newItems]);
+    setStagingQueue([]);
+  };
+
   /**
    * ✅ NEW: Add service to cart
    */
@@ -1520,9 +1634,6 @@ export default function SocialCommercePage() {
             return base;
           })();
 
-      const baseNote = `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`;
-      const customerNote = orderNotes.trim();
-
       const orderData = {
         order_type: 'social_commerce',
         store_id: parseInt(selectedStore),
@@ -1534,7 +1645,6 @@ export default function SocialCommercePage() {
           address: formattedCustomerAddress,
         },
         shipping_address,
-        customer_order_note: customerNote || undefined,
         // ✅ Separate products and services
         items: cart
           .filter((item) => !item.isService)
@@ -1558,8 +1668,10 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        notes: customerNote ? `${baseNote}
-Customer Note: ${customerNote}` : baseNote,
+        notes: [
+          orderNotes?.trim(),
+          `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
+        ].filter(Boolean).join(' '),
       };
 
       sessionStorage.setItem(
@@ -1602,6 +1714,23 @@ Customer Note: ${customerNote}` : baseNote,
             <div className="max-w-7xl mx-auto">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
                 <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
+
+                {editOrderId && (
+                  <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
+                    <span className="text-base">✏️</span>
+                    <span className="text-sm font-medium text-amber-900 dark:text-amber-200">
+                      Editing Order <span className="font-bold">#{editOrderNumber}</span> — adjust the details and cart, then proceed to Amount Details as usual.
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => { setEditOrderId(null); setEditOrderNumber(null); }}
+                      className="ml-auto text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200"
+                      title="Dismiss"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
 
                 {defectiveProduct && (
                   <div className="w-full sm:w-auto flex items-center flex-wrap gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
@@ -1659,6 +1788,7 @@ Customer Note: ${customerNote}` : baseNote,
                     <h3 className="text-sm font-medium text-gray-900 dark:text-white mb-4">Customer Information</h3>
 
                     <div className="space-y-3">
+                      {/* 1. Name */}
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Name*</label>
                         <input
@@ -1670,17 +1800,7 @@ Customer Note: ${customerNote}` : baseNote,
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Email</label>
-                        <input
-                          type="email"
-                          placeholder="sample@email.com (optional)"
-                          value={userEmail}
-                          onChange={(e) => setUserEmail(e.target.value)}
-                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                        />
-                      </div>
-
+                      {/* 2. Contact (Phone) */}
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Phone Number*</label>
                         <input
@@ -1817,6 +1937,63 @@ Customer Note: ${customerNote}` : baseNote,
                         )}
                       </div>
 
+                      {/* 3. Address (street) */}
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
+                          {isInternational ? 'Street Address*' : (usePathaoAutoLocation ? 'Full Address*' : 'Street Address*')}
+                        </label>
+                        {isInternational ? (
+                          <textarea
+                            placeholder="Full Address"
+                            value={deliveryAddress}
+                            onChange={(e) => setDeliveryAddress(e.target.value)}
+                            rows={3}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
+                        ) : (
+                          <textarea
+                            placeholder={
+                              usePathaoAutoLocation
+                                ? 'House 71, Road 15, Sector 11, Uttara, Dhaka'
+                                : 'House 12, Road 5, etc.'
+                            }
+                            value={streetAddress}
+                            onChange={(e) => setStreetAddress(e.target.value)}
+                            rows={usePathaoAutoLocation ? 3 : 2}
+                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                          />
+                        )}
+                      </div>
+
+                      {/* 4. Postal Code */}
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
+                        <input
+                          type="text"
+                          placeholder="e.g., 1212"
+                          value={isInternational ? internationalPostalCode : postalCode}
+                          onChange={(e) =>
+                            isInternational
+                              ? setInternationalPostalCode(e.target.value)
+                              : setPostalCode(e.target.value)
+                          }
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        />
+                      </div>
+
+                      {/* 5. Email */}
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">User Email</label>
+                        <input
+                          type="email"
+                          placeholder="sample@email.com (optional)"
+                          value={userEmail}
+                          onChange={(e) => setUserEmail(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                        />
+                      </div>
+
+                      {/* 6. Social ID */}
                       <div>
                         <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Social ID</label>
                         <input
@@ -1828,15 +2005,42 @@ Customer Note: ${customerNote}` : baseNote,
                         />
                       </div>
 
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Order Notes</label>
-                        <textarea
-                          placeholder="Any customer note, delivery instruction, size note, page note, etc."
-                          value={orderNotes}
-                          onChange={(e) => setOrderNotes(e.target.value)}
-                          rows={3}
-                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 resize-y"
-                        />
+                      {/* 7. Domestic / International toggle */}
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!isInternational) return;
+                            setIsInternational(false);
+                            setCountry(''); setState(''); setInternationalCity('');
+                            setInternationalPostalCode(''); setDeliveryAddress('');
+                          }}
+                          className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-colors ${
+                            !isInternational
+                              ? 'bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 border-gray-900 dark:border-gray-100'
+                              : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+                          }`}
+                        >
+                          🏠 Domestic
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (isInternational) return;
+                            setIsInternational(true);
+                            setPathaoCityId(''); setPathaoZoneId(''); setPathaoAreaId('');
+                            setPathaoZones([]); setPathaoAreas([]);
+                            setStreetAddress(''); setPostalCode('');
+                          }}
+                          className={`flex-1 py-2 rounded-lg text-xs font-semibold border transition-colors ${
+                            isInternational
+                              ? 'bg-blue-600 text-white border-blue-600'
+                              : 'bg-white dark:bg-gray-700 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-600'
+                          }`}
+                        >
+                          <Globe className="w-3 h-3 inline mr-1" />
+                          International
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -1853,36 +2057,12 @@ Customer Note: ${customerNote}` : baseNote,
                   {/* Delivery Address */}
                   <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 md:p-5">
                     <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">Delivery Address</h3>
-                      <button
-                        onClick={() => {
-                          setIsInternational(!isInternational);
-
-                          // reset domestic
-                          setPathaoCityId('');
-                          setPathaoZoneId('');
-                          setPathaoAreaId('');
-                          setPathaoZones([]);
-                          setPathaoAreas([]);
-                          setStreetAddress('');
-                          setPostalCode('');
-
-                          // reset international
-                          setCountry('');
-                          setState('');
-                          setInternationalCity('');
-                          setInternationalPostalCode('');
-                          setDeliveryAddress('');
-                        }}
-                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                          isInternational
-                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 border border-blue-300 dark:border-blue-700'
-                            : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 border border-gray-300 dark:border-gray-600'
-                        }`}
-                      >
-                        <Globe className="w-4 h-4" />
-                        {isInternational ? 'International' : 'Domestic'}
-                      </button>
+                      <h3 className="text-sm font-medium text-gray-900 dark:text-white">
+                        Delivery Details
+                        <span className={`ml-2 text-xs font-medium px-2 py-0.5 rounded-full ${isInternational ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}`}>
+                          {isInternational ? '🌍 International' : '🏠 Domestic'}
+                        </span>
+                      </h3>
                     </div>
 
                     {isInternational ? (
@@ -1914,26 +2094,6 @@ Customer Note: ${customerNote}` : baseNote,
                             placeholder="Enter City"
                             value={internationalCity}
                             onChange={(e) => setInternationalCity(e.target.value)}
-                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
-                          <input
-                            type="text"
-                            placeholder="Enter Postal Code"
-                            value={internationalPostalCode}
-                            onChange={(e) => setInternationalPostalCode(e.target.value)}
-                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Street Address*</label>
-                          <textarea
-                            placeholder="Full Address"
-                            value={deliveryAddress}
-                            onChange={(e) => setDeliveryAddress(e.target.value)}
-                            rows={3}
                             className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
                           />
                         </div>
@@ -1995,74 +2155,43 @@ Customer Note: ${customerNote}` : baseNote,
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Area (Pathao)*</label>
-                                <select
-                                  value={pathaoAreaId}
-                                  onChange={(e) => setPathaoAreaId(e.target.value)}
-                                  disabled={!pathaoZoneId}
-                                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
-                                >
-                                  <option value="">Select Area</option>
-                                  {pathaoAreas.map((a) => (
-                                    <option key={a.area_id} value={a.area_id}>
-                                      {a.area_name}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-
-                              <div>
-                                <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
-                                <input
-                                  type="text"
-                                  placeholder="e.g., 1212"
-                                  value={postalCode}
-                                  onChange={(e) => setPostalCode(e.target.value)}
-                                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                                />
-                              </div>
+                            <div>
+                              <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Area (Pathao)*</label>
+                              <select
+                                value={pathaoAreaId}
+                                onChange={(e) => setPathaoAreaId(e.target.value)}
+                                disabled={!pathaoZoneId}
+                                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                              >
+                                <option value="">Select Area</option>
+                                {pathaoAreas.map((a) => (
+                                  <option key={a.area_id} value={a.area_id}>
+                                    {a.area_name}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                           </>
                         )}
 
                         {usePathaoAutoLocation && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Postal Code</label>
-                              <input
-                                type="text"
-                                placeholder="e.g., 1212"
-                                value={postalCode}
-                                onChange={(e) => setPostalCode(e.target.value)}
-                                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                              />
-                            </div>
-                            <div className="text-[11px] text-gray-600 dark:text-gray-300 flex items-end">
-                              Tip: include area + city (e.g., <span className="font-semibold">Uttara, Dhaka</span>) in the address.
-                            </div>
-                          </div>
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">
+                            Tip: include area + city (e.g., <span className="font-semibold">Uttara, Dhaka</span>) in the address above.
+                          </p>
                         )}
-
-                        <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">
-                            {usePathaoAutoLocation ? 'Full Address*' : 'Street Address*'}
-                          </label>
-                          <textarea
-                            placeholder={
-                              usePathaoAutoLocation
-                                ? 'House 71, Road 15, Sector 11, Uttara, Dhaka'
-                                : 'House 12, Road 5, etc.'
-                            }
-                            value={streetAddress}
-                            onChange={(e) => setStreetAddress(e.target.value)}
-                            rows={usePathaoAutoLocation ? 3 : 2}
-                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                          />
-                        </div>
                       </div>
                     )}
+
+                    <div className="mt-4">
+                      <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Order Notes</label>
+                      <textarea
+                        placeholder="Special instructions, landmark, preferred delivery note, packaging note, etc."
+                        value={orderNotes}
+                        onChange={(e) => setOrderNotes(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
+                      />
+                    </div>
                   </div>
                 </div>
 
@@ -2342,14 +2471,62 @@ Customer Note: ${customerNote}` : baseNote,
                         </div>
                       </div>
 
-                      <button
-                        onClick={addToCart}
-                        disabled={!selectedProduct}
-                        className="w-full px-4 py-2.5 bg-black hover:bg-gray-800 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Add to Cart
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={addToStaging}
+                          disabled={!selectedProduct}
+                          className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Stage this product, then search for the next one"
+                        >
+                          + Stage
+                        </button>
+                        <button
+                          onClick={addToCart}
+                          disabled={!selectedProduct}
+                          className="flex-1 px-4 py-2.5 bg-black hover:bg-gray-800 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add to Cart
+                        </button>
+                      </div>
                     </div>
+
+                    {/* Staging Queue */}
+                    {stagingQueue.length > 0 && (
+                      <div className="mt-4 border border-indigo-200 dark:border-indigo-700 rounded-lg overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
+                          <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                            Staged ({stagingQueue.length}) — search more products or add all to cart
+                          </span>
+                          <button
+                            onClick={addAllStagedToCart}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition-colors"
+                          >
+                            Add All to Cart →
+                          </button>
+                        </div>
+                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-48 overflow-y-auto">
+                          {stagingQueue.map((s) => (
+                            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-gray-800">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  Qty: {s.quantity} · ৳{s.amount}
+                                  {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
+                                  {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => removeStagingItem(s.id)}
+                                className="text-red-500 hover:text-red-700 flex-shrink-0"
+                                title="Remove"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Cart */}

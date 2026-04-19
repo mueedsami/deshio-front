@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import { computeMenuPosition } from '@/lib/menuPosition';
@@ -333,7 +333,6 @@ const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Stat
   const [isSavingCourier, setIsSavingCourier] = useState(false);
 
   const searchParams = useSearchParams();
-  const router = useRouter();
   const initialViewMode = useMemo(() => {
     const v = (searchParams.get('view') || searchParams.get('tab') || '').toLowerCase();
     return v === 'installments' || v === 'emi' ? 'installments' : 'online';
@@ -1670,71 +1669,6 @@ const derivePaymentStatus = (order: any) => {
 
   const handleEditOrder = async (order: Order) => {
     setActiveMenu(null);
-
-    // ── Social commerce orders: redirect to /social-commerce with prefill ──
-    const orderTypeLower = String(order.orderType || '').toLowerCase();
-    if (orderTypeLower === 'social_commerce' || orderTypeLower === 'social') {
-      try {
-        const fullOrder = await orderService.getById(order.id);
-        const sa: any =
-          fullOrder.shipping_address && typeof fullOrder.shipping_address === 'object'
-            ? fullOrder.shipping_address
-            : {};
-
-        const isIntl = !!sa?.country && !sa?.pathao_city_id;
-
-        const looksLikeService = (it: any) =>
-          Boolean(it?.service_id || it?.is_service || it?.isService);
-
-        const cartItems = (fullOrder.items ?? [])
-          .filter((it: any) => !looksLikeService(it))
-          .map((it: any) => ({
-            id: it.id,
-            product_id: it.product_id,
-            batch_id: it.batch_id ?? null,
-            productName: it.product_name ?? '',
-            quantity: Number(it.quantity) || 1,
-            unit_price: Number(it.unit_price) || 0,
-            discount_amount: Number(it.discount_amount) || 0,
-            amount:
-              (Number(it.unit_price) || 0) * (Number(it.quantity) || 1) -
-              (Number(it.discount_amount) || 0),
-          }));
-
-        const prefill = {
-          editOrderId: order.id,
-          editOrderNumber: fullOrder.order_number,
-          userName: fullOrder.customer_name ?? fullOrder.customer?.name ?? '',
-          userPhone: fullOrder.customer_phone ?? fullOrder.customer?.phone ?? '',
-          userEmail: fullOrder.customer_email ?? fullOrder.customer?.email ?? '',
-          socialId: fullOrder.social_id ?? '',
-          orderNotes: fullOrder.notes ?? fullOrder.customer_notes ?? '',
-          isInternational: isIntl,
-          usePathaoAutoLocation: !sa.pathao_city_id,
-          pathaoCityId: sa.pathao_city_id ? String(sa.pathao_city_id) : '',
-          pathaoZoneId: sa.pathao_zone_id ? String(sa.pathao_zone_id) : '',
-          pathaoAreaId: sa.pathao_area_id ? String(sa.pathao_area_id) : '',
-          streetAddress: sa.street ?? sa.address ?? '',
-          postalCode: sa.postal_code ?? '',
-          country: sa.country ?? '',
-          state: sa.state ?? '',
-          internationalCity: sa.city ?? '',
-          internationalPostalCode: sa.postal_code ?? '',
-          deliveryAddress: sa.street ?? sa.address ?? '',
-          storeId: fullOrder.store?.id ? String(fullOrder.store.id) : '',
-          cart: cartItems,
-        };
-
-        sessionStorage.setItem('socialCommerceEditPrefillV1', JSON.stringify(prefill));
-        router.push('/social-commerce');
-      } catch (error: any) {
-        console.error('Failed to load social order for editing:', error);
-        alert('Failed to load order details: ' + error.message);
-      }
-      return;
-    }
-
-    // ── All other order types: open the existing edit modal ──
     setIsLoadingDetails(true);
     setShowEditModal(true);
 
