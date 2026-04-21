@@ -45,7 +45,6 @@ export default function AmountDetailsPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   // VAT is inclusive in product prices; do not add extra VAT here
   const [transportCost, setTransportCost] = useState('0');
-  const [orderDiscountAmount, setOrderDiscountAmount] = useState('0');
 
   // Advanced payment options
   // Default to full Cash on Delivery (no advance)
@@ -99,8 +98,6 @@ export default function AmountDetailsPage() {
     }
 
     setOrderData(parsedOrder);
-    setTransportCost(String(parseNumber(parsedOrder.shipping_amount ?? parsedOrder.shippingAmount ?? 0)));
-    setOrderDiscountAmount(String(parseNumber(parsedOrder.discount_amount ?? parsedOrder.orderDiscountAmount ?? parsedOrder.order_discount_amount ?? 0)));
 
     const fetchPaymentMethods = async () => {
       try {
@@ -132,13 +129,11 @@ export default function AmountDetailsPage() {
   }, [orderData]);
 
   const subtotal = useMemo(() => parseNumber(orderData?.subtotal), [orderData]);
-  const itemDiscountTotal = useMemo(() => {
+  const totalDiscount = useMemo(() => {
     return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
-  const grossSubtotal = useMemo(() => subtotal + itemDiscountTotal, [subtotal, itemDiscountTotal]);
-  const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
-  const total = useMemo(() => Math.max(0, subtotal - orderDiscount + transport), [subtotal, orderDiscount, transport]);
+  const total = useMemo(() => subtotal + transport, [subtotal, transport]);
 
   const selectedMethod = useMemo(
     () => paymentMethods.find((m) => String(m.id) === String(selectedPaymentMethod)),
@@ -285,7 +280,6 @@ export default function AmountDetailsPage() {
         ...(Array.isArray(orderData.services) && orderData.services.length > 0
           ? { services: orderData.services }
           : {}),
-        discount_amount: orderDiscount,
         shipping_amount: transport,
         ...(paymentOption === 'installment'
           ? {
@@ -297,7 +291,7 @@ export default function AmountDetailsPage() {
               },
             }
           : {}),
-        ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
+        ...(orderData.notes?.trim() ? { notes: orderData.notes.trim() } : {}),
       };
 
       console.log('📦 Creating order:', orderPayload);
@@ -613,20 +607,12 @@ export default function AmountDetailsPage() {
                   {/* Totals */}
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Gross Subtotal</span>
-                      <span className="text-gray-900 dark:text-white">৳{grossSubtotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Item Discounts</span>
-                      <span className="text-red-600 dark:text-red-400">-৳{itemDiscountTotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Net Item Total</span>
+                      <span className="text-gray-700 dark:text-gray-300">Subtotal</span>
                       <span className="text-gray-900 dark:text-white">৳{subtotal.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Order Discount</span>
-                      <span className="text-red-600 dark:text-red-400">-৳{orderDiscount.toFixed(2)}</span>
+                      <span className="text-gray-700 dark:text-gray-300">Discount</span>
+                      <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Shipping Cost</span>
@@ -657,19 +643,6 @@ export default function AmountDetailsPage() {
                       onChange={(e) => setTransportCost(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                     />
-                  </div>
-
-                  <div className="mb-4">
-                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Whole Order Discount (৳)</label>
-                    <input
-                      value={orderDiscountAmount}
-                      onChange={(e) => setOrderDiscountAmount(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                      placeholder="Example: total 3200, customer pays 3000 → enter 200"
-                    />
-                    <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                      This discount applies to the full order after item prices are set.
-                    </p>
                   </div>
 
                   {/* Intended Courier Marker */}
@@ -869,18 +842,6 @@ export default function AmountDetailsPage() {
                     <div className="rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/40 p-3 text-xs">
                       <p className="font-semibold text-gray-900 dark:text-white mb-2">Payment Summary</p>
                       <div className="space-y-1 text-gray-700 dark:text-gray-200">
-                        <div className="flex justify-between">
-                          <span>Net Item Total</span>
-                          <span className="font-medium">৳{subtotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Order Discount</span>
-                          <span className="font-medium text-red-600 dark:text-red-400">-৳{orderDiscount.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Shipping</span>
-                          <span className="font-medium">৳{transport.toFixed(2)}</span>
-                        </div>
                         <div className="flex justify-between">
                           <span>Total</span>
                           <span className="font-medium">৳{total.toFixed(2)}</span>

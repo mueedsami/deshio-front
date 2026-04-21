@@ -62,14 +62,6 @@ const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
 
-const parseNumber = (v: any): number => {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-  const cleaned = String(v).replace(/[^0-9.-]/g, '');
-  const n = parseFloat(cleaned);
-  return Number.isFinite(n) ? n : 0;
-};
-
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -99,7 +91,6 @@ export default function SocialCommercePage() {
   const [userPhone, setUserPhone] = useState('');
   const [socialId, setSocialId] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
-  const [orderDiscountAmount, setOrderDiscountAmount] = useState('0');
 
   const [isInternational, setIsInternational] = useState(false);
 
@@ -209,7 +200,6 @@ export default function SocialCommercePage() {
         userPhone,
         socialId,
         orderNotes,
-        orderDiscountAmount,
         isInternational,
         usePathaoAutoLocation,
         pathaoCityId,
@@ -866,7 +856,6 @@ export default function SocialCommercePage() {
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
           if (typeof ep.socialId === 'string') setSocialId(ep.socialId);
           if (typeof ep.orderNotes === 'string') setOrderNotes(ep.orderNotes);
-          if (ep.orderDiscountAmount !== undefined && ep.orderDiscountAmount !== null) setOrderDiscountAmount(String(ep.orderDiscountAmount));
           if (typeof ep.isInternational === 'boolean') setIsInternational(ep.isInternational);
           if (typeof ep.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(ep.usePathaoAutoLocation);
           if (typeof ep.pathaoCityId === 'string') setPathaoCityId(ep.pathaoCityId);
@@ -899,7 +888,6 @@ export default function SocialCommercePage() {
         if (typeof d.userPhone === 'string') setUserPhone(d.userPhone);
         if (typeof d.socialId === 'string') setSocialId(d.socialId);
         if (typeof d.orderNotes === 'string') setOrderNotes(d.orderNotes);
-        if (d.orderDiscountAmount !== undefined && d.orderDiscountAmount !== null) setOrderDiscountAmount(String(d.orderDiscountAmount));
         if (typeof d.isInternational === 'boolean') setIsInternational(d.isInternational);
         if (typeof d.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(d.usePathaoAutoLocation);
         if (typeof d.pathaoCityId === 'string') setPathaoCityId(d.pathaoCityId);
@@ -937,7 +925,6 @@ export default function SocialCommercePage() {
     userPhone,
     socialId,
     orderNotes,
-    orderDiscountAmount,
     isInternational,
     usePathaoAutoLocation,
     pathaoCityId,
@@ -1703,8 +1690,10 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        discount_amount: parseNumber(orderDiscountAmount),
-        ...(orderNotes?.trim() ? { notes: orderNotes.trim() } : {}),
+        notes: [
+          orderNotes?.trim(),
+          `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
+        ].filter(Boolean).join(' '),
       };
 
       sessionStorage.setItem(

@@ -1711,6 +1711,7 @@ const derivePaymentStatus = (order: any) => {
           userEmail: fo.customer_email ?? fo.customer?.email ?? '',
           socialId: fo.social_id ?? '',
           orderNotes: fo.notes ?? fo.customer_notes ?? '',
+          orderDiscountAmount: Number(fo.discount_amount) || 0,
           isInternational: isIntl,
           usePathaoAutoLocation: !sa.pathao_city_id,
           pathaoCityId: sa.pathao_city_id ? String(sa.pathao_city_id) : '',
