@@ -3,24 +3,24 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; 
 import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
-import Header from '@/components/Header';
-import Sidebar from '@/components/Sidebar';
-import Toast from '@/components/Toast';
-import FieldsSidebar from '@/components/product/FieldsSidebar';
-import DynamicFieldInput from '@/components/product/DynamicFieldInput';
-import VariationCard from '@/components/product/VariationCard';
-import ImageGalleryManager from '@/components/product/ImageGalleryManager';
-import CategoryTreeSelector from '@/components/product/CategoryTreeSelector';
-import { productService, Field, Product } from '@/services/productService';
-import productImageService from '@/services/productImageService';
-import categoryService, { Category, CategoryTree } from '@/services/categoryService';
-import { vendorService, Vendor } from '@/services/vendorService';
+import Header from '../../../components/Header';
+import Sidebar from '../../../components/Sidebar';
+import Toast from '../../../components/Toast';
+import FieldsSidebar from '../../../components/product/FieldsSidebar';
+import DynamicFieldInput from '../../../components/product/DynamicFieldInput';
+import VariationCard from '../../../components/product/VariationCard';
+import ImageGalleryManager from '../../../components/product/ImageGalleryManager';
+import CategoryTreeSelector from '../../../components/product/CategoryTreeSelector';
+import { productService, Field, Product } from '../../../services/productService';
+import productImageService from '../../../services/productImageService';
+import categoryService, { Category, CategoryTree } from '../../../services/categoryService';
+import { vendorService, Vendor } from '../../../services/vendorService';
 import {
   FieldValue,
   CategorySelectionState,
   VariationData,
   FALLBACK_IMAGE_URL,
-} from '@/types/product';
+} from '../../../types/product';
 
 interface AddEditProductPageProps {
   productId?: string;
@@ -301,11 +301,35 @@ export default function AddEditProductPage({
     }
   };
 
+  const splitVariantNameParts = (name: string): string[] => {
+    const raw = String(name || '').trim();
+    if (!raw) return [];
+
+    // Important: only split on separator hyphens, not internal hyphens inside a
+    // variant token such as "de-1". Otherwise "XYZ - de-1" gets misread as
+    // base="XYZ - de" and size="1", which then freezes the old suffix into the
+    // next variation name.
+    const separator = raw.includes(' - ')
+      ? ' - '
+      : raw.includes(' -')
+        ? ' -'
+        : raw.includes('- ')
+          ? '- '
+          : null;
+
+    if (!separator) return [raw];
+
+    return raw
+      .split(separator)
+      .map((part) => part.trim())
+      .filter(Boolean);
+  };
+
   const parseVariantFromName = (name: string): { base?: string; color?: string; size?: string } => {
     const raw = (name || '').trim();
     if (!raw) return {};
 
-    const parts = raw.split(/\s*-\s*/).map(p => p.trim()).filter(Boolean);
+    const parts = splitVariantNameParts(raw);
     if (parts.length >= 3) {
       const size = parts[parts.length - 1];
       const color = parts[parts.length - 2];
@@ -334,10 +358,13 @@ export default function AddEditProductPage({
   };
 
   const getGroupBaseName = (items: Product[], fallback: string) => {
+    const fallbackBase = (parseVariantFromName(fallback).base || fallback || '').trim();
+
     const bases = items
       .map(v => (parseVariantFromName(v.name).base || '').trim())
       .filter(Boolean);
-    if (bases.length === 0) return fallback;
+
+    if (bases.length === 0) return fallbackBase;
 
     const counts = new Map<string, number>();
     const originalMap = new Map<string, string>();
@@ -359,7 +386,7 @@ export default function AddEditProductPage({
         bestLen = len;
       }
     }
-    return (originalMap.get(bestKey) || fallback).trim();
+    return (originalMap.get(bestKey) || fallbackBase).trim();
   };
 
   const getImageUrl = (imagePath: string | null | undefined): string | null => {
