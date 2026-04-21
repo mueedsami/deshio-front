@@ -337,8 +337,10 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const finalItems = mergedItems;
 
   // Totals
-  const itemsSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
+  const itemsNetSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
+  const itemsGrossSubtotal = finalItems.reduce((s, i) => s + parseMoney(i.unitPrice) * (Number(i.qty) || 0), 0);
   const itemsDiscount = finalItems.reduce((s, i) => s + parseMoney(i.discount), 0);
+  const inferredItemsDiscount = Math.max(0, round2(itemsGrossSubtotal - itemsNetSubtotal), round2(itemsDiscount));
 
   const subtotalRaw =
     parseMoney(order?.amounts?.subtotal) ||
@@ -346,15 +348,14 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     parseMoney(order?.subtotal) ||
     parseMoney(order?.subtotal_including_tax);
 
-  const subtotal = subtotalRaw > 0 ? subtotalRaw : itemsSubtotal;
-
-  const discount =
+  const explicitDiscount =
     parseMoney(order?.amounts?.totalDiscount) ||
     parseMoney(order?.discount_amount) ||
     parseMoney(order?.discount) ||
     parseMoney(order?.total_discount) ||
-    itemsDiscount ||
     0;
+
+  const discount = Math.max(0, round2(explicitDiscount), inferredItemsDiscount);
 
   const tax =
     parseMoney(order?.amounts?.vat) ||
@@ -375,7 +376,21 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     parseMoney(order?.amounts?.total) ||
     parseMoney(order?.total_amount) ||
     parseMoney(order?.grand_total) ||
-    Math.max(0, subtotal - discount + tax + shipping);
+    Math.max(0, (subtotalRaw > 0 ? subtotalRaw : itemsNetSubtotal) - discount + tax + shipping);
+
+  const subtotal = (() => {
+    if (subtotalRaw > 0) {
+      if (discount > 0) {
+        const asNetDiff = Math.abs(round2(subtotalRaw + tax + shipping) - round2(total));
+        const asGrossDiff = Math.abs(round2(subtotalRaw - discount + tax + shipping) - round2(total));
+        if (asNetDiff < asGrossDiff) return round2(subtotalRaw + discount);
+      }
+      return round2(subtotalRaw);
+    }
+
+    if (itemsGrossSubtotal > 0) return round2(itemsGrossSubtotal);
+    return round2(itemsNetSubtotal);
+  })();
 
   const paid =
     parseMoney(order?.payments?.paid) ||

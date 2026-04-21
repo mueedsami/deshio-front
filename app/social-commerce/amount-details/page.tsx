@@ -45,7 +45,6 @@ export default function AmountDetailsPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   // VAT is inclusive in product prices; do not add extra VAT here
   const [transportCost, setTransportCost] = useState('0');
-  const [orderDiscount, setOrderDiscount] = useState('0');
 
   // Advanced payment options
   // Default to full Cash on Delivery (no advance)
@@ -99,15 +98,6 @@ export default function AmountDetailsPage() {
     }
 
     setOrderData(parsedOrder);
-    if (parsedOrder?.shipping_amount !== undefined && parsedOrder?.shipping_amount !== null) {
-      setTransportCost(String(parseNumber(parsedOrder.shipping_amount)));
-    }
-    const initialOrderDiscount =
-      parsedOrder?.order_discount_amount ??
-      parsedOrder?.discount_amount ??
-      parsedOrder?.orderDiscountAmount ??
-      0;
-    setOrderDiscount(String(parseNumber(initialOrderDiscount)));
 
     const fetchPaymentMethods = async () => {
       try {
@@ -139,12 +129,11 @@ export default function AmountDetailsPage() {
   }, [orderData]);
 
   const subtotal = useMemo(() => parseNumber(orderData?.subtotal), [orderData]);
-  const itemDiscountTotal = useMemo(() => {
+  const totalDiscount = useMemo(() => {
     return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
-  const orderLevelDiscount = useMemo(() => parseNumber(orderDiscount), [orderDiscount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
-  const total = useMemo(() => Math.max(0, subtotal - orderLevelDiscount + transport), [subtotal, orderLevelDiscount, transport]);
+  const total = useMemo(() => subtotal + transport, [subtotal, transport]);
 
   const selectedMethod = useMemo(
     () => paymentMethods.find((m) => String(m.id) === String(selectedPaymentMethod)),
@@ -291,7 +280,6 @@ export default function AmountDetailsPage() {
         ...(Array.isArray(orderData.services) && orderData.services.length > 0
           ? { services: orderData.services }
           : {}),
-        discount_amount: orderLevelDiscount,
         shipping_amount: transport,
         ...(paymentOption === 'installment'
           ? {
@@ -303,137 +291,31 @@ export default function AmountDetailsPage() {
               },
             }
           : {}),
-        notes: orderData.notes || 'Social Commerce order.',
+        ...(orderData.notes?.trim() ? { notes: orderData.notes.trim() } : {}),
       };
 
-      const looksLikeService = (it: any) =>
-        Boolean(
-          it?.service_id ||
-            it?.serviceId ||
-            it?.is_service ||
-            it?.isService ||
-            String(it?.item_type || '').toLowerCase() === 'service' ||
-            String(it?.type || '').toLowerCase() === 'service'
-        );
-
-      let targetOrder: any;
-      const editOrderId = Number(orderData?.editOrderId || 0);
-
-      if (editOrderId > 0) {
-        console.log('🛠️ Updating existing order:', editOrderId, orderPayload);
-
-        const existingOrderResponse = await axios.get(`/orders/${editOrderId}`);
-        const existingBody: any = existingOrderResponse.data;
-        const existingOrder: any = existingBody?.data ?? existingBody;
-        if (!existingOrder?.id) {
-          throw new Error('Failed to load existing order for editing');
-        }
-
-        const customerAddress =
-          orderData.customer?.address ||
-          orderData.shipping_address?.street ||
-          orderData.delivery_address?.street ||
-          orderData.deliveryAddress?.street ||
-          '';
-
-        const patchPayload: any = {
-          customer_name: orderData.customer?.name || '',
-          customer_phone: orderData.customer?.phone || '',
-          customer_email: orderData.customer?.email || '',
-          customer_address: customerAddress || null,
-          discount_amount: orderLevelDiscount,
-          shipping_amount: transport,
-          notes: orderPayload.notes || '',
-          shipping_address: orderPayload.shipping_address || {},
-          ...(Array.isArray(orderData.services)
-            ? {
-                services: orderData.services.map((service: any) => ({
-                  ...(Number(service?.id) > 0 ? { id: Number(service.id) } : {}),
-                  service_id: service.serviceId ?? undefined,
-                  service_name: service.service_name || service.productName || service.name || '',
-                  category: service.serviceCategory || service.category || undefined,
-                  quantity: Number(service.quantity) || 1,
-                  unit_price: parseNumber(service.unit_price ?? service.price),
-                  discount_amount: parseNumber(service.discount_amount ?? service.discount),
-                })),
-              }
-            : {}),
-        };
-
-        const patchResponse = await axios.patch(`/orders/${editOrderId}`, patchPayload);
-        const patchBody: any = patchResponse.data;
-        if (patchBody?.success === false) {
-          throw new Error(patchBody?.message || 'Failed to update order details');
-        }
-
-        const existingItems = (Array.isArray(existingOrder.items) ? existingOrder.items : []).filter((item: any) => !looksLikeService(item));
-        const existingIds = new Set(existingItems.map((item: any) => Number(item.id)).filter((id: number) => Number.isFinite(id) && id > 0));
-
-        const desiredItems = Array.isArray(orderData.items) ? orderData.items : [];
-        const desiredExistingIds = new Set(
-          desiredItems
-            .map((item: any) => Number(item?.id))
-            .filter((id: number) => Number.isFinite(id) && id > 0)
-        );
-
-        for (const existingItem of existingItems) {
-          const existingItemId = Number(existingItem.id);
-          if (existingItemId > 0 && !desiredExistingIds.has(existingItemId)) {
-            await axios.delete(`/orders/${editOrderId}/items/${existingItemId}`);
-          }
-        }
-
-        for (const item of desiredItems) {
-          const itemId = Number(item?.id);
-          const itemPayload = {
-            product_id: Number(item.product_id),
-            batch_id: item.batch_id ?? null,
-            quantity: Number(item.quantity) || 1,
-            unit_price: parseNumber(item.unit_price),
-            discount_amount: parseNumber(item.discount_amount),
-            tax_amount: 0,
-          };
-
-          if (itemId > 0 && existingIds.has(itemId)) {
-            await axios.put(`/orders/${editOrderId}/items/${itemId}`, itemPayload);
-          } else {
-            await axios.post(`/orders/${editOrderId}/items`, itemPayload);
-          }
-        }
-
-        const updatedOrderResponse = await axios.get(`/orders/${editOrderId}`);
-        const updatedBody: any = updatedOrderResponse.data;
-        targetOrder = updatedBody?.data ?? updatedBody;
-
-        if (!targetOrder?.id) {
-          throw new Error('Order was updated but latest details could not be loaded');
-        }
-
-        console.log('✅ Order updated:', targetOrder.order_number);
-      } else {
-        console.log('📦 Creating order:', orderPayload);
-        const createOrderResponse = await axios.post('/orders', orderPayload);
-        const createBody: any = createOrderResponse.data;
-        if (createBody?.success === false) {
-          throw new Error(createBody?.message || 'Failed to create order');
-        }
-        targetOrder = createBody?.data ?? createBody;
-        if (!targetOrder?.id) {
-          throw new Error('Order was not created (missing order id)');
-        }
-        console.log('✅ Order created:', targetOrder.order_number);
+      console.log('📦 Creating order:', orderPayload);
+      const createOrderResponse = await axios.post('/orders', orderPayload);
+      const createBody: any = createOrderResponse.data;
+      if (createBody?.success === false) {
+        throw new Error(createBody?.message || 'Failed to create order');
       }
+      const createdOrder = createBody?.data ?? createBody;
+      if (!createdOrder?.id) {
+        throw new Error('Order was not created (missing order id)');
+      }
+      console.log('✅ Order created:', createdOrder.order_number);
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
         try {
-          await axios.patch(`/orders/${targetOrder.id}/set-courier`, {
+          await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
             intended_courier: intendedCourier.trim(),
           });
         } catch (e) {
           console.warn('Failed to set intended courier marker:', e);
           // Don't fail order placement if marker update fails
-          displayToast(editOrderId > 0 ? 'Order updated, but failed to set order marker.' : 'Order placed, but failed to set order marker.', 'warning');
+          displayToast('Order placed, but failed to set order marker.', 'warning');
         }
       }
 
@@ -444,9 +326,9 @@ export default function AmountDetailsPage() {
         for (const defectItem of defectiveItems) {
           try {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
-              order_id: targetOrder.id,
+              order_id: createdOrder.id,
               selling_price: defectItem.price,
-              sale_notes: `Sold via Social Commerce - Order #${targetOrder.order_number}`,
+              sale_notes: `Sold via Social Commerce - Order #${createdOrder.order_number}`,
               sold_at: new Date().toISOString(),
             });
           } catch (e) {
@@ -493,7 +375,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const paymentResponse = await axios.post(`/orders/${targetOrder.id}/payments/simple`, paymentData);
+        const paymentResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, paymentData);
         if (!paymentResponse.data?.success) {
           throw new Error(paymentResponse.data?.message || 'Failed to process payment');
         }
@@ -540,7 +422,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const advanceResponse = await axios.post(`/orders/${targetOrder.id}/payments/simple`, advancePaymentData);
+        const advanceResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, advancePaymentData);
         if (!advanceResponse.data?.success) {
           throw new Error(advanceResponse.data?.message || 'Failed to process advance payment');
         }
@@ -587,7 +469,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const instResponse = await axios.post(`/orders/${targetOrder.id}/payments/installment`, firstPayment);
+        const instResponse = await axios.post(`/orders/${createdOrder.id}/payments/installment`, firstPayment);
         if (!instResponse.data?.success) {
           throw new Error(instResponse.data?.message || 'Failed to process installment payment');
         }
@@ -597,12 +479,12 @@ export default function AmountDetailsPage() {
 
       const msg =
         paymentOption === 'full'
-          ? `Order ${targetOrder.order_number} placed with full payment.`
+          ? `Order ${createdOrder.order_number} placed with full payment.`
           : paymentOption === 'partial'
-            ? `Order ${targetOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
+            ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${targetOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
-              : `Order ${targetOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
+              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
+              : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -711,7 +593,7 @@ export default function AmountDetailsPage() {
                               </p>
                               {parseNumber(item.discount_amount) > 0 && (
                                 <p className="text-xs text-red-600 dark:text-red-400">
-                                  Item Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
+                                  Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
                                 </p>
                               )}
                             </div>
@@ -729,12 +611,8 @@ export default function AmountDetailsPage() {
                       <span className="text-gray-900 dark:text-white">৳{subtotal.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Item Discounts</span>
-                      <span className="text-red-600 dark:text-red-400">-৳{itemDiscountTotal.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-700 dark:text-gray-300">Order Discount</span>
-                      <span className="text-red-600 dark:text-red-400">-৳{orderLevelDiscount.toFixed(2)}</span>
+                      <span className="text-gray-700 dark:text-gray-300">Discount</span>
+                      <span className="text-red-600 dark:text-red-400">-৳{totalDiscount.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Shipping Cost</span>
@@ -765,18 +643,6 @@ export default function AmountDetailsPage() {
                       onChange={(e) => setTransportCost(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                     />
-                  </div>
-
-                  <div className="mb-4">
-                    <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Whole Order Discount (৳)</label>
-                    <input
-                      value={orderDiscount}
-                      onChange={(e) => setOrderDiscount(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
-                    <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                      This discount applies to the whole order after item-level pricing/discounts.
-                    </p>
                   </div>
 
                   {/* Intended Courier Marker */}
@@ -1025,7 +891,7 @@ export default function AmountDetailsPage() {
                       disabled={isProcessing}
                       className="w-full mt-2 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold disabled:opacity-60"
                     >
-                      {isProcessing ? 'Processing...' : (orderData?.editOrderId ? 'Save Order' : 'Place Order')}
+                      {isProcessing ? 'Processing...' : 'Place Order'}
                     </button>
                   </div>
                 </div>

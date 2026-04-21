@@ -240,6 +240,7 @@ function render(order: any) {
           <div class="metaRow"><span class="metaLabel">Invoice No</span><span class="metaValue">${escapeHtml(invNo)}</span></div>
           <div class="metaRow"><span class="metaLabel">Order No</span><span class="metaValue">${escapeHtml(orderNo)}</span></div>
           <div class="metaRow"><span class="metaLabel">Status</span><span class="metaValue">${escapeHtml(status)}</span></div>
+          ${disc > 0 ? `<div class="metaRow"><span class="metaLabel">Discount</span><span class="metaValue">-৳${escapeHtml(money(disc))}</span></div>` : ''}
           <div class="metaRow"><span class="metaLabel">Paid Amount</span><span class="metaValue">৳${escapeHtml(money(paid))}</span></div>
           <div class="metaRow"><span class="metaLabel">Due Amount</span><span class="metaValue">৳${escapeHtml(money(due))}</span></div>
         </div>
