@@ -62,14 +62,6 @@ const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
 
-const parseNumber = (v: any): number => {
-  if (v === null || v === undefined) return 0;
-  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
-  const cleaned = String(v).replace(/[^0-9.-]/g, '');
-  const n = parseFloat(cleaned);
-  return Number.isFinite(n) ? n : 0;
-};
-
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -81,8 +73,8 @@ export default function SocialCommercePage() {
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
 
-  // Multi-product queue: configure several products before adding them all to cart at once
-  interface QueuedSelectionItem {
+  // Multi-product staging: collect several products before adding them all to cart at once
+  interface StagingItem {
     id: string;
     product: any;
     quantity: number;
@@ -90,7 +82,7 @@ export default function SocialCommercePage() {
     discountTk: string;
     amount: string;
   }
-  const [stagingQueue, setStagingQueue] = useState<QueuedSelectionItem[]>([]);
+  const [stagingQueue, setStagingQueue] = useState<StagingItem[]>([]);
 
   const [date, setDate] = useState(getTodayDate());
   const [salesBy, setSalesBy] = useState('');
@@ -99,7 +91,6 @@ export default function SocialCommercePage() {
   const [userPhone, setUserPhone] = useState('');
   const [socialId, setSocialId] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
-  const [orderDiscountAmount, setOrderDiscountAmount] = useState('0');
 
   const [isInternational, setIsInternational] = useState(false);
 
@@ -209,7 +200,6 @@ export default function SocialCommercePage() {
         userPhone,
         socialId,
         orderNotes,
-        orderDiscountAmount,
         isInternational,
         usePathaoAutoLocation,
         pathaoCityId,
@@ -866,7 +856,6 @@ export default function SocialCommercePage() {
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
           if (typeof ep.socialId === 'string') setSocialId(ep.socialId);
           if (typeof ep.orderNotes === 'string') setOrderNotes(ep.orderNotes);
-          if (ep.orderDiscountAmount !== undefined && ep.orderDiscountAmount !== null) setOrderDiscountAmount(String(ep.orderDiscountAmount));
           if (typeof ep.isInternational === 'boolean') setIsInternational(ep.isInternational);
           if (typeof ep.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(ep.usePathaoAutoLocation);
           if (typeof ep.pathaoCityId === 'string') setPathaoCityId(ep.pathaoCityId);
@@ -899,7 +888,6 @@ export default function SocialCommercePage() {
         if (typeof d.userPhone === 'string') setUserPhone(d.userPhone);
         if (typeof d.socialId === 'string') setSocialId(d.socialId);
         if (typeof d.orderNotes === 'string') setOrderNotes(d.orderNotes);
-        if (d.orderDiscountAmount !== undefined && d.orderDiscountAmount !== null) setOrderDiscountAmount(String(d.orderDiscountAmount));
         if (typeof d.isInternational === 'boolean') setIsInternational(d.isInternational);
         if (typeof d.usePathaoAutoLocation === 'boolean') setUsePathaoAutoLocation(d.usePathaoAutoLocation);
         if (typeof d.pathaoCityId === 'string') setPathaoCityId(d.pathaoCityId);
@@ -937,7 +925,6 @@ export default function SocialCommercePage() {
     userPhone,
     socialId,
     orderNotes,
-    orderDiscountAmount,
     isInternational,
     usePathaoAutoLocation,
     pathaoCityId,
@@ -1356,14 +1343,6 @@ export default function SocialCommercePage() {
     }
   }, [selectedProduct, quantity, discountPercent, discountTk]);
 
-  const resetSelectedProductForm = () => {
-    setSelectedProduct(null);
-    setQuantity('');
-    setDiscountPercent('');
-    setDiscountTk('');
-    setAmount('0.00');
-  };
-
   const handleProductSelect = (product: any) => {
     setSelectedProduct(product);
     setSearchQuery('');
@@ -1374,6 +1353,46 @@ export default function SocialCommercePage() {
     setQuantity('1');
     setDiscountPercent('');
     setDiscountTk('');
+  };
+
+  const handleFinalAmountChange = (rawValue: string) => {
+    setAmount(rawValue);
+
+    if (!selectedProduct) {
+      setDiscountPercent('');
+      setDiscountTk('');
+      return;
+    }
+
+    if (String(rawValue).trim() === '') {
+      setDiscountPercent('');
+      setDiscountTk('');
+      return;
+    }
+
+    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const qty = parseFloat(quantity) || 0;
+    const baseAmount = Math.max(0, price * qty);
+
+    if (qty <= 0 || baseAmount <= 0) {
+      setDiscountPercent('');
+      setDiscountTk('');
+      return;
+    }
+
+    const parsedAmount = Number(String(rawValue).replace(/[^0-9.-]/g, ''));
+    if (!Number.isFinite(parsedAmount)) {
+      setDiscountPercent('');
+      setDiscountTk('');
+      return;
+    }
+
+    const clampedFinalAmount = Math.min(baseAmount, Math.max(0, parsedAmount));
+    const discountValue = Math.max(0, baseAmount - clampedFinalAmount);
+
+    setDiscountPercent('');
+    setDiscountTk(discountValue ? discountValue.toFixed(2) : '0');
+    setAmount(clampedFinalAmount.toFixed(2));
   };
 
   const addToCart = () => {
@@ -1416,36 +1435,18 @@ export default function SocialCommercePage() {
     });
 
     setCart([...cart, newItem]);
-    resetSelectedProductForm();
+    setSelectedProduct(null);
+    setQuantity('');
+    setDiscountPercent('');
+    setDiscountTk('');
+    setAmount('0.00');
   };
 
   const removeFromCart = (id: number | string) => {
     setCart(cart.filter((item) => item.id !== id));
   };
 
-  const updateQueuedItemQuantity = (id: string, nextQty: number) => {
-    const safeQty = Math.max(1, Math.floor(Number(nextQty) || 1));
-    setStagingQueue((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-        const price = Number(String(item.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '')) || 0;
-        const discPer = parseFloat(item.discountPercent) || 0;
-        const discTk = parseFloat(item.discountTk) || 0;
-        const nextAmount = calculateAmount(price, safeQty, discPer, discTk);
-        return {
-          ...item,
-          quantity: safeQty,
-          amount: nextAmount.toFixed(2),
-        };
-      })
-    );
-  };
-
-  const clearLocalSelectionQueue = () => {
-    setStagingQueue([]);
-  };
-
-  // ── Multi-product queue ───────────────────────────────────────────────────
+  // ── Multi-product staging ──────────────────────────────────────────────────
   const addToStaging = () => {
     if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
       alert('Please select a product and enter quantity');
@@ -1472,7 +1473,11 @@ export default function SocialCommercePage() {
       },
     ]);
     // Reset selection so user can immediately search next product
-    resetSelectedProductForm();
+    setSelectedProduct(null);
+    setQuantity('');
+    setDiscountPercent('');
+    setDiscountTk('');
+    setAmount('0.00');
     setSearchQuery('');
     setSearchResults([]);
   };
@@ -1503,7 +1508,7 @@ export default function SocialCommercePage() {
       };
     });
     setCart((prev) => [...prev, ...newItems]);
-    clearLocalSelectionQueue();
+    setStagingQueue([]);
   };
 
   /**
@@ -1703,8 +1708,10 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        discount_amount: parseNumber(orderDiscountAmount),
-        ...(orderNotes?.trim() ? { notes: orderNotes.trim() } : {}),
+        notes: [
+          orderNotes?.trim(),
+          `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
+        ].filter(Boolean).join(' '),
       };
 
       sessionStorage.setItem(
@@ -2309,7 +2316,7 @@ export default function SocialCommercePage() {
 
                     <div className="mb-4 flex items-center justify-between gap-2 rounded border border-dashed border-gray-300 dark:border-gray-600 p-2">
                       <p className="text-xs text-gray-600 dark:text-gray-300">
-                        Need easier browsing? Open Product List and queue multiple items there too.
+                        Need easier browsing? Open Product List and queue multiple items.
                       </p>
                       <button
                         type="button"
@@ -2494,12 +2501,16 @@ export default function SocialCommercePage() {
                           />
                         </div>
                         <div>
-                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Amount</label>
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Sell At / Final Amount</label>
                           <input
-                            type="text"
+                            type="number"
+                            placeholder="0"
                             value={amount}
-                            readOnly
-                            className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-gray-50 dark:bg-gray-600 text-gray-900 dark:text-white"
+                            onChange={(e) => handleFinalAmountChange(e.target.value)}
+                            disabled={!selectedProduct}
+                            min="0"
+                            step="0.01"
+                            className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
                           />
                         </div>
                       </div>
@@ -2509,9 +2520,9 @@ export default function SocialCommercePage() {
                           onClick={addToStaging}
                           disabled={!selectedProduct}
                           className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Queue this product, then continue browsing more products"
+                          title="Stage this product, then search for the next one"
                         >
-                          Queue Item
+                          + Stage
                         </button>
                         <button
                           onClick={addToCart}
@@ -2523,82 +2534,38 @@ export default function SocialCommercePage() {
                       </div>
                     </div>
 
-                    {/* Selection Queue */}
+                    {/* Staging Queue */}
                     {stagingQueue.length > 0 && (
-                      <div className="mt-4 rounded-2xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-gray-800 overflow-hidden shadow-sm">
-                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
-                          <div>
-                            <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Selection Queue</p>
-                            <p className="text-[11px] text-indigo-600/80 dark:text-indigo-300/80">
-                              {stagingQueue.length} queued item{stagingQueue.length !== 1 ? 's' : ''} ready for cart
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={clearLocalSelectionQueue}
-                              type="button"
-                              className="px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-200 text-xs font-semibold rounded-lg hover:bg-white dark:hover:bg-indigo-950/40 transition-colors"
-                            >
-                              Clear
-                            </button>
-                            <button
-                              onClick={addAllStagedToCart}
-                              type="button"
-                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors"
-                            >
-                              Add Queued to Cart
-                            </button>
-                          </div>
+                      <div className="mt-4 border border-indigo-200 dark:border-indigo-700 rounded-lg overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
+                          <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
+                            Staged ({stagingQueue.length}) — search more products or add all to cart
+                          </span>
+                          <button
+                            onClick={addAllStagedToCart}
+                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition-colors"
+                          >
+                            Add All to Cart →
+                          </button>
                         </div>
-                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-64 overflow-y-auto">
+                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-48 overflow-y-auto">
                           {stagingQueue.map((s) => (
-                            <div key={s.id} className="px-3 py-2.5 bg-white dark:bg-gray-800">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
-                                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                    Unit: ৳{Number(String(s.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '') || 0).toFixed(2)}
-                                    {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
-                                    {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
-                                  </p>
-                                </div>
-                                <button
-                                  onClick={() => removeStagingItem(s.id)}
-                                  className="h-8 w-8 flex items-center justify-center rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 flex-shrink-0"
-                                  title="Remove from queue"
-                                >
-                                  <X size={14} />
-                                </button>
+                            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-gray-800">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  Qty: {s.quantity} · ৳{s.amount}
+                                  {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
+                                  {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
+                                </p>
                               </div>
-                              <div className="mt-2 flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => updateQueuedItemQuantity(s.id, Math.max(1, Number(s.quantity || 1) - 1))}
-                                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
-                                  >
-                                    -
-                                  </button>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={Math.max(1, Number(s.quantity) || 1)}
-                                    onChange={(e) => updateQueuedItemQuantity(s.id, Number(e.target.value))}
-                                    className="w-16 h-8 text-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => updateQueuedItemQuantity(s.id, Math.max(1, Number(s.quantity || 1) + 1))}
-                                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-xs text-gray-500 dark:text-gray-400">Line Total</p>
-                                  <p className="text-sm font-semibold text-gray-900 dark:text-white">৳{s.amount}</p>
-                                </div>
-                              </div>
+                              <button
+                                onClick={() => removeStagingItem(s.id)}
+                                className="text-red-500 hover:text-red-700 flex-shrink-0"
+                                title="Remove"
+                              >
+                                <X size={14} />
+                              </button>
                             </div>
                           ))}
                         </div>
