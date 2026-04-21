@@ -72,11 +72,9 @@ export default function SocialCommercePage() {
   // Edit-order mode (navigated from orders page for social commerce orders)
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
-  const [editShippingAmount, setEditShippingAmount] = useState<number>(0);
-  const [editOrderDiscountAmount, setEditOrderDiscountAmount] = useState<number>(0);
 
-  // Multi-product staging: collect several products before adding them all to cart at once
-  interface StagingItem {
+  // Multi-product queue: configure several products before adding them all to cart at once
+  interface QueuedSelectionItem {
     id: string;
     product: any;
     quantity: number;
@@ -84,7 +82,7 @@ export default function SocialCommercePage() {
     discountTk: string;
     amount: string;
   }
-  const [stagingQueue, setStagingQueue] = useState<StagingItem[]>([]);
+  const [stagingQueue, setStagingQueue] = useState<QueuedSelectionItem[]>([]);
 
   const [date, setDate] = useState(getTodayDate());
   const [salesBy, setSalesBy] = useState('');
@@ -870,9 +868,6 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalCity === 'string') setInternationalCity(ep.internationalCity);
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
-          if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
-          if (ep.shippingAmount !== undefined && ep.shippingAmount !== null) setEditShippingAmount(Number(ep.shippingAmount) || 0);
-          if (ep.orderDiscountAmount !== undefined && ep.orderDiscountAmount !== null) setEditOrderDiscountAmount(Number(ep.orderDiscountAmount) || 0);
           if (Array.isArray(ep.cart)) setCart(ep.cart);
         }
         draftHydratedRef.current = true;
@@ -1348,74 +1343,15 @@ export default function SocialCommercePage() {
     }
   }, [selectedProduct, quantity, discountPercent, discountTk]);
 
-  const canStageCurrentSelection = () => Boolean(selectedProduct && quantity && parseInt(quantity, 10) > 0);
-
-  const buildCartItemFromSelection = (
-    product: any,
-    qtyInput: string | number,
-    discountPercentInput: string | number,
-    discountTkInput: string | number
-  ): CartProduct | null => {
-    const qty = parseInt(String(qtyInput), 10);
-    if (!product || !Number.isFinite(qty) || qty <= 0) return null;
-
-    const price = Number(String(product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
-    const discPer = parseFloat(String(discountPercentInput || '0')) || 0;
-    const discTk = parseFloat(String(discountTkInput || '0')) || 0;
-
-    if (qty > product.available && !product.isDefective) {
-      alert(`Only ${product.available} units available in this store`);
-      return null;
-    }
-
-    const baseAmount = price * qty;
-    const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
-
-    return {
-      id: Date.now() + Math.random(),
-      product_id: product.id,
-      batch_id: null,
-      productName: `${product.name}`,
-      quantity: qty,
-      unit_price: price,
-      discount_amount: discountValue,
-      amount: Math.max(0, baseAmount - discountValue),
-      isDefective: product.isDefective,
-      defectId: product.defectId,
-    };
-  };
-
-  const stageCurrentSelection = () => {
-    if (!canStageCurrentSelection()) return false;
-
-    const stagedItem = buildCartItemFromSelection(selectedProduct, quantity, discountPercent, discountTk);
-    if (!stagedItem) return false;
-
-    setStagingQueue((prev) => [
-      ...prev,
-      {
-        id: `stg-${Date.now()}-${Math.random()}`,
-        product: selectedProduct,
-        quantity: stagedItem.quantity,
-        discountPercent,
-        discountTk,
-        amount: stagedItem.amount.toFixed(2),
-      },
-    ]);
-
+  const resetSelectedProductForm = () => {
     setSelectedProduct(null);
     setQuantity('');
     setDiscountPercent('');
     setDiscountTk('');
     setAmount('0.00');
-    return true;
   };
 
   const handleProductSelect = (product: any) => {
-    if (selectedProduct && selectedProduct.id !== product.id && canStageCurrentSelection()) {
-      stageCurrentSelection();
-    }
-
     setSelectedProduct(product);
     setSearchQuery('');
     setMinPrice('');
@@ -1428,62 +1364,102 @@ export default function SocialCommercePage() {
   };
 
   const addToCart = () => {
-    const nextItems: CartProduct[] = [];
-
-    if (stagingQueue.length > 0) {
-      for (const s of stagingQueue) {
-        const stagedCartItem = buildCartItemFromSelection(s.product, s.quantity, s.discountPercent, s.discountTk);
-        if (!stagedCartItem) {
-          return;
-        }
-        nextItems.push(stagedCartItem);
-      }
-    }
-
-    if (selectedProduct) {
-      const currentItem = buildCartItemFromSelection(selectedProduct, quantity, discountPercent, discountTk);
-      if (!currentItem) {
-        return;
-      }
-      nextItems.push(currentItem);
-    }
-
-    if (nextItems.length === 0) {
+    if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
       alert('Please select a product and enter quantity');
       return;
     }
 
-    console.log('✅ Adding to cart:', nextItems.map((item) => ({
-      product_id: item.product_id,
-      batch_id: item.batch_id,
-      isDefective: item.isDefective,
-    })));
+    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const qty = parseInt(quantity);
+    const discPer = parseFloat(discountPercent) || 0;
+    const discTk = parseFloat(discountTk) || 0;
 
-    setCart((prev) => [...prev, ...nextItems]);
-    setStagingQueue([]);
-    setSelectedProduct(null);
-    setQuantity('');
-    setDiscountPercent('');
-    setDiscountTk('');
-    setAmount('0.00');
-    setSearchQuery('');
-    setSearchResults([]);
+    if (qty > selectedProduct.available && !selectedProduct.isDefective) {
+      alert(`Only ${selectedProduct.available} units available in this store`);
+      return;
+    }
+
+    const baseAmount = price * qty;
+    const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
+    const finalAmount = baseAmount - discountValue;
+
+    const newItem: CartProduct = {
+      id: Date.now(),
+      product_id: selectedProduct.id,
+      batch_id: null,
+      productName: `${selectedProduct.name}`,
+      quantity: qty,
+      unit_price: price,
+      discount_amount: discountValue,
+      amount: finalAmount,
+      isDefective: selectedProduct.isDefective,
+      defectId: selectedProduct.defectId,
+    };
+
+    console.log('✅ Adding to cart:', {
+      product_id: newItem.product_id,
+      batch_id: newItem.batch_id,
+      isDefective: newItem.isDefective,
+    });
+
+    setCart([...cart, newItem]);
+    resetSelectedProductForm();
   };
 
   const removeFromCart = (id: number | string) => {
     setCart(cart.filter((item) => item.id !== id));
   };
 
-  // ── Multi-product staging ──────────────────────────────────────────────────
+  const updateQueuedItemQuantity = (id: string, nextQty: number) => {
+    const safeQty = Math.max(1, Math.floor(Number(nextQty) || 1));
+    setStagingQueue((prev) =>
+      prev.map((item) => {
+        if (item.id !== id) return item;
+        const price = Number(String(item.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+        const discPer = parseFloat(item.discountPercent) || 0;
+        const discTk = parseFloat(item.discountTk) || 0;
+        const nextAmount = calculateAmount(price, safeQty, discPer, discTk);
+        return {
+          ...item,
+          quantity: safeQty,
+          amount: nextAmount.toFixed(2),
+        };
+      })
+    );
+  };
+
+  const clearLocalSelectionQueue = () => {
+    setStagingQueue([]);
+  };
+
+  // ── Multi-product queue ───────────────────────────────────────────────────
   const addToStaging = () => {
-    if (!canStageCurrentSelection()) {
+    if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
       alert('Please select a product and enter quantity');
       return;
     }
-
-    const staged = stageCurrentSelection();
-    if (!staged) return;
-
+    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const qty = parseInt(quantity);
+    const discPer = parseFloat(discountPercent) || 0;
+    const discTk = parseFloat(discountTk) || 0;
+    if (qty > selectedProduct.available && !selectedProduct.isDefective) {
+      alert(`Only ${selectedProduct.available} units available in this store`);
+      return;
+    }
+    const finalAmount = calculateAmount(price, qty, discPer, discTk);
+    setStagingQueue((prev) => [
+      ...prev,
+      {
+        id: `stg-${Date.now()}-${Math.random()}`,
+        product: selectedProduct,
+        quantity: qty,
+        discountPercent,
+        discountTk,
+        amount: finalAmount.toFixed(2),
+      },
+    ]);
+    // Reset selection so user can immediately search next product
+    resetSelectedProductForm();
     setSearchQuery('');
     setSearchResults([]);
   };
@@ -1494,18 +1470,27 @@ export default function SocialCommercePage() {
 
   const addAllStagedToCart = () => {
     if (stagingQueue.length === 0) return;
-
-    const newItems: CartProduct[] = [];
-    for (const s of stagingQueue) {
-      const stagedCartItem = buildCartItemFromSelection(s.product, s.quantity, s.discountPercent, s.discountTk);
-      if (!stagedCartItem) {
-        return;
-      }
-      newItems.push(stagedCartItem);
-    }
-
+    const newItems: CartProduct[] = stagingQueue.map((s) => {
+      const price = Number(String(s.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+      const discPer = parseFloat(s.discountPercent) || 0;
+      const discTk = parseFloat(s.discountTk) || 0;
+      const baseAmount = price * s.quantity;
+      const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
+      return {
+        id: Date.now() + Math.random(),
+        product_id: s.product.id,
+        batch_id: null,
+        productName: s.product.name,
+        quantity: s.quantity,
+        unit_price: price,
+        discount_amount: discountValue,
+        amount: baseAmount - discountValue,
+        isDefective: s.product.isDefective,
+        defectId: s.product.defectId,
+      };
+    });
     setCart((prev) => [...prev, ...newItems]);
-    setStagingQueue([]);
+    clearLocalSelectionQueue();
   };
 
   /**
@@ -1715,14 +1700,10 @@ export default function SocialCommercePage() {
         'pendingOrder',
         JSON.stringify({
           ...orderData,
-          editOrderId,
-          editOrderNumber,
           salesBy,
           date,
           isInternational,
           subtotal,
-          shipping_amount: editShippingAmount,
-          order_discount_amount: editOrderDiscountAmount,
           deliveryAddress: deliveryAddressForUi,
 
           defectiveItems: cart
@@ -2317,7 +2298,7 @@ export default function SocialCommercePage() {
 
                     <div className="mb-4 flex items-center justify-between gap-2 rounded border border-dashed border-gray-300 dark:border-gray-600 p-2">
                       <p className="text-xs text-gray-600 dark:text-gray-300">
-                        Need easier browsing? Open Product List and queue multiple items.
+                        Need easier browsing? Open Product List and queue multiple items there too.
                       </p>
                       <button
                         type="button"
@@ -2517,54 +2498,96 @@ export default function SocialCommercePage() {
                           onClick={addToStaging}
                           disabled={!selectedProduct}
                           className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Save this product setup, then search/select the next one"
+                          title="Queue this product, then continue browsing more products"
                         >
-                          Stage & Next
+                          Queue Item
                         </button>
                         <button
                           onClick={addToCart}
-                          disabled={!selectedProduct && stagingQueue.length === 0}
+                          disabled={!selectedProduct}
                           className="flex-1 px-4 py-2.5 bg-black hover:bg-gray-800 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          {stagingQueue.length > 0
-                            ? (selectedProduct ? `Add Selected + ${stagingQueue.length} Staged` : `Add ${stagingQueue.length} Staged to Cart`)
-                            : "Add to Cart"}
+                          Add to Cart
                         </button>
                       </div>
                     </div>
 
-                    {/* Staging Queue */}
+                    {/* Selection Queue */}
                     {stagingQueue.length > 0 && (
-                      <div className="mt-4 border border-indigo-200 dark:border-indigo-700 rounded-lg overflow-hidden">
-                        <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
-                          <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-                            Staged ({stagingQueue.length}) — you can keep selecting products, then send all of them to cart together
-                          </span>
-                          <button
-                            onClick={addAllStagedToCart}
-                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition-colors"
-                          >
-                            Add All to Cart →
-                          </button>
+                      <div className="mt-4 rounded-2xl border border-indigo-200 dark:border-indigo-700 bg-white dark:bg-gray-800 overflow-hidden shadow-sm">
+                        <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
+                          <div>
+                            <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Selection Queue</p>
+                            <p className="text-[11px] text-indigo-600/80 dark:text-indigo-300/80">
+                              {stagingQueue.length} queued item{stagingQueue.length !== 1 ? 's' : ''} ready for cart
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={clearLocalSelectionQueue}
+                              type="button"
+                              className="px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-700 text-indigo-700 dark:text-indigo-200 text-xs font-semibold rounded-lg hover:bg-white dark:hover:bg-indigo-950/40 transition-colors"
+                            >
+                              Clear
+                            </button>
+                            <button
+                              onClick={addAllStagedToCart}
+                              type="button"
+                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-lg transition-colors"
+                            >
+                              Add Queued to Cart
+                            </button>
+                          </div>
                         </div>
-                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-48 overflow-y-auto">
+                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-64 overflow-y-auto">
                           {stagingQueue.map((s) => (
-                            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-gray-800">
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
-                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                  Qty: {s.quantity} · ৳{s.amount}
-                                  {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
-                                  {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
-                                </p>
+                            <div key={s.id} className="px-3 py-2.5 bg-white dark:bg-gray-800">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
+                                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    Unit: ৳{Number(String(s.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '') || 0).toFixed(2)}
+                                    {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
+                                    {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => removeStagingItem(s.id)}
+                                  className="h-8 w-8 flex items-center justify-center rounded-lg text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 flex-shrink-0"
+                                  title="Remove from queue"
+                                >
+                                  <X size={14} />
+                                </button>
                               </div>
-                              <button
-                                onClick={() => removeStagingItem(s.id)}
-                                className="text-red-500 hover:text-red-700 flex-shrink-0"
-                                title="Remove"
-                              >
-                                <X size={14} />
-                              </button>
+                              <div className="mt-2 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateQueuedItemQuantity(s.id, Math.max(1, Number(s.quantity || 1) - 1))}
+                                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+                                  >
+                                    -
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={Math.max(1, Number(s.quantity) || 1)}
+                                    onChange={(e) => updateQueuedItemQuantity(s.id, Number(e.target.value))}
+                                    className="w-16 h-8 text-center rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => updateQueuedItemQuantity(s.id, Math.max(1, Number(s.quantity || 1) + 1))}
+                                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs text-gray-500 dark:text-gray-400">Line Total</p>
+                                  <p className="text-sm font-semibold text-gray-900 dark:text-white">৳{s.amount}</p>
+                                </div>
+                              </div>
                             </div>
                           ))}
                         </div>
