@@ -48,6 +48,7 @@ import refundService, { type CreateRefundRequest } from '@/services/refundServic
 
 import shipmentService from '@/services/shipmentService';
 import { checkQZStatus, printReceipt, printBulkReceipts, getPrinters, savePreferredPrinter } from '@/lib/qz-tray';
+import { withPrintableServiceFallback } from '@/lib/receipt';
 
 interface Order {
   id: number;
@@ -1685,16 +1686,9 @@ const derivePaymentStatus = (order: any) => {
         const isIntl = !!sa?.country && !sa?.pathao_city_id;
 
         const looksLikeService = (it: any) =>
-          Boolean(
-            it?.service_id ||
-              it?.serviceId ||
-              it?.is_service ||
-              it?.isService ||
-              String(it?.item_type || '').toLowerCase() === 'service' ||
-              String(it?.type || '').toLowerCase() === 'service'
-          );
+          Boolean(it?.service_id || it?.is_service || it?.isService);
 
-        const productCartItems = (fo.items ?? [])
+        const cartItems = (fo.items ?? [])
           .filter((it: any) => !looksLikeService(it))
           .map((it: any) => ({
             id: it.id,
@@ -1708,28 +1702,6 @@ const derivePaymentStatus = (order: any) => {
               (Number(it.unit_price) || 0) * (Number(it.quantity) || 1) -
               (Number(it.discount_amount) || 0),
           }));
-
-        const rawServices = Array.isArray(fo.services) && fo.services.length > 0
-          ? fo.services
-          : (fo.items ?? []).filter((it: any) => looksLikeService(it));
-
-        const serviceCartItems = rawServices.map((svc: any, index: number) => {
-          const unitPrice = Number(svc.unit_price ?? svc.price ?? svc.base_price) || 0;
-          const discountAmount = Number(svc.discount_amount ?? svc.discount) || 0;
-          return {
-            id: Number(svc.id) || `service-edit-${fo.id}-${index + 1}`,
-            product_id: 0,
-            batch_id: 0,
-            productName: svc.service_name ?? svc.product_name ?? svc.name ?? '',
-            quantity: Number(svc.quantity) || 1,
-            unit_price: unitPrice,
-            discount_amount: discountAmount,
-            amount: unitPrice * (Number(svc.quantity) || 1) - discountAmount,
-            isService: true,
-            serviceId: Number(svc.service_id ?? svc.serviceId ?? svc.service?.id) || undefined,
-            serviceCategory: svc.category ?? svc.service_category ?? svc.service?.category ?? undefined,
-          };
-        });
 
         const prefill = {
           editOrderId: order.id,
@@ -1752,9 +1724,7 @@ const derivePaymentStatus = (order: any) => {
           internationalPostalCode: sa.postal_code ?? '',
           deliveryAddress: sa.street ?? sa.address ?? '',
           storeId: fo.store?.id ? String(fo.store.id) : '',
-          shippingAmount: Number(fo.shipping_amount) || 0,
-          orderDiscountAmount: Number(fo.discount_amount ?? order.discount ?? 0) || 0,
-          cart: [...productCartItems, ...serviceCartItems],
+          cart: cartItems,
         };
 
         sessionStorage.setItem('socialCommerceEditPrefillV1', JSON.stringify(prefill));
@@ -2496,7 +2466,7 @@ const derivePaymentStatus = (order: any) => {
 
         try {
           const fullOrder = await orderService.getById(o.id);
-          fullOrders.push(fullOrder);
+          fullOrders.push(withPrintableServiceFallback(fullOrder, o.services));
         } catch (e) {
           console.error('Failed to fetch order for invoice:', o.id, e);
           setBulkPrintProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
@@ -2592,7 +2562,7 @@ const derivePaymentStatus = (order: any) => {
 
         try {
           const fullOrder = await orderService.getById(o.id);
-          fullOrders.push(fullOrder);
+          fullOrders.push(withPrintableServiceFallback(fullOrder, o.services));
         } catch (e) {
           console.error('Failed to fetch order for receipt:', o.id, e);
           setBulkPrintProgress((prev) => ({ ...prev, failed: prev.failed + 1 }));
@@ -2730,7 +2700,8 @@ const derivePaymentStatus = (order: any) => {
       }
 
       const fullOrder = await orderService.getById(order.id);
-      await printReceipt(fullOrder as any, status.connected ? selectedPrinter : undefined);
+      const printableOrder = withPrintableServiceFallback(fullOrder, order.services);
+      await printReceipt(printableOrder as any, status.connected ? selectedPrinter : undefined);
 
       alert('✅ Receipt ready (printed or opened in preview)!');
     } catch (error: any) {
@@ -2769,7 +2740,8 @@ const derivePaymentStatus = (order: any) => {
       }
 
       const fullOrder = await orderService.getById(order.id);
-      await printReceipt(fullOrder as any, status.connected ? selectedPrinter : undefined, {
+      const printableOrder = withPrintableServiceFallback(fullOrder, order.services);
+      await printReceipt(printableOrder as any, status.connected ? selectedPrinter : undefined, {
         template: 'social_invoice',
         title: 'Invoice',
       });

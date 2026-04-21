@@ -37,6 +37,7 @@ import CustomerFormModal from '@/components/pos/CustomerFormModal';
 
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
+import { withPrintableServiceFallback } from '@/lib/receipt';
 
 interface Store {
   id: number;
@@ -87,6 +88,7 @@ export default function POSPage() {
   // Printing
   const [autoPrintReceipt, setAutoPrintReceipt] = useState(true);
   const [lastCompletedOrderId, setLastCompletedOrderId] = useState<number | null>(null);
+  const [lastCompletedOrderServices, setLastCompletedOrderServices] = useState<any[]>([]);
 
   useEffect(() => {
     try {
@@ -935,6 +937,20 @@ export default function POSPage() {
 
       // Remember last order for manual reprint
       setLastCompletedOrderId(order.id);
+      setLastCompletedOrderServices(
+        cart
+          .filter((c: any) => c?.isService || c?.type === 'service')
+          .map((c: any) => ({
+            id: c.id,
+            service_id: c.serviceId,
+            service_name: c.productName,
+            quantity: c.qty ?? c.quantity ?? 1,
+            unit_price: c.price,
+            discount_amount: c.discount ?? 0,
+            total_amount: c.amount,
+            category: c.serviceCategory ?? c.category,
+          }))
+      );
 
       // Auto print receipt (non-blocking)
       if (autoPrintReceipt) {
@@ -974,18 +990,18 @@ export default function POSPage() {
                 category: c.serviceCategory ?? c.category,
               }));
 
-            const printableOrder = {
-              ...(fullOrder as any),
-              payment_breakdown: receiptPaymentBreakdown,
-              change_amount: change,
-              cashPaid: receiptPaymentBreakdown.cash,
-              cardPaid: receiptPaymentBreakdown.card,
-              bkashPaid: receiptPaymentBreakdown.bkash,
-              nagadPaid: receiptPaymentBreakdown.nagad,
-              ...(!hasServiceInServerOrder && serviceFallbackFromCart.length > 0
-                ? { services: serviceFallbackFromCart }
-                : {}),
-            };
+            const printableOrder = withPrintableServiceFallback(
+              {
+                ...(fullOrder as any),
+                payment_breakdown: receiptPaymentBreakdown,
+                change_amount: change,
+                cashPaid: receiptPaymentBreakdown.cash,
+                cardPaid: receiptPaymentBreakdown.card,
+                bkashPaid: receiptPaymentBreakdown.bkash,
+                nagadPaid: receiptPaymentBreakdown.nagad,
+              },
+              !hasServiceInServerOrder && serviceFallbackFromCart.length > 0 ? serviceFallbackFromCart : []
+            );
 
             await printReceipt(printableOrder, undefined, { template: 'pos_receipt' });
             showToast('✅ Receipt printed', 'success');
@@ -1071,7 +1087,8 @@ export default function POSPage() {
         showToast('QZ Tray offline - opening receipt preview (Print → Save as PDF)', 'error');
       }
       const fullOrder = await orderService.getById(lastCompletedOrderId);
-      await printReceipt(fullOrder, undefined, { template: 'pos_receipt' });
+      const printableOrder = withPrintableServiceFallback(fullOrder, lastCompletedOrderServices);
+      await printReceipt(printableOrder, undefined, { template: 'pos_receipt' });
       showToast('✅ Receipt printed', 'success');
     } catch (e: any) {
       console.error('❌ Receipt print failed:', e);

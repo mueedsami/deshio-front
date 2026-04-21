@@ -82,6 +82,71 @@ function looksLikeService(it: any): boolean {
   return Boolean(it?.service_id || it?.serviceId || it?.is_service || it?.isService || t === 'service');
 }
 
+
+export function hasPrintableServiceLines(order: any): boolean {
+  if (!order || typeof order !== 'object') return false;
+
+  const serviceArrays = [
+    order?.services,
+    order?.service_items,
+    order?.order_services,
+    order?.orderServices,
+    order?.serviceItems,
+  ];
+
+  if (serviceArrays.some((arr) => Array.isArray(arr) && arr.length > 0)) {
+    return true;
+  }
+
+  const mixedArrays = [order?.items, order?.products];
+  return mixedArrays.some(
+    (arr) =>
+      Array.isArray(arr) &&
+      arr.some((it: any) => looksLikeService(it))
+  );
+}
+
+export function toPrintableServiceLines(services: any[] = []): any[] {
+  if (!Array.isArray(services)) return [];
+
+  return services
+    .map((s: any, i: number) => {
+      const quantity = Number(s?.quantity ?? s?.qty ?? 1) || 1;
+      const unitPrice = parseMoney(s?.unit_price ?? s?.price ?? s?.unitPrice ?? s?.base_price ?? 0);
+      const discount = parseMoney(s?.discount_amount ?? s?.discount ?? 0);
+      const lineTotal =
+        parseMoney(s?.total_amount ?? s?.amount ?? s?.lineTotal) ||
+        Math.max(0, quantity * unitPrice - discount);
+
+      return {
+        id: s?.id ?? s?.order_service_id ?? s?.orderServiceId ?? `service-fallback-${i + 1}`,
+        service_id: s?.service_id ?? s?.serviceId ?? s?.service?.id,
+        service_name: s?.service_name ?? s?.name ?? s?.service?.name ?? s?.product_name ?? 'Service',
+        quantity,
+        unit_price: unitPrice,
+        discount_amount: discount,
+        total_amount: lineTotal,
+        category: s?.category ?? s?.service_category ?? s?.service?.category,
+        is_service: true,
+        item_type: 'service',
+        type: 'service',
+      };
+    })
+    .filter((s: any) => String(s?.service_name || '').trim() || Number(s?.total_amount || 0) > 0);
+}
+
+export function withPrintableServiceFallback(order: any, fallbackServices: any[] = []): any {
+  if (hasPrintableServiceLines(order)) return order;
+
+  const normalizedFallback = toPrintableServiceLines(fallbackServices);
+  if (normalizedFallback.length === 0) return order;
+
+  return {
+    ...(order || {}),
+    services: normalizedFallback,
+  };
+}
+
 function changeFromNotes(notes: string): number {
   if (!notes) return 0;
   const m = notes.match(/change\s*(?:given|amount)?\s*[:\-]?\s*(?:৳|tk\.?|bdt)?\s*([0-9]+(?:\.[0-9]+)?)/i);
@@ -337,10 +402,8 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const finalItems = mergedItems;
 
   // Totals
-  const itemsNetSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
-  const itemsGrossSubtotal = finalItems.reduce((s, i) => s + parseMoney(i.unitPrice) * (Number(i.qty) || 0), 0);
+  const itemsSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
   const itemsDiscount = finalItems.reduce((s, i) => s + parseMoney(i.discount), 0);
-  const inferredItemsDiscount = Math.max(0, round2(itemsGrossSubtotal - itemsNetSubtotal), round2(itemsDiscount));
 
   const subtotalRaw =
     parseMoney(order?.amounts?.subtotal) ||
@@ -348,14 +411,15 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     parseMoney(order?.subtotal) ||
     parseMoney(order?.subtotal_including_tax);
 
-  const explicitDiscount =
+  const subtotal = subtotalRaw > 0 ? subtotalRaw : itemsSubtotal;
+
+  const discount =
     parseMoney(order?.amounts?.totalDiscount) ||
     parseMoney(order?.discount_amount) ||
     parseMoney(order?.discount) ||
     parseMoney(order?.total_discount) ||
+    itemsDiscount ||
     0;
-
-  const discount = Math.max(0, round2(explicitDiscount), inferredItemsDiscount);
 
   const tax =
     parseMoney(order?.amounts?.vat) ||
@@ -376,21 +440,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     parseMoney(order?.amounts?.total) ||
     parseMoney(order?.total_amount) ||
     parseMoney(order?.grand_total) ||
-    Math.max(0, (subtotalRaw > 0 ? subtotalRaw : itemsNetSubtotal) - discount + tax + shipping);
-
-  const subtotal = (() => {
-    if (subtotalRaw > 0) {
-      if (discount > 0) {
-        const asNetDiff = Math.abs(round2(subtotalRaw + tax + shipping) - round2(total));
-        const asGrossDiff = Math.abs(round2(subtotalRaw - discount + tax + shipping) - round2(total));
-        if (asNetDiff < asGrossDiff) return round2(subtotalRaw + discount);
-      }
-      return round2(subtotalRaw);
-    }
-
-    if (itemsGrossSubtotal > 0) return round2(itemsGrossSubtotal);
-    return round2(itemsNetSubtotal);
-  })();
+    Math.max(0, subtotal - discount + tax + shipping);
 
   const paid =
     parseMoney(order?.payments?.paid) ||
