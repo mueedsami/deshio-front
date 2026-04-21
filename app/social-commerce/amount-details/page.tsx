@@ -98,6 +98,9 @@ export default function AmountDetailsPage() {
     }
 
     setOrderData(parsedOrder);
+    if (parsedOrder?.shipping_amount !== undefined && parsedOrder?.shipping_amount !== null) {
+      setTransportCost(String(parseNumber(parsedOrder.shipping_amount)));
+    }
 
     const fetchPaymentMethods = async () => {
       try {
@@ -294,28 +297,134 @@ export default function AmountDetailsPage() {
         notes: orderData.notes || 'Social Commerce order.',
       };
 
-      console.log('📦 Creating order:', orderPayload);
-      const createOrderResponse = await axios.post('/orders', orderPayload);
-      const createBody: any = createOrderResponse.data;
-      if (createBody?.success === false) {
-        throw new Error(createBody?.message || 'Failed to create order');
+      const looksLikeService = (it: any) =>
+        Boolean(
+          it?.service_id ||
+            it?.serviceId ||
+            it?.is_service ||
+            it?.isService ||
+            String(it?.item_type || '').toLowerCase() === 'service' ||
+            String(it?.type || '').toLowerCase() === 'service'
+        );
+
+      let targetOrder: any;
+      const editOrderId = Number(orderData?.editOrderId || 0);
+
+      if (editOrderId > 0) {
+        console.log('🛠️ Updating existing order:', editOrderId, orderPayload);
+
+        const existingOrderResponse = await axios.get(`/orders/${editOrderId}`);
+        const existingBody: any = existingOrderResponse.data;
+        const existingOrder: any = existingBody?.data ?? existingBody;
+        if (!existingOrder?.id) {
+          throw new Error('Failed to load existing order for editing');
+        }
+
+        const customerAddress =
+          orderData.customer?.address ||
+          orderData.shipping_address?.street ||
+          orderData.delivery_address?.street ||
+          orderData.deliveryAddress?.street ||
+          '';
+
+        const patchPayload: any = {
+          customer_name: orderData.customer?.name || '',
+          customer_phone: orderData.customer?.phone || '',
+          customer_email: orderData.customer?.email || '',
+          customer_address: customerAddress || null,
+          discount_amount: totalDiscount,
+          shipping_amount: transport,
+          notes: orderPayload.notes || '',
+          shipping_address: orderPayload.shipping_address || {},
+          ...(Array.isArray(orderData.services)
+            ? {
+                services: orderData.services.map((service: any) => ({
+                  ...(Number(service?.id) > 0 ? { id: Number(service.id) } : {}),
+                  service_id: service.serviceId ?? undefined,
+                  service_name: service.service_name || service.productName || service.name || '',
+                  category: service.serviceCategory || service.category || undefined,
+                  quantity: Number(service.quantity) || 1,
+                  unit_price: parseNumber(service.unit_price ?? service.price),
+                  discount_amount: parseNumber(service.discount_amount ?? service.discount),
+                })),
+              }
+            : {}),
+        };
+
+        const patchResponse = await axios.patch(`/orders/${editOrderId}`, patchPayload);
+        const patchBody: any = patchResponse.data;
+        if (patchBody?.success === false) {
+          throw new Error(patchBody?.message || 'Failed to update order details');
+        }
+
+        const existingItems = (Array.isArray(existingOrder.items) ? existingOrder.items : []).filter((item: any) => !looksLikeService(item));
+        const existingIds = new Set(existingItems.map((item: any) => Number(item.id)).filter((id: number) => Number.isFinite(id) && id > 0));
+
+        const desiredItems = Array.isArray(orderData.items) ? orderData.items : [];
+        const desiredExistingIds = new Set(
+          desiredItems
+            .map((item: any) => Number(item?.id))
+            .filter((id: number) => Number.isFinite(id) && id > 0)
+        );
+
+        for (const existingItem of existingItems) {
+          const existingItemId = Number(existingItem.id);
+          if (existingItemId > 0 && !desiredExistingIds.has(existingItemId)) {
+            await axios.delete(`/orders/${editOrderId}/items/${existingItemId}`);
+          }
+        }
+
+        for (const item of desiredItems) {
+          const itemId = Number(item?.id);
+          const itemPayload = {
+            product_id: Number(item.product_id),
+            batch_id: item.batch_id ?? null,
+            quantity: Number(item.quantity) || 1,
+            unit_price: parseNumber(item.unit_price),
+            discount_amount: parseNumber(item.discount_amount),
+            tax_amount: 0,
+          };
+
+          if (itemId > 0 && existingIds.has(itemId)) {
+            await axios.put(`/orders/${editOrderId}/items/${itemId}`, itemPayload);
+          } else {
+            await axios.post(`/orders/${editOrderId}/items`, itemPayload);
+          }
+        }
+
+        const updatedOrderResponse = await axios.get(`/orders/${editOrderId}`);
+        const updatedBody: any = updatedOrderResponse.data;
+        targetOrder = updatedBody?.data ?? updatedBody;
+
+        if (!targetOrder?.id) {
+          throw new Error('Order was updated but latest details could not be loaded');
+        }
+
+        console.log('✅ Order updated:', targetOrder.order_number);
+      } else {
+        console.log('📦 Creating order:', orderPayload);
+        const createOrderResponse = await axios.post('/orders', orderPayload);
+        const createBody: any = createOrderResponse.data;
+        if (createBody?.success === false) {
+          throw new Error(createBody?.message || 'Failed to create order');
+        }
+        targetOrder = createBody?.data ?? createBody;
+        if (!targetOrder?.id) {
+          throw new Error('Order was not created (missing order id)');
+        }
+        console.log('✅ Order created:', targetOrder.order_number);
       }
-      const createdOrder = createBody?.data ?? createBody;
-      if (!createdOrder?.id) {
-        throw new Error('Order was not created (missing order id)');
-      }
-      console.log('✅ Order created:', createdOrder.order_number);
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
         try {
-          await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
+          await axios.patch(`/orders/${targetOrder.id}/set-courier`, {
             intended_courier: intendedCourier.trim(),
           });
         } catch (e) {
           console.warn('Failed to set intended courier marker:', e);
           // Don't fail order placement if marker update fails
-          displayToast('Order placed, but failed to set order marker.', 'warning');
+          displayToast(editOrderId > 0 ? 'Order updated, but failed to set order marker.' : 'Order placed, but failed to set order marker.', 'warning');
         }
       }
 
@@ -326,9 +435,9 @@ export default function AmountDetailsPage() {
         for (const defectItem of defectiveItems) {
           try {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
-              order_id: createdOrder.id,
+              order_id: targetOrder.id,
               selling_price: defectItem.price,
-              sale_notes: `Sold via Social Commerce - Order #${createdOrder.order_number}`,
+              sale_notes: `Sold via Social Commerce - Order #${targetOrder.order_number}`,
               sold_at: new Date().toISOString(),
             });
           } catch (e) {
@@ -375,7 +484,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const paymentResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, paymentData);
+        const paymentResponse = await axios.post(`/orders/${targetOrder.id}/payments/simple`, paymentData);
         if (!paymentResponse.data?.success) {
           throw new Error(paymentResponse.data?.message || 'Failed to process payment');
         }
@@ -422,7 +531,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const advanceResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, advancePaymentData);
+        const advanceResponse = await axios.post(`/orders/${targetOrder.id}/payments/simple`, advancePaymentData);
         if (!advanceResponse.data?.success) {
           throw new Error(advanceResponse.data?.message || 'Failed to process advance payment');
         }
@@ -469,7 +578,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const instResponse = await axios.post(`/orders/${createdOrder.id}/payments/installment`, firstPayment);
+        const instResponse = await axios.post(`/orders/${targetOrder.id}/payments/installment`, firstPayment);
         if (!instResponse.data?.success) {
           throw new Error(instResponse.data?.message || 'Failed to process installment payment');
         }
@@ -479,12 +588,12 @@ export default function AmountDetailsPage() {
 
       const msg =
         paymentOption === 'full'
-          ? `Order ${createdOrder.order_number} placed with full payment.`
+          ? `Order ${targetOrder.order_number} placed with full payment.`
           : paymentOption === 'partial'
-            ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
+            ? `Order ${targetOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
-              : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
+              ? `Order ${targetOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
+              : `Order ${targetOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -891,7 +1000,7 @@ export default function AmountDetailsPage() {
                       disabled={isProcessing}
                       className="w-full mt-2 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold disabled:opacity-60"
                     >
-                      {isProcessing ? 'Processing...' : 'Place Order'}
+                      {isProcessing ? 'Processing...' : (orderData?.editOrderId ? 'Save Order' : 'Place Order')}
                     </button>
                   </div>
                 </div>

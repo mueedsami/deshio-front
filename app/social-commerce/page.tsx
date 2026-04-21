@@ -72,6 +72,7 @@ export default function SocialCommercePage() {
   // Edit-order mode (navigated from orders page for social commerce orders)
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
+  const [editShippingAmount, setEditShippingAmount] = useState<number>(0);
 
   // Multi-product staging: collect several products before adding them all to cart at once
   interface StagingItem {
@@ -868,6 +869,8 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalCity === 'string') setInternationalCity(ep.internationalCity);
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
+          if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
+          if (ep.shippingAmount !== undefined && ep.shippingAmount !== null) setEditShippingAmount(Number(ep.shippingAmount) || 0);
           if (Array.isArray(ep.cart)) setCart(ep.cart);
         }
         draftHydratedRef.current = true;
@@ -1678,10 +1681,13 @@ export default function SocialCommercePage() {
         'pendingOrder',
         JSON.stringify({
           ...orderData,
+          editOrderId,
+          editOrderNumber,
           salesBy,
           date,
           isInternational,
           subtotal,
+          shipping_amount: editShippingAmount,
           deliveryAddress: deliveryAddressForUi,
 
           defectiveItems: cart

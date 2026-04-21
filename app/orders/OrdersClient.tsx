@@ -1685,9 +1685,16 @@ const derivePaymentStatus = (order: any) => {
         const isIntl = !!sa?.country && !sa?.pathao_city_id;
 
         const looksLikeService = (it: any) =>
-          Boolean(it?.service_id || it?.is_service || it?.isService);
+          Boolean(
+            it?.service_id ||
+              it?.serviceId ||
+              it?.is_service ||
+              it?.isService ||
+              String(it?.item_type || '').toLowerCase() === 'service' ||
+              String(it?.type || '').toLowerCase() === 'service'
+          );
 
-        const cartItems = (fo.items ?? [])
+        const productCartItems = (fo.items ?? [])
           .filter((it: any) => !looksLikeService(it))
           .map((it: any) => ({
             id: it.id,
@@ -1701,6 +1708,28 @@ const derivePaymentStatus = (order: any) => {
               (Number(it.unit_price) || 0) * (Number(it.quantity) || 1) -
               (Number(it.discount_amount) || 0),
           }));
+
+        const rawServices = Array.isArray(fo.services) && fo.services.length > 0
+          ? fo.services
+          : (fo.items ?? []).filter((it: any) => looksLikeService(it));
+
+        const serviceCartItems = rawServices.map((svc: any, index: number) => {
+          const unitPrice = Number(svc.unit_price ?? svc.price ?? svc.base_price) || 0;
+          const discountAmount = Number(svc.discount_amount ?? svc.discount) || 0;
+          return {
+            id: Number(svc.id) || `service-edit-${fo.id}-${index + 1}`,
+            product_id: 0,
+            batch_id: 0,
+            productName: svc.service_name ?? svc.product_name ?? svc.name ?? '',
+            quantity: Number(svc.quantity) || 1,
+            unit_price: unitPrice,
+            discount_amount: discountAmount,
+            amount: unitPrice * (Number(svc.quantity) || 1) - discountAmount,
+            isService: true,
+            serviceId: Number(svc.service_id ?? svc.serviceId ?? svc.service?.id) || undefined,
+            serviceCategory: svc.category ?? svc.service_category ?? svc.service?.category ?? undefined,
+          };
+        });
 
         const prefill = {
           editOrderId: order.id,
@@ -1723,7 +1752,8 @@ const derivePaymentStatus = (order: any) => {
           internationalPostalCode: sa.postal_code ?? '',
           deliveryAddress: sa.street ?? sa.address ?? '',
           storeId: fo.store?.id ? String(fo.store.id) : '',
-          cart: cartItems,
+          shippingAmount: Number(fo.shipping_amount) || 0,
+          cart: [...productCartItems, ...serviceCartItems],
         };
 
         sessionStorage.setItem('socialCommerceEditPrefillV1', JSON.stringify(prefill));
