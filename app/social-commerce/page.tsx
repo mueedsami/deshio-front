@@ -73,6 +73,7 @@ export default function SocialCommercePage() {
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
   const [editShippingAmount, setEditShippingAmount] = useState<number>(0);
+  const [editOrderDiscountAmount, setEditOrderDiscountAmount] = useState<number>(0);
 
   // Multi-product staging: collect several products before adding them all to cart at once
   interface StagingItem {
@@ -871,6 +872,7 @@ export default function SocialCommercePage() {
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
           if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
           if (ep.shippingAmount !== undefined && ep.shippingAmount !== null) setEditShippingAmount(Number(ep.shippingAmount) || 0);
+          if (ep.orderDiscountAmount !== undefined && ep.orderDiscountAmount !== null) setEditOrderDiscountAmount(Number(ep.orderDiscountAmount) || 0);
           if (Array.isArray(ep.cart)) setCart(ep.cart);
         }
         draftHydratedRef.current = true;
@@ -1346,7 +1348,74 @@ export default function SocialCommercePage() {
     }
   }, [selectedProduct, quantity, discountPercent, discountTk]);
 
+  const canStageCurrentSelection = () => Boolean(selectedProduct && quantity && parseInt(quantity, 10) > 0);
+
+  const buildCartItemFromSelection = (
+    product: any,
+    qtyInput: string | number,
+    discountPercentInput: string | number,
+    discountTkInput: string | number
+  ): CartProduct | null => {
+    const qty = parseInt(String(qtyInput), 10);
+    if (!product || !Number.isFinite(qty) || qty <= 0) return null;
+
+    const price = Number(String(product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
+    const discPer = parseFloat(String(discountPercentInput || '0')) || 0;
+    const discTk = parseFloat(String(discountTkInput || '0')) || 0;
+
+    if (qty > product.available && !product.isDefective) {
+      alert(`Only ${product.available} units available in this store`);
+      return null;
+    }
+
+    const baseAmount = price * qty;
+    const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
+
+    return {
+      id: Date.now() + Math.random(),
+      product_id: product.id,
+      batch_id: null,
+      productName: `${product.name}`,
+      quantity: qty,
+      unit_price: price,
+      discount_amount: discountValue,
+      amount: Math.max(0, baseAmount - discountValue),
+      isDefective: product.isDefective,
+      defectId: product.defectId,
+    };
+  };
+
+  const stageCurrentSelection = () => {
+    if (!canStageCurrentSelection()) return false;
+
+    const stagedItem = buildCartItemFromSelection(selectedProduct, quantity, discountPercent, discountTk);
+    if (!stagedItem) return false;
+
+    setStagingQueue((prev) => [
+      ...prev,
+      {
+        id: `stg-${Date.now()}-${Math.random()}`,
+        product: selectedProduct,
+        quantity: stagedItem.quantity,
+        discountPercent,
+        discountTk,
+        amount: stagedItem.amount.toFixed(2),
+      },
+    ]);
+
+    setSelectedProduct(null);
+    setQuantity('');
+    setDiscountPercent('');
+    setDiscountTk('');
+    setAmount('0.00');
+    return true;
+  };
+
   const handleProductSelect = (product: any) => {
+    if (selectedProduct && selectedProduct.id !== product.id && canStageCurrentSelection()) {
+      stageCurrentSelection();
+    }
+
     setSelectedProduct(product);
     setSearchQuery('');
     setMinPrice('');
@@ -1359,50 +1428,46 @@ export default function SocialCommercePage() {
   };
 
   const addToCart = () => {
-    if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
+    const nextItems: CartProduct[] = [];
+
+    if (stagingQueue.length > 0) {
+      for (const s of stagingQueue) {
+        const stagedCartItem = buildCartItemFromSelection(s.product, s.quantity, s.discountPercent, s.discountTk);
+        if (!stagedCartItem) {
+          return;
+        }
+        nextItems.push(stagedCartItem);
+      }
+    }
+
+    if (selectedProduct) {
+      const currentItem = buildCartItemFromSelection(selectedProduct, quantity, discountPercent, discountTk);
+      if (!currentItem) {
+        return;
+      }
+      nextItems.push(currentItem);
+    }
+
+    if (nextItems.length === 0) {
       alert('Please select a product and enter quantity');
       return;
     }
 
-    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
-    const qty = parseInt(quantity);
-    const discPer = parseFloat(discountPercent) || 0;
-    const discTk = parseFloat(discountTk) || 0;
+    console.log('✅ Adding to cart:', nextItems.map((item) => ({
+      product_id: item.product_id,
+      batch_id: item.batch_id,
+      isDefective: item.isDefective,
+    })));
 
-    if (qty > selectedProduct.available && !selectedProduct.isDefective) {
-      alert(`Only ${selectedProduct.available} units available in this store`);
-      return;
-    }
-
-    const baseAmount = price * qty;
-    const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
-    const finalAmount = baseAmount - discountValue;
-
-    const newItem: CartProduct = {
-      id: Date.now(),
-      product_id: selectedProduct.id,
-      batch_id: null,
-      productName: `${selectedProduct.name}`,
-      quantity: qty,
-      unit_price: price,
-      discount_amount: discountValue,
-      amount: finalAmount,
-      isDefective: selectedProduct.isDefective,
-      defectId: selectedProduct.defectId,
-    };
-
-    console.log('✅ Adding to cart:', {
-      product_id: newItem.product_id,
-      batch_id: newItem.batch_id,
-      isDefective: newItem.isDefective,
-    });
-
-    setCart([...cart, newItem]);
+    setCart((prev) => [...prev, ...nextItems]);
+    setStagingQueue([]);
     setSelectedProduct(null);
     setQuantity('');
     setDiscountPercent('');
     setDiscountTk('');
     setAmount('0.00');
+    setSearchQuery('');
+    setSearchResults([]);
   };
 
   const removeFromCart = (id: number | string) => {
@@ -1411,36 +1476,14 @@ export default function SocialCommercePage() {
 
   // ── Multi-product staging ──────────────────────────────────────────────────
   const addToStaging = () => {
-    if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
+    if (!canStageCurrentSelection()) {
       alert('Please select a product and enter quantity');
       return;
     }
-    const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
-    const qty = parseInt(quantity);
-    const discPer = parseFloat(discountPercent) || 0;
-    const discTk = parseFloat(discountTk) || 0;
-    if (qty > selectedProduct.available && !selectedProduct.isDefective) {
-      alert(`Only ${selectedProduct.available} units available in this store`);
-      return;
-    }
-    const finalAmount = calculateAmount(price, qty, discPer, discTk);
-    setStagingQueue((prev) => [
-      ...prev,
-      {
-        id: `stg-${Date.now()}-${Math.random()}`,
-        product: selectedProduct,
-        quantity: qty,
-        discountPercent,
-        discountTk,
-        amount: finalAmount.toFixed(2),
-      },
-    ]);
-    // Reset selection so user can immediately search next product
-    setSelectedProduct(null);
-    setQuantity('');
-    setDiscountPercent('');
-    setDiscountTk('');
-    setAmount('0.00');
+
+    const staged = stageCurrentSelection();
+    if (!staged) return;
+
     setSearchQuery('');
     setSearchResults([]);
   };
@@ -1451,25 +1494,16 @@ export default function SocialCommercePage() {
 
   const addAllStagedToCart = () => {
     if (stagingQueue.length === 0) return;
-    const newItems: CartProduct[] = stagingQueue.map((s) => {
-      const price = Number(String(s.product.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
-      const discPer = parseFloat(s.discountPercent) || 0;
-      const discTk = parseFloat(s.discountTk) || 0;
-      const baseAmount = price * s.quantity;
-      const discountValue = discPer > 0 ? (baseAmount * discPer) / 100 : discTk;
-      return {
-        id: Date.now() + Math.random(),
-        product_id: s.product.id,
-        batch_id: null,
-        productName: s.product.name,
-        quantity: s.quantity,
-        unit_price: price,
-        discount_amount: discountValue,
-        amount: baseAmount - discountValue,
-        isDefective: s.product.isDefective,
-        defectId: s.product.defectId,
-      };
-    });
+
+    const newItems: CartProduct[] = [];
+    for (const s of stagingQueue) {
+      const stagedCartItem = buildCartItemFromSelection(s.product, s.quantity, s.discountPercent, s.discountTk);
+      if (!stagedCartItem) {
+        return;
+      }
+      newItems.push(stagedCartItem);
+    }
+
     setCart((prev) => [...prev, ...newItems]);
     setStagingQueue([]);
   };
@@ -1688,6 +1722,7 @@ export default function SocialCommercePage() {
           isInternational,
           subtotal,
           shipping_amount: editShippingAmount,
+          order_discount_amount: editOrderDiscountAmount,
           deliveryAddress: deliveryAddressForUi,
 
           defectiveItems: cart
@@ -2482,16 +2517,18 @@ export default function SocialCommercePage() {
                           onClick={addToStaging}
                           disabled={!selectedProduct}
                           className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                          title="Stage this product, then search for the next one"
+                          title="Save this product setup, then search/select the next one"
                         >
-                          + Stage
+                          Stage & Next
                         </button>
                         <button
                           onClick={addToCart}
-                          disabled={!selectedProduct}
+                          disabled={!selectedProduct && stagingQueue.length === 0}
                           className="flex-1 px-4 py-2.5 bg-black hover:bg-gray-800 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                          Add to Cart
+                          {stagingQueue.length > 0
+                            ? (selectedProduct ? `Add Selected + ${stagingQueue.length} Staged` : `Add ${stagingQueue.length} Staged to Cart`)
+                            : "Add to Cart"}
                         </button>
                       </div>
                     </div>
@@ -2501,7 +2538,7 @@ export default function SocialCommercePage() {
                       <div className="mt-4 border border-indigo-200 dark:border-indigo-700 rounded-lg overflow-hidden">
                         <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
                           <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-                            Staged ({stagingQueue.length}) — search more products or add all to cart
+                            Staged ({stagingQueue.length}) — you can keep selecting products, then send all of them to cart together
                           </span>
                           <button
                             onClick={addAllStagedToCart}

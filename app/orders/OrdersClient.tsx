@@ -1753,6 +1753,7 @@ const derivePaymentStatus = (order: any) => {
           deliveryAddress: sa.street ?? sa.address ?? '',
           storeId: fo.store?.id ? String(fo.store.id) : '',
           shippingAmount: Number(fo.shipping_amount) || 0,
+          orderDiscountAmount: Number(fo.discount_amount ?? order.discount ?? 0) || 0,
           cart: [...productCartItems, ...serviceCartItems],
         };
 
