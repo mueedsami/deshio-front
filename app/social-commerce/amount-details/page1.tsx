@@ -37,6 +37,12 @@ const calculateItemAmount = (item: any): number => {
   return unitPrice * qty - disc;
 };
 
+const normalizeKey = (item: any): string => {
+  const productId = Number(item?.product_id ?? item?.productId ?? 0) || 0;
+  const batchId = Number(item?.batch_id ?? item?.batchId ?? 0) || 0;
+  return `${productId}::${batchId}`;
+};
+
 export default function AmountDetailsPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -255,56 +261,172 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      // 1) Create order (sanitize payload)
-      const orderPayload: any = {
-        order_type: orderData.order_type || 'social_commerce',
-        store_id: parseInt(String(orderData.store_id), 10),
-        store_assignment_mode: 'assign_now',
-        customer: {
-          name: orderData.customer?.name,
-          email: orderData.customer?.email || undefined,
-          phone: orderData.customer?.phone,
-        },
-        shipping_address: orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {},
-        delivery_address: orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {},
-        items: (orderData.items || []).map((item: any) => ({
-          product_id: item.product_id,
-          batch_id: item.batch_id ?? null,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount_amount: item.discount_amount || 0,
-          // VAT is inclusive; do not add extra tax
-          tax_amount: 0,
-        })),
-        // ✅ Services (kept separate from items)
-        ...(Array.isArray(orderData.services) && orderData.services.length > 0
-          ? { services: orderData.services }
-          : {}),
-        shipping_amount: transport,
-        ...(paymentOption === 'installment'
-          ? {
-              installment_plan: {
-                total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: suggestedInstallmentAmount,
-                // Some backends validate date; omit instead of null
-                start_date: undefined,
-              },
-            }
-          : {}),
-        ...(orderData.notes?.trim() ? { notes: orderData.notes.trim() } : {}),
-      };
+      const isEditMode = !!orderData?.editOrderId;
+      const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
 
-      console.log('📦 Creating order:', orderPayload);
-      const createOrderResponse = await axios.post('/orders', orderPayload);
-      const createBody: any = createOrderResponse.data;
-      if (createBody?.success === false) {
-        throw new Error(createBody?.message || 'Failed to create order');
+      const itemPayloads = (orderData.items || []).map((item: any) => ({
+        id: item.id ?? null,
+        product_id: item.product_id,
+        batch_id: item.batch_id ?? null,
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        discount_amount: Number(item.discount_amount) || 0,
+      }));
+
+      let createdOrder: any = null;
+
+      if (isEditMode) {
+        const targetOrderId = Number(orderData.editOrderId);
+        if (!targetOrderId) {
+          throw new Error('Edit order id missing');
+        }
+
+        const updatePayload: any = {
+          customer_name: orderData.customer?.name,
+          customer_phone: orderData.customer?.phone,
+          customer_email: orderData.customer?.email || undefined,
+          customer_address: orderData.customer?.address || undefined,
+          shipping_address: shippingPayload,
+          discount_amount: orderDiscount,
+          shipping_amount: transport,
+          ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
+        };
+
+        console.log('✏️ Updating order:', targetOrderId, updatePayload);
+        const updateResponse = await axios.patch(`/orders/${targetOrderId}`, updatePayload);
+        const updateBody: any = updateResponse.data;
+        if (updateBody?.success === false) {
+          throw new Error(updateBody?.message || 'Failed to update order');
+        }
+
+        const existingResponse = await axios.get(`/orders/${targetOrderId}`);
+        const existingBody: any = existingResponse.data;
+        if (existingBody?.success === false) {
+          throw new Error(existingBody?.message || 'Failed to load existing order items');
+        }
+
+        const existingOrder = existingBody?.data ?? existingBody;
+        const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];
+
+        const desiredById = new Map<number, any>();
+        const desiredUnmatched: any[] = [];
+        for (const item of itemPayloads) {
+          const numericId = Number(item.id);
+          if (numericId) desiredById.set(numericId, item);
+          else desiredUnmatched.push(item);
+        }
+
+        for (const existingItem of existingItems) {
+          const existingId = Number(existingItem?.id);
+          if (!existingId) continue;
+
+          if (desiredById.has(existingId)) {
+            const desiredItem = desiredById.get(existingId);
+            await axios.put(`/orders/${targetOrderId}/items/${existingId}`, {
+              quantity: desiredItem.quantity,
+              unit_price: desiredItem.unit_price,
+              discount_amount: desiredItem.discount_amount,
+            });
+            desiredById.delete(existingId);
+            continue;
+          }
+
+          const fallbackIndex = desiredUnmatched.findIndex((candidate) => normalizeKey(candidate) === normalizeKey(existingItem));
+          if (fallbackIndex >= 0) {
+            const desiredItem = desiredUnmatched.splice(fallbackIndex, 1)[0];
+            await axios.put(`/orders/${targetOrderId}/items/${existingId}`, {
+              quantity: desiredItem.quantity,
+              unit_price: desiredItem.unit_price,
+              discount_amount: desiredItem.discount_amount,
+            });
+            continue;
+          }
+
+          await axios.delete(`/orders/${targetOrderId}/items/${existingId}`);
+        }
+
+        for (const [, desiredItem] of desiredById) {
+          await axios.post(`/orders/${targetOrderId}/items`, {
+            product_id: desiredItem.product_id,
+            batch_id: desiredItem.batch_id,
+            quantity: desiredItem.quantity,
+            unit_price: desiredItem.unit_price,
+            discount_amount: desiredItem.discount_amount,
+          });
+        }
+
+        for (const desiredItem of desiredUnmatched) {
+          await axios.post(`/orders/${targetOrderId}/items`, {
+            product_id: desiredItem.product_id,
+            batch_id: desiredItem.batch_id,
+            quantity: desiredItem.quantity,
+            unit_price: desiredItem.unit_price,
+            discount_amount: desiredItem.discount_amount,
+          });
+        }
+
+        const refreshedResponse = await axios.get(`/orders/${targetOrderId}`);
+        const refreshedBody: any = refreshedResponse.data;
+        if (refreshedBody?.success === false) {
+          throw new Error(refreshedBody?.message || 'Order updated but failed to reload final details');
+        }
+        createdOrder = refreshedBody?.data ?? refreshedBody;
+      } else {
+        // 1) Create order (sanitize payload)
+        const orderPayload: any = {
+          order_type: orderData.order_type || 'social_commerce',
+          store_id: parseInt(String(orderData.store_id), 10),
+          store_assignment_mode: 'assign_now',
+          customer: {
+            name: orderData.customer?.name,
+            email: orderData.customer?.email || undefined,
+            phone: orderData.customer?.phone,
+          },
+          shipping_address: shippingPayload,
+          delivery_address: shippingPayload,
+          items: itemPayloads.map((item: any) => ({
+            product_id: item.product_id,
+            batch_id: item.batch_id ?? null,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            discount_amount: item.discount_amount || 0,
+            // VAT is inclusive; do not add extra tax
+            tax_amount: 0,
+          })),
+          // ✅ Services (kept separate from items)
+          ...(Array.isArray(orderData.services) && orderData.services.length > 0
+            ? { services: orderData.services }
+            : {}),
+          shipping_amount: transport,
+          ...(paymentOption === 'installment'
+            ? {
+                installment_plan: {
+                  total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
+                  installment_amount: suggestedInstallmentAmount,
+                  // Some backends validate date; omit instead of null
+                  start_date: undefined,
+                },
+              }
+            : {}),
+          ...(orderData.notes?.trim() ? { notes: orderData.notes.trim() } : {}),
+        };
+
+        console.log('📦 Creating order:', orderPayload);
+        const createOrderResponse = await axios.post('/orders', orderPayload);
+        const createBody: any = createOrderResponse.data;
+        if (createBody?.success === false) {
+          throw new Error(createBody?.message || 'Failed to create order');
+        }
+        createdOrder = createBody?.data ?? createBody;
+        if (!createdOrder?.id) {
+          throw new Error('Order was not created (missing order id)');
+        }
+        console.log('✅ Order created:', createdOrder.order_number);
       }
-      const createdOrder = createBody?.data ?? createBody;
+
       if (!createdOrder?.id) {
-        throw new Error('Order was not created (missing order id)');
+        throw new Error('Order save failed (missing order id)');
       }
-      console.log('✅ Order created:', createdOrder.order_number);
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
@@ -477,14 +599,16 @@ export default function AmountDetailsPage() {
 
       // paymentOption === 'none' => no payment now
 
+      const isEditMode = !!orderData?.editOrderId;
+      const actionWord = isEditMode ? 'updated' : 'placed';
       const msg =
         paymentOption === 'full'
-          ? `Order ${createdOrder.order_number} placed with full payment.`
+          ? `Order ${createdOrder.order_number} ${actionWord} with full payment.`
           : paymentOption === 'partial'
-            ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
+            ? `Order ${createdOrder.order_number} ${actionWord}. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
-              : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
+              ? `Order ${createdOrder.order_number} ${actionWord} on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
+              : `Order ${createdOrder.order_number} ${actionWord}. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');

@@ -37,13 +37,10 @@ const calculateItemAmount = (item: any): number => {
   return unitPrice * qty - disc;
 };
 
-const toPositiveNumericId = (value: any): number | null => {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-
-const isServiceLine = (item: any): boolean => {
-  return Boolean(item?.service_id || item?.is_service || item?.isService);
+const normalizeKey = (item: any): string => {
+  const productId = Number(item?.product_id ?? item?.productId ?? 0) || 0;
+  const batchId = Number(item?.batch_id ?? item?.batchId ?? 0) || 0;
+  return `${productId}::${batchId}`;
 };
 
 export default function AmountDetailsPage() {
@@ -269,123 +266,120 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      const orderIdToEdit = toPositiveNumericId(orderData?.editOrderId);
-      const isEditMode = Boolean(orderIdToEdit);
-      const shippingAddressPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
-      let activeOrder: any = null;
+      const isEditMode = !!orderData?.editOrderId;
+      const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
 
-      if (isEditMode && orderIdToEdit) {
-        console.log('🔄 Updating existing order:', orderIdToEdit);
+      const itemPayloads = (orderData.items || []).map((item: any) => ({
+        id: item.id ?? null,
+        product_id: item.product_id,
+        batch_id: item.batch_id ?? null,
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        discount_amount: Number(item.discount_amount) || 0,
+      }));
 
-        const existingOrderResponse = await axios.get(`/orders/${orderIdToEdit}`);
-        const existingOrder: any = existingOrderResponse.data?.data ?? existingOrderResponse.data;
-        if (!existingOrder?.id) {
-          throw new Error('Failed to load the order being edited');
+      let createdOrder: any = null;
+
+      if (isEditMode) {
+        const targetOrderId = Number(orderData.editOrderId);
+        if (!targetOrderId) {
+          throw new Error('Edit order id missing');
         }
 
-        const updatePayloadBase: any = {
-          customer_name: orderData.customer?.name || '',
-          customer_phone: orderData.customer?.phone || '',
-          customer_email: orderData.customer?.email || null,
-          customer_address: orderData.customer?.address || null,
+        const updatePayload: any = {
+          customer_name: orderData.customer?.name,
+          customer_phone: orderData.customer?.phone,
+          customer_email: orderData.customer?.email || undefined,
+          customer_address: orderData.customer?.address || undefined,
+          shipping_address: shippingPayload,
           discount_amount: orderDiscount,
           shipping_amount: transport,
-          ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : { notes: '' }),
-          ...(Array.isArray(orderData.services) && orderData.services.length > 0
-            ? {
-                services: orderData.services.map((service: any) => ({
-                  ...(toPositiveNumericId(service?.id) ? { id: toPositiveNumericId(service?.id) } : {}),
-                  service_id: service.service_id ?? service.serviceId ?? undefined,
-                  service_name: service.service_name ?? service.serviceName ?? undefined,
-                  quantity: parseNumber(service.quantity || 1) || 1,
-                  unit_price: parseNumber(service.unit_price),
-                  discount_amount: parseNumber(service.discount_amount),
-                  total_amount: parseNumber(service.total_amount),
-                  category: service.category ?? service.serviceCategory ?? undefined,
-                })),
-              }
-            : {}),
+          ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
         };
 
-        const updatePayloadWithShipping =
-          shippingAddressPayload && typeof shippingAddressPayload === 'object' && Object.keys(shippingAddressPayload).length > 0
-            ? { ...updatePayloadBase, shipping_address: shippingAddressPayload }
-            : updatePayloadBase;
-
-        try {
-          const updateResponse = await axios.patch(`/orders/${orderIdToEdit}`, updatePayloadWithShipping);
-          if (updateResponse.data?.success === false) {
-            throw new Error(updateResponse.data?.message || 'Failed to update order');
-          }
-        } catch (error: any) {
-          const backendData = error?.response?.data;
-          const txt = JSON.stringify(backendData || {}).toLowerCase();
-          const maybeShippingErr = txt.includes('shipping_address') || txt.includes('shipping address');
-
-          if (updatePayloadWithShipping?.shipping_address && maybeShippingErr) {
-            const retryResponse = await axios.patch(`/orders/${orderIdToEdit}`, updatePayloadBase);
-            if (retryResponse.data?.success === false) {
-              throw new Error(retryResponse.data?.message || 'Failed to update order');
-            }
-          } else {
-            throw error;
-          }
+        console.log('✏️ Updating order:', targetOrderId, updatePayload);
+        const updateResponse = await axios.patch(`/orders/${targetOrderId}`, updatePayload);
+        const updateBody: any = updateResponse.data;
+        if (updateBody?.success === false) {
+          throw new Error(updateBody?.message || 'Failed to update order');
         }
 
-        const existingItems = (Array.isArray(existingOrder.items) ? existingOrder.items : []).filter((item: any) => !isServiceLine(item));
-        const desiredItems = (orderData.items || []).map((item: any) => ({
-          id: toPositiveNumericId(item?.id),
-          product_id: toPositiveNumericId(item?.product_id) || 0,
-          product_name: item?.product_name || item?.productName || '',
-          batch_id: toPositiveNumericId(item?.batch_id),
-          quantity: Math.max(1, parseNumber(item?.quantity) || 1),
-          unit_price: parseNumber(item?.unit_price),
-          discount_amount: parseNumber(item?.discount_amount),
-        }));
+        const existingResponse = await axios.get(`/orders/${targetOrderId}`);
+        const existingBody: any = existingResponse.data;
+        if (existingBody?.success === false) {
+          throw new Error(existingBody?.message || 'Failed to load existing order items');
+        }
 
-        const desiredExistingIds = new Set(
-          desiredItems
-            .map((item: any) => item.id)
-            .filter((id: number | null): id is number => Boolean(id))
-        );
+        const existingOrder = existingBody?.data ?? existingBody;
+        const existingItems = Array.isArray(existingOrder?.items) ? existingOrder.items : [];
+
+        const desiredById = new Map<number, any>();
+        const desiredUnmatched: any[] = [];
+        for (const item of itemPayloads) {
+          const numericId = Number(item.id);
+          if (numericId) desiredById.set(numericId, item);
+          else desiredUnmatched.push(item);
+        }
+
+        const usedExistingIds = new Set<number>();
 
         for (const existingItem of existingItems) {
-          const existingItemId = toPositiveNumericId(existingItem?.id);
-          if (existingItemId && !desiredExistingIds.has(existingItemId)) {
-            await axios.delete(`/orders/${orderIdToEdit}/items/${existingItemId}`);
+          const existingId = Number(existingItem?.id);
+          if (!existingId) continue;
+
+          if (desiredById.has(existingId)) {
+            const desiredItem = desiredById.get(existingId);
+            await axios.put(`/orders/${targetOrderId}/items/${existingId}`, {
+              quantity: desiredItem.quantity,
+              unit_price: desiredItem.unit_price,
+              discount_amount: desiredItem.discount_amount,
+            });
+            usedExistingIds.add(existingId);
+            desiredById.delete(existingId);
+            continue;
           }
+
+          const fallbackIndex = desiredUnmatched.findIndex((candidate) => normalizeKey(candidate) === normalizeKey(existingItem));
+          if (fallbackIndex >= 0) {
+            const desiredItem = desiredUnmatched.splice(fallbackIndex, 1)[0];
+            await axios.put(`/orders/${targetOrderId}/items/${existingId}`, {
+              quantity: desiredItem.quantity,
+              unit_price: desiredItem.unit_price,
+              discount_amount: desiredItem.discount_amount,
+            });
+            usedExistingIds.add(existingId);
+            continue;
+          }
+
+          await axios.delete(`/orders/${targetOrderId}/items/${existingId}`);
         }
 
-        for (const item of desiredItems) {
-          if (!item.product_id) continue;
-
-          if (item.id) {
-            await axios.put(`/orders/${orderIdToEdit}/items/${item.id}`, {
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              discount_amount: item.discount_amount || 0,
-            });
-          } else {
-            const itemPayload: any = {
-              order_id: orderIdToEdit,
-              store_id: parseInt(String(orderData.store_id), 10),
-              product_id: item.product_id,
-              ...(item.product_name ? { product_name: item.product_name } : {}),
-              batch_id: item.batch_id ?? null,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              discount_amount: item.discount_amount || 0,
-            };
-
-            await axios.post(`/orders/${orderIdToEdit}/items`, {
-              ...itemPayload,
-              items: [itemPayload],
-            });
-          }
+        for (const [, desiredItem] of desiredById) {
+          await axios.post(`/orders/${targetOrderId}/items`, {
+            product_id: desiredItem.product_id,
+            batch_id: desiredItem.batch_id,
+            quantity: desiredItem.quantity,
+            unit_price: desiredItem.unit_price,
+            discount_amount: desiredItem.discount_amount,
+          });
         }
 
-        const refreshedOrderResponse = await axios.get(`/orders/${orderIdToEdit}`);
-        activeOrder = refreshedOrderResponse.data?.data ?? refreshedOrderResponse.data;
+        for (const desiredItem of desiredUnmatched) {
+          await axios.post(`/orders/${targetOrderId}/items`, {
+            product_id: desiredItem.product_id,
+            batch_id: desiredItem.batch_id,
+            quantity: desiredItem.quantity,
+            unit_price: desiredItem.unit_price,
+            discount_amount: desiredItem.discount_amount,
+          });
+        }
+
+        const refreshedResponse = await axios.get(`/orders/${targetOrderId}`);
+        const refreshedBody: any = refreshedResponse.data;
+        if (refreshedBody?.success === false) {
+          throw new Error(refreshedBody?.message || 'Order updated but failed to reload final details');
+        }
+        createdOrder = refreshedBody?.data ?? refreshedBody;
       } else {
         // 1) Create order (sanitize payload)
         const orderPayload: any = {
@@ -397,9 +391,9 @@ export default function AmountDetailsPage() {
             email: orderData.customer?.email || undefined,
             phone: orderData.customer?.phone,
           },
-          shipping_address: shippingAddressPayload,
-          delivery_address: shippingAddressPayload,
-          items: (orderData.items || []).map((item: any) => ({
+          shipping_address: shippingPayload,
+          delivery_address: shippingPayload,
+          items: itemPayloads.map((item: any) => ({
             product_id: item.product_id,
             batch_id: item.batch_id ?? null,
             quantity: item.quantity,
@@ -408,6 +402,7 @@ export default function AmountDetailsPage() {
             // VAT is inclusive; do not add extra tax
             tax_amount: 0,
           })),
+          // ✅ Services (kept separate from items)
           ...(Array.isArray(orderData.services) && orderData.services.length > 0
             ? { services: orderData.services }
             : {}),
@@ -418,6 +413,7 @@ export default function AmountDetailsPage() {
                 installment_plan: {
                   total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
                   installment_amount: suggestedInstallmentAmount,
+                  // Some backends validate date; omit instead of null
                   start_date: undefined,
                 },
               }
@@ -431,26 +427,27 @@ export default function AmountDetailsPage() {
         if (createBody?.success === false) {
           throw new Error(createBody?.message || 'Failed to create order');
         }
-        activeOrder = createBody?.data ?? createBody;
-        if (!activeOrder?.id) {
+        createdOrder = createBody?.data ?? createBody;
+        if (!createdOrder?.id) {
           throw new Error('Order was not created (missing order id)');
         }
-        console.log('✅ Order created:', activeOrder.order_number);
+        console.log('✅ Order created:', createdOrder.order_number);
       }
 
-      if (!activeOrder?.id) {
-        throw new Error('Order save failed');
+      if (!createdOrder?.id) {
+        throw new Error('Order save failed (missing order id)');
       }
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
         try {
-          await axios.patch(`/orders/${activeOrder.id}/set-courier`, {
+          await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
             intended_courier: intendedCourier.trim(),
           });
         } catch (e) {
           console.warn('Failed to set intended courier marker:', e);
-          displayToast(isEditMode ? 'Order updated, but failed to set order marker.' : 'Order placed, but failed to set order marker.', 'warning');
+          // Don't fail order placement if marker update fails
+          displayToast('Order placed, but failed to set order marker.', 'warning');
         }
       }
 
@@ -461,9 +458,9 @@ export default function AmountDetailsPage() {
         for (const defectItem of defectiveItems) {
           try {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
-              order_id: activeOrder.id,
+              order_id: createdOrder.id,
               selling_price: defectItem.price,
-              sale_notes: `Sold via Social Commerce - Order #${activeOrder.order_number}`,
+              sale_notes: `Sold via Social Commerce - Order #${createdOrder.order_number}`,
               sold_at: new Date().toISOString(),
             });
           } catch (e) {
@@ -510,7 +507,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const paymentResponse = await axios.post(`/orders/${activeOrder.id}/payments/simple`, paymentData);
+        const paymentResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, paymentData);
         if (!paymentResponse.data?.success) {
           throw new Error(paymentResponse.data?.message || 'Failed to process payment');
         }
@@ -557,7 +554,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const advanceResponse = await axios.post(`/orders/${activeOrder.id}/payments/simple`, advancePaymentData);
+        const advanceResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, advancePaymentData);
         if (!advanceResponse.data?.success) {
           throw new Error(advanceResponse.data?.message || 'Failed to process advance payment');
         }
@@ -604,7 +601,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const instResponse = await axios.post(`/orders/${activeOrder.id}/payments/installment`, firstPayment);
+        const instResponse = await axios.post(`/orders/${createdOrder.id}/payments/installment`, firstPayment);
         if (!instResponse.data?.success) {
           throw new Error(instResponse.data?.message || 'Failed to process installment payment');
         }
@@ -612,14 +609,16 @@ export default function AmountDetailsPage() {
 
       // paymentOption === 'none' => no payment now
 
+      const isEditMode = !!orderData?.editOrderId;
+      const actionWord = isEditMode ? 'updated' : 'placed';
       const msg =
         paymentOption === 'full'
-          ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'} with full payment.`
+          ? `Order ${createdOrder.order_number} ${actionWord} with full payment.`
           : paymentOption === 'partial'
-            ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'}. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
+            ? `Order ${createdOrder.order_number} ${actionWord}. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'} on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
-              : `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'}. Cash on delivery ৳${codAmount.toFixed(2)}.`;
+              ? `Order ${createdOrder.order_number} ${actionWord} on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
+              : `Order ${createdOrder.order_number} ${actionWord}. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -629,7 +628,7 @@ export default function AmountDetailsPage() {
         window.location.href = '/orders';
       }, 2000);
     } catch (error: any) {
-      console.error('❌ Order save failed:', error);
+      console.error('❌ Order placement failed:', error);
       const errMsg = error.response?.data?.message || error.message || 'Error placing order. Please try again.';
       displayToast(errMsg, 'error');
     } finally {

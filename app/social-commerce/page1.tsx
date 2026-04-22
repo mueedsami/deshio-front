@@ -1658,6 +1658,8 @@ export default function SocialCommercePage() {
 
       const orderData = {
         order_type: 'social_commerce',
+        ...(editOrderId ? { editOrderId } : {}),
+        ...(editOrderNumber ? { editOrderNumber } : {}),
         store_id: parseInt(selectedStore),
         customer: {
           name: userName,
@@ -1671,6 +1673,7 @@ export default function SocialCommercePage() {
         items: cart
           .filter((item) => !item.isService)
           .map((item) => ({
+            ...(item.id ? { id: item.id } : {}),
             product_id: item.product_id,
             ...(item.batch_id ? { batch_id: item.batch_id } : {}),
             quantity: item.quantity,

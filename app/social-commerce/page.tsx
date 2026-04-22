@@ -72,7 +72,6 @@ export default function SocialCommercePage() {
   // Edit-order mode (navigated from orders page for social commerce orders)
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
-  const [editOrderDiscountAmount, setEditOrderDiscountAmount] = useState<number>(0);
 
   // Multi-product staging: collect several products before adding them all to cart at once
   interface StagingItem {
@@ -852,7 +851,6 @@ export default function SocialCommercePage() {
         if (ep && typeof ep === 'object') {
           if (typeof ep.editOrderId === 'number') setEditOrderId(ep.editOrderId);
           if (typeof ep.editOrderNumber === 'string') setEditOrderNumber(ep.editOrderNumber);
-          if (ep.orderDiscountAmount !== undefined) setEditOrderDiscountAmount(Number(ep.orderDiscountAmount) || 0);
           if (typeof ep.userName === 'string') setUserName(ep.userName);
           if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
@@ -1678,6 +1676,8 @@ export default function SocialCommercePage() {
 
       const orderData = {
         order_type: 'social_commerce',
+        ...(editOrderId ? { editOrderId } : {}),
+        ...(editOrderNumber ? { editOrderNumber } : {}),
         store_id: parseInt(selectedStore),
         customer: {
           name: userName,
@@ -1691,9 +1691,8 @@ export default function SocialCommercePage() {
         items: cart
           .filter((item) => !item.isService)
           .map((item) => ({
-            ...(item.id !== undefined && item.id !== null ? { id: item.id } : {}),
+            ...(item.id ? { id: item.id } : {}),
             product_id: item.product_id,
-            product_name: item.productName,
             ...(item.batch_id ? { batch_id: item.batch_id } : {}),
             quantity: item.quantity,
             unit_price: item.unit_price,
@@ -1703,7 +1702,6 @@ export default function SocialCommercePage() {
         services: cart
           .filter((item) => item.isService)
           .map((item) => ({
-            ...(item.id !== undefined && item.id !== null ? { id: item.id } : {}),
             service_id: item.serviceId,
             service_name: item.productName,
             quantity: item.quantity,
@@ -1723,9 +1721,6 @@ export default function SocialCommercePage() {
         'pendingOrder',
         JSON.stringify({
           ...orderData,
-          editOrderId,
-          editOrderNumber,
-          orderDiscountAmount: editOrderDiscountAmount,
           salesBy,
           date,
           isInternational,
