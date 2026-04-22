@@ -37,6 +37,15 @@ const calculateItemAmount = (item: any): number => {
   return unitPrice * qty - disc;
 };
 
+const toPositiveNumericId = (value: any): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const isServiceLine = (item: any): boolean => {
+  return Boolean(item?.service_id || item?.is_service || item?.isService);
+};
+
 export default function AmountDetailsPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -260,68 +269,188 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      // 1) Create order (sanitize payload)
-      const orderPayload: any = {
-        order_type: orderData.order_type || 'social_commerce',
-        store_id: parseInt(String(orderData.store_id), 10),
-        store_assignment_mode: 'assign_now',
-        customer: {
-          name: orderData.customer?.name,
-          email: orderData.customer?.email || undefined,
-          phone: orderData.customer?.phone,
-        },
-        shipping_address: orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {},
-        delivery_address: orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {},
-        items: (orderData.items || []).map((item: any) => ({
-          product_id: item.product_id,
-          batch_id: item.batch_id ?? null,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          discount_amount: item.discount_amount || 0,
-          // VAT is inclusive; do not add extra tax
-          tax_amount: 0,
-        })),
-        // ✅ Services (kept separate from items)
-        ...(Array.isArray(orderData.services) && orderData.services.length > 0
-          ? { services: orderData.services }
-          : {}),
-        discount_amount: orderDiscount,
-        shipping_amount: transport,
-        ...(paymentOption === 'installment'
-          ? {
-              installment_plan: {
-                total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: suggestedInstallmentAmount,
-                // Some backends validate date; omit instead of null
-                start_date: undefined,
-              },
-            }
-          : {}),
-        ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
-      };
+      const orderIdToEdit = toPositiveNumericId(orderData?.editOrderId);
+      const isEditMode = Boolean(orderIdToEdit);
+      const shippingAddressPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
+      let activeOrder: any = null;
 
-      console.log('📦 Creating order:', orderPayload);
-      const createOrderResponse = await axios.post('/orders', orderPayload);
-      const createBody: any = createOrderResponse.data;
-      if (createBody?.success === false) {
-        throw new Error(createBody?.message || 'Failed to create order');
+      if (isEditMode && orderIdToEdit) {
+        console.log('🔄 Updating existing order:', orderIdToEdit);
+
+        const existingOrderResponse = await axios.get(`/orders/${orderIdToEdit}`);
+        const existingOrder: any = existingOrderResponse.data?.data ?? existingOrderResponse.data;
+        if (!existingOrder?.id) {
+          throw new Error('Failed to load the order being edited');
+        }
+
+        const updatePayloadBase: any = {
+          customer_name: orderData.customer?.name || '',
+          customer_phone: orderData.customer?.phone || '',
+          customer_email: orderData.customer?.email || null,
+          customer_address: orderData.customer?.address || null,
+          discount_amount: orderDiscount,
+          shipping_amount: transport,
+          ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : { notes: '' }),
+          ...(Array.isArray(orderData.services) && orderData.services.length > 0
+            ? {
+                services: orderData.services.map((service: any) => ({
+                  ...(toPositiveNumericId(service?.id) ? { id: toPositiveNumericId(service?.id) } : {}),
+                  service_id: service.service_id ?? service.serviceId ?? undefined,
+                  service_name: service.service_name ?? service.serviceName ?? undefined,
+                  quantity: parseNumber(service.quantity || 1) || 1,
+                  unit_price: parseNumber(service.unit_price),
+                  discount_amount: parseNumber(service.discount_amount),
+                  total_amount: parseNumber(service.total_amount),
+                  category: service.category ?? service.serviceCategory ?? undefined,
+                })),
+              }
+            : {}),
+        };
+
+        const updatePayloadWithShipping =
+          shippingAddressPayload && typeof shippingAddressPayload === 'object' && Object.keys(shippingAddressPayload).length > 0
+            ? { ...updatePayloadBase, shipping_address: shippingAddressPayload }
+            : updatePayloadBase;
+
+        try {
+          const updateResponse = await axios.patch(`/orders/${orderIdToEdit}`, updatePayloadWithShipping);
+          if (updateResponse.data?.success === false) {
+            throw new Error(updateResponse.data?.message || 'Failed to update order');
+          }
+        } catch (error: any) {
+          const backendData = error?.response?.data;
+          const txt = JSON.stringify(backendData || {}).toLowerCase();
+          const maybeShippingErr = txt.includes('shipping_address') || txt.includes('shipping address');
+
+          if (updatePayloadWithShipping?.shipping_address && maybeShippingErr) {
+            const retryResponse = await axios.patch(`/orders/${orderIdToEdit}`, updatePayloadBase);
+            if (retryResponse.data?.success === false) {
+              throw new Error(retryResponse.data?.message || 'Failed to update order');
+            }
+          } else {
+            throw error;
+          }
+        }
+
+        const existingItems = (Array.isArray(existingOrder.items) ? existingOrder.items : []).filter((item: any) => !isServiceLine(item));
+        const desiredItems = (orderData.items || []).map((item: any) => ({
+          id: toPositiveNumericId(item?.id),
+          product_id: toPositiveNumericId(item?.product_id) || 0,
+          product_name: item?.product_name || item?.productName || '',
+          batch_id: toPositiveNumericId(item?.batch_id),
+          quantity: Math.max(1, parseNumber(item?.quantity) || 1),
+          unit_price: parseNumber(item?.unit_price),
+          discount_amount: parseNumber(item?.discount_amount),
+        }));
+
+        const desiredExistingIds = new Set(
+          desiredItems
+            .map((item: any) => item.id)
+            .filter((id: number | null): id is number => Boolean(id))
+        );
+
+        for (const existingItem of existingItems) {
+          const existingItemId = toPositiveNumericId(existingItem?.id);
+          if (existingItemId && !desiredExistingIds.has(existingItemId)) {
+            await axios.delete(`/orders/${orderIdToEdit}/items/${existingItemId}`);
+          }
+        }
+
+        for (const item of desiredItems) {
+          if (!item.product_id) continue;
+
+          if (item.id) {
+            await axios.put(`/orders/${orderIdToEdit}/items/${item.id}`, {
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              discount_amount: item.discount_amount || 0,
+            });
+          } else {
+            const itemPayload: any = {
+              order_id: orderIdToEdit,
+              store_id: parseInt(String(orderData.store_id), 10),
+              product_id: item.product_id,
+              ...(item.product_name ? { product_name: item.product_name } : {}),
+              batch_id: item.batch_id ?? null,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              discount_amount: item.discount_amount || 0,
+            };
+
+            await axios.post(`/orders/${orderIdToEdit}/items`, {
+              ...itemPayload,
+              items: [itemPayload],
+            });
+          }
+        }
+
+        const refreshedOrderResponse = await axios.get(`/orders/${orderIdToEdit}`);
+        activeOrder = refreshedOrderResponse.data?.data ?? refreshedOrderResponse.data;
+      } else {
+        // 1) Create order (sanitize payload)
+        const orderPayload: any = {
+          order_type: orderData.order_type || 'social_commerce',
+          store_id: parseInt(String(orderData.store_id), 10),
+          store_assignment_mode: 'assign_now',
+          customer: {
+            name: orderData.customer?.name,
+            email: orderData.customer?.email || undefined,
+            phone: orderData.customer?.phone,
+          },
+          shipping_address: shippingAddressPayload,
+          delivery_address: shippingAddressPayload,
+          items: (orderData.items || []).map((item: any) => ({
+            product_id: item.product_id,
+            batch_id: item.batch_id ?? null,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            discount_amount: item.discount_amount || 0,
+            // VAT is inclusive; do not add extra tax
+            tax_amount: 0,
+          })),
+          ...(Array.isArray(orderData.services) && orderData.services.length > 0
+            ? { services: orderData.services }
+            : {}),
+          discount_amount: orderDiscount,
+          shipping_amount: transport,
+          ...(paymentOption === 'installment'
+            ? {
+                installment_plan: {
+                  total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
+                  installment_amount: suggestedInstallmentAmount,
+                  start_date: undefined,
+                },
+              }
+            : {}),
+          ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
+        };
+
+        console.log('📦 Creating order:', orderPayload);
+        const createOrderResponse = await axios.post('/orders', orderPayload);
+        const createBody: any = createOrderResponse.data;
+        if (createBody?.success === false) {
+          throw new Error(createBody?.message || 'Failed to create order');
+        }
+        activeOrder = createBody?.data ?? createBody;
+        if (!activeOrder?.id) {
+          throw new Error('Order was not created (missing order id)');
+        }
+        console.log('✅ Order created:', activeOrder.order_number);
       }
-      const createdOrder = createBody?.data ?? createBody;
-      if (!createdOrder?.id) {
-        throw new Error('Order was not created (missing order id)');
+
+      if (!activeOrder?.id) {
+        throw new Error('Order save failed');
       }
-      console.log('✅ Order created:', createdOrder.order_number);
 
       // 2) Set intended courier marker (optional)
       if (intendedCourier && intendedCourier.trim()) {
         try {
-          await axios.patch(`/orders/${createdOrder.id}/set-courier`, {
+          await axios.patch(`/orders/${activeOrder.id}/set-courier`, {
             intended_courier: intendedCourier.trim(),
           });
         } catch (e) {
           console.warn('Failed to set intended courier marker:', e);
-          // Don't fail order placement if marker update fails
-          displayToast('Order placed, but failed to set order marker.', 'warning');
+          displayToast(isEditMode ? 'Order updated, but failed to set order marker.' : 'Order placed, but failed to set order marker.', 'warning');
         }
       }
 
@@ -332,9 +461,9 @@ export default function AmountDetailsPage() {
         for (const defectItem of defectiveItems) {
           try {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
-              order_id: createdOrder.id,
+              order_id: activeOrder.id,
               selling_price: defectItem.price,
-              sale_notes: `Sold via Social Commerce - Order #${createdOrder.order_number}`,
+              sale_notes: `Sold via Social Commerce - Order #${activeOrder.order_number}`,
               sold_at: new Date().toISOString(),
             });
           } catch (e) {
@@ -381,7 +510,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const paymentResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, paymentData);
+        const paymentResponse = await axios.post(`/orders/${activeOrder.id}/payments/simple`, paymentData);
         if (!paymentResponse.data?.success) {
           throw new Error(paymentResponse.data?.message || 'Failed to process payment');
         }
@@ -428,7 +557,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const advanceResponse = await axios.post(`/orders/${createdOrder.id}/payments/simple`, advancePaymentData);
+        const advanceResponse = await axios.post(`/orders/${activeOrder.id}/payments/simple`, advancePaymentData);
         if (!advanceResponse.data?.success) {
           throw new Error(advanceResponse.data?.message || 'Failed to process advance payment');
         }
@@ -475,7 +604,7 @@ export default function AmountDetailsPage() {
           };
         }
 
-        const instResponse = await axios.post(`/orders/${createdOrder.id}/payments/installment`, firstPayment);
+        const instResponse = await axios.post(`/orders/${activeOrder.id}/payments/installment`, firstPayment);
         if (!instResponse.data?.success) {
           throw new Error(instResponse.data?.message || 'Failed to process installment payment');
         }
@@ -485,12 +614,12 @@ export default function AmountDetailsPage() {
 
       const msg =
         paymentOption === 'full'
-          ? `Order ${createdOrder.order_number} placed with full payment.`
+          ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'} with full payment.`
           : paymentOption === 'partial'
-            ? `Order ${createdOrder.order_number} placed. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
+            ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'}. Advance ৳${advance.toFixed(2)}, COD ৳${codAmount.toFixed(2)}.`
             : paymentOption === 'installment'
-              ? `Order ${createdOrder.order_number} placed on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
-              : `Order ${createdOrder.order_number} placed. Cash on delivery ৳${codAmount.toFixed(2)}.`;
+              ? `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'} on EMI. ${installmentCount} installments × ৳${suggestedInstallmentAmount.toFixed(2)} suggested (1st paid ৳${advance.toFixed(2)}).`
+              : `Order ${activeOrder.order_number} ${isEditMode ? 'updated' : 'placed'}. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
@@ -500,7 +629,7 @@ export default function AmountDetailsPage() {
         window.location.href = '/orders';
       }, 2000);
     } catch (error: any) {
-      console.error('❌ Order placement failed:', error);
+      console.error('❌ Order save failed:', error);
       const errMsg = error.response?.data?.message || error.message || 'Error placing order. Please try again.';
       displayToast(errMsg, 'error');
     } finally {

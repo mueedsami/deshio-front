@@ -72,6 +72,7 @@ export default function SocialCommercePage() {
   // Edit-order mode (navigated from orders page for social commerce orders)
   const [editOrderId, setEditOrderId] = useState<number | null>(null);
   const [editOrderNumber, setEditOrderNumber] = useState<string | null>(null);
+  const [editOrderDiscountAmount, setEditOrderDiscountAmount] = useState<number>(0);
 
   // Multi-product staging: collect several products before adding them all to cart at once
   interface StagingItem {
@@ -698,123 +699,6 @@ export default function SocialCommercePage() {
     return Math.max(0, baseAmount - totalDiscount);
   };
 
-  const getProductUnitPrice = (product: any) => {
-    return Number(String(product?.attributes?.Price ?? product?.minPrice ?? '0').replace(/[^0-9.-]/g, '')) || 0;
-  };
-
-  const normalizeQtyForProduct = (product: any, rawQty: any) => {
-    const parsedQty = Math.max(1, Math.floor(Number(rawQty) || 1));
-    if (product?.isDefective) return parsedQty;
-    const available = Math.max(0, Number(product?.available ?? 0) || 0);
-    if (available <= 0) return 1;
-    return Math.min(parsedQty, available);
-  };
-
-  const buildStagingItem = (product: any, overrides: Partial<StagingItem> = {}): StagingItem => {
-    const quantity = normalizeQtyForProduct(product, overrides.quantity ?? 1);
-    const discountPercent = String(overrides.discountPercent ?? '');
-    const discountTk = String(overrides.discountTk ?? '');
-    const parsedAmount = Number(String(overrides.amount ?? '').replace(/[^0-9.-]/g, ''));
-    const computedAmount = Number.isFinite(parsedAmount)
-      ? Math.max(0, parsedAmount)
-      : calculateAmount(getProductUnitPrice(product), quantity, parseFloat(discountPercent) || 0, parseFloat(discountTk) || 0);
-
-    return {
-      id: String(overrides.id ?? `stg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
-      product,
-      quantity,
-      discountPercent,
-      discountTk,
-      amount: computedAmount.toFixed(2),
-    };
-  };
-
-  const updateStagingItem = (
-    id: string,
-    changes: Partial<StagingItem>,
-    mode: 'formula' | 'finalAmount' = 'formula'
-  ) => {
-    setStagingQueue((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-
-        const quantity = normalizeQtyForProduct(item.product, changes.quantity ?? item.quantity);
-        const nextDiscountPercent = changes.discountPercent !== undefined ? String(changes.discountPercent) : item.discountPercent;
-        const nextDiscountTk = changes.discountTk !== undefined ? String(changes.discountTk) : item.discountTk;
-        const baseAmount = getProductUnitPrice(item.product) * quantity;
-
-        if (mode === 'finalAmount') {
-          const rawAmount = Number(String(changes.amount ?? item.amount).replace(/[^0-9.-]/g, ''));
-          const finalAmount = Number.isFinite(rawAmount) ? Math.min(baseAmount, Math.max(0, rawAmount)) : baseAmount;
-          const discountValue = Math.max(0, baseAmount - finalAmount);
-
-          return {
-            ...item,
-            quantity,
-            discountPercent: '',
-            discountTk: discountValue ? discountValue.toFixed(2) : '0',
-            amount: finalAmount.toFixed(2),
-          };
-        }
-
-        const finalAmount = calculateAmount(
-          getProductUnitPrice(item.product),
-          quantity,
-          parseFloat(nextDiscountPercent) || 0,
-          parseFloat(nextDiscountTk) || 0
-        );
-
-        return {
-          ...item,
-          quantity,
-          discountPercent: nextDiscountPercent,
-          discountTk: nextDiscountTk,
-          amount: finalAmount.toFixed(2),
-        };
-      })
-    );
-  };
-
-  const handleAutoStageProduct = (product: any) => {
-    if (!product) return;
-    if (!product?.isDefective && Number(product?.available ?? 0) <= 0) return;
-
-    setStagingQueue((prev) => {
-      const existingIndex = prev.findIndex(
-        (item) => Number(item.product?.id) === Number(product.id) && !item.product?.isDefective && !product?.isDefective
-      );
-
-      if (existingIndex >= 0) {
-        const existing = prev[existingIndex];
-        const nextQty = normalizeQtyForProduct(product, existing.quantity + 1);
-        if (nextQty === existing.quantity) return prev;
-
-        const updated: StagingItem = {
-          ...existing,
-          quantity: nextQty,
-          amount: calculateAmount(
-            getProductUnitPrice(product),
-            nextQty,
-            parseFloat(existing.discountPercent) || 0,
-            parseFloat(existing.discountTk) || 0
-          ).toFixed(2),
-        };
-
-        const copy = [...prev];
-        copy[existingIndex] = updated;
-        return copy;
-      }
-
-      return [...prev, buildStagingItem(product, { quantity: 1 })];
-    });
-
-    setSelectedProduct(null);
-    setQuantity('');
-    setDiscountPercent('');
-    setDiscountTk('');
-    setAmount('0.00');
-  };
-
   // ✅ Auto-fill Pathao/international delivery fields from previous order
   const prefillDeliveryFromOrder = async (orderId: number) => {
     if (!orderId || orderId === lastPrefilledOrderId) return;
@@ -968,6 +852,7 @@ export default function SocialCommercePage() {
         if (ep && typeof ep === 'object') {
           if (typeof ep.editOrderId === 'number') setEditOrderId(ep.editOrderId);
           if (typeof ep.editOrderNumber === 'string') setEditOrderNumber(ep.editOrderNumber);
+          if (ep.orderDiscountAmount !== undefined) setEditOrderDiscountAmount(Number(ep.orderDiscountAmount) || 0);
           if (typeof ep.userName === 'string') setUserName(ep.userName);
           if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
@@ -1461,7 +1346,15 @@ export default function SocialCommercePage() {
   }, [selectedProduct, quantity, discountPercent, discountTk]);
 
   const handleProductSelect = (product: any) => {
-    handleAutoStageProduct(product);
+    setSelectedProduct(product);
+    setSearchQuery('');
+    setMinPrice('');
+    setMaxPrice('');
+    setExactPrice('');
+    setSearchResults([]);
+    setQuantity('1');
+    setDiscountPercent('');
+    setDiscountTk('');
   };
 
   const handleFinalAmountChange = (rawValue: string) => {
@@ -1641,14 +1534,6 @@ export default function SocialCommercePage() {
     setCart([...cart, newItem]);
   };
 
-  const stagedQtyByProductId = stagingQueue.reduce<Record<number, number>>((acc, item) => {
-    const productId = Number(item.product?.id ?? 0);
-    if (productId > 0) {
-      acc[productId] = (acc[productId] || 0) + (Number(item.quantity) || 0);
-    }
-    return acc;
-  }, {});
-
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
 
   const handleConfirmOrder = async () => {
@@ -1806,7 +1691,9 @@ export default function SocialCommercePage() {
         items: cart
           .filter((item) => !item.isService)
           .map((item) => ({
+            ...(item.id !== undefined && item.id !== null ? { id: item.id } : {}),
             product_id: item.product_id,
+            product_name: item.productName,
             ...(item.batch_id ? { batch_id: item.batch_id } : {}),
             quantity: item.quantity,
             unit_price: item.unit_price,
@@ -1816,6 +1703,7 @@ export default function SocialCommercePage() {
         services: cart
           .filter((item) => item.isService)
           .map((item) => ({
+            ...(item.id !== undefined && item.id !== null ? { id: item.id } : {}),
             service_id: item.serviceId,
             service_name: item.productName,
             quantity: item.quantity,
@@ -1835,6 +1723,9 @@ export default function SocialCommercePage() {
         'pendingOrder',
         JSON.stringify({
           ...orderData,
+          editOrderId,
+          editOrderNumber,
+          orderDiscountAmount: editOrderDiscountAmount,
           salesBy,
           date,
           isInternational,
@@ -2433,7 +2324,7 @@ export default function SocialCommercePage() {
 
                     <div className="mb-4 flex items-center justify-between gap-2 rounded border border-dashed border-gray-300 dark:border-gray-600 p-2">
                       <p className="text-xs text-gray-600 dark:text-gray-300">
-                        Click a product card to stage it instantly, or open Product List for bigger browsing.
+                        Need easier browsing? Open Product List and queue multiple items.
                       </p>
                       <button
                         type="button"
@@ -2518,22 +2409,15 @@ export default function SocialCommercePage() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex justify-between items-center text-xs gap-2">
+                                <div className="flex justify-between items-center text-xs">
                                   <span className={`font-medium ${product.available > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>
                                     {product.available > 0 ? `Stock: ${product.available}` : 'Out of Stock'}
                                   </span>
-                                  <div className="flex items-center gap-1.5">
-                                    {stagedQtyByProductId[Number(product.id)] > 0 && (
-                                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-                                        Staged: {stagedQtyByProductId[Number(product.id)]}
-                                      </span>
-                                    )}
-                                    {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
-                                      <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
-                                        Exp: {product.daysUntilExpiry}d
-                                      </span>
-                                    )}
-                                  </div>
+                                  {product.daysUntilExpiry !== null && product.daysUntilExpiry < 30 && (
+                                    <span className="text-[10px] text-orange-600 dark:text-orange-400 font-medium">
+                                      Exp: {product.daysUntilExpiry}d
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             </div>
@@ -2542,10 +2426,120 @@ export default function SocialCommercePage() {
                       </div>
                     )}
 
-                    <div className="mt-4 rounded-lg border border-indigo-100 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-900/15 px-3 py-2">
-                      <p className="text-xs text-indigo-700 dark:text-indigo-300">
-                        Instant stage mode is on. Click any product card to add it to the staged list, then edit quantity, discount, or final amount there before adding everything to cart.
-                      </p>
+                    {selectedProduct && (
+                      <div
+                        className={`mt-4 p-3 border rounded mb-4 ${
+                          selectedProduct.isDefective
+                            ? 'bg-orange-50 dark:bg-orange-900/20 border-orange-300 dark:border-orange-700'
+                            : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium text-gray-900 dark:text-white">Selected Product</span>
+                          <button
+                            onClick={() => {
+                              setSelectedProduct(null);
+                              setQuantity('');
+                              setDiscountPercent('');
+                              setDiscountTk('');
+                              setAmount('0.00');
+                            }}
+                            className="text-red-600 hover:text-red-700"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">{selectedProduct.name}</p>
+                        {Number((selectedProduct as any)?.batchesCount ?? 0) > 1 && (
+                          <p className="text-sm text-blue-600 dark:text-blue-400">
+                            Batches: {(selectedProduct as any)?.batchesCount}
+                          </p>
+                        )}
+                        <p className="text-sm text-gray-600 dark:text-gray-400">
+                          Price: {formatPriceRangeLabel(selectedProduct)}
+                        </p>
+                        <p className="text-sm text-green-600 dark:text-green-400">
+                          Available: {selectedProduct.available}
+                        </p>
+                      </div>
+                    )}
+
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Quantity</label>
+                        <input
+                          type="number"
+                          placeholder="0"
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                          disabled={!selectedProduct || selectedProduct?.isDefective}
+                          min="1"
+                          max={selectedProduct?.available || 1}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Discount %</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={discountPercent}
+                            onChange={(e) => {
+                              setDiscountPercent(e.target.value);
+                              setDiscountTk('');
+                            }}
+                            disabled={!selectedProduct || selectedProduct?.isDefective}
+                            className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Discount Tk</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={discountTk}
+                            onChange={(e) => {
+                              setDiscountTk(e.target.value);
+                              setDiscountPercent('');
+                            }}
+                            disabled={!selectedProduct || selectedProduct?.isDefective}
+                            className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Sell At / Final Amount</label>
+                          <input
+                            type="number"
+                            placeholder="0"
+                            value={amount}
+                            onChange={(e) => handleFinalAmountChange(e.target.value)}
+                            disabled={!selectedProduct}
+                            min="0"
+                            step="0.01"
+                            className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button
+                          onClick={addToStaging}
+                          disabled={!selectedProduct}
+                          className="flex-1 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="Stage this product, then search for the next one"
+                        >
+                          + Stage
+                        </button>
+                        <button
+                          onClick={addToCart}
+                          disabled={!selectedProduct}
+                          className="flex-1 px-4 py-2.5 bg-black hover:bg-gray-800 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          Add to Cart
+                        </button>
+                      </div>
                     </div>
 
                     {/* Staging Queue */}
@@ -2553,7 +2547,7 @@ export default function SocialCommercePage() {
                       <div className="mt-4 border border-indigo-200 dark:border-indigo-700 rounded-lg overflow-hidden">
                         <div className="flex items-center justify-between px-3 py-2 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-700">
                           <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300">
-                            Staged ({stagingQueue.length}) — keep selecting products, then add all to cart once
+                            Staged ({stagingQueue.length}) — search more products or add all to cart
                           </span>
                           <button
                             onClick={addAllStagedToCart}
@@ -2562,76 +2556,26 @@ export default function SocialCommercePage() {
                             Add All to Cart →
                           </button>
                         </div>
-                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-[28rem] overflow-y-auto">
-                          {stagingQueue.map((s) => {
-                            const unitPrice = getProductUnitPrice(s.product);
-                            const available = Number(s.product?.available ?? 0) || 0;
-
-                            return (
-                              <div key={s.id} className="px-3 py-3 bg-white dark:bg-gray-800">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0 flex-1">
-                                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
-                                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
-                                      Price: ৳{unitPrice.toFixed(2)} · Available: {available}
-                                    </p>
-                                  </div>
-                                  <button
-                                    onClick={() => removeStagingItem(s.id)}
-                                    className="text-red-500 hover:text-red-700 flex-shrink-0"
-                                    title="Remove"
-                                  >
-                                    <X size={14} />
-                                  </button>
-                                </div>
-
-                                <div className="mt-3 grid grid-cols-2 xl:grid-cols-4 gap-2">
-                                  <div>
-                                    <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Quantity</label>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      max={available || 1}
-                                      value={s.quantity}
-                                      onChange={(e) => updateStagingItem(s.id, { quantity: Number(e.target.value) || 1 })}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Discount %</label>
-                                    <input
-                                      type="number"
-                                      placeholder="0"
-                                      value={s.discountPercent}
-                                      onChange={(e) => updateStagingItem(s.id, { discountPercent: e.target.value, discountTk: '' })}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Discount Tk</label>
-                                    <input
-                                      type="number"
-                                      placeholder="0"
-                                      value={s.discountTk}
-                                      onChange={(e) => updateStagingItem(s.id, { discountTk: e.target.value, discountPercent: '' })}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                    />
-                                  </div>
-                                  <div>
-                                    <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Sell At / Final Amount</label>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
-                                      value={s.amount}
-                                      onChange={(e) => updateStagingItem(s.id, { amount: e.target.value }, 'finalAmount')}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                    />
-                                  </div>
-                                </div>
+                        <div className="divide-y divide-indigo-100 dark:divide-indigo-800 max-h-48 overflow-y-auto">
+                          {stagingQueue.map((s) => (
+                            <div key={s.id} className="flex items-center justify-between gap-2 px-3 py-2 bg-white dark:bg-gray-800">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium text-gray-900 dark:text-white truncate">{s.product.name}</p>
+                                <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                                  Qty: {s.quantity} · ৳{s.amount}
+                                  {s.discountPercent ? ` · ${s.discountPercent}% off` : ''}
+                                  {s.discountTk ? ` · ৳${s.discountTk} off` : ''}
+                                </p>
                               </div>
-                            );
-                          })}
+                              <button
+                                onClick={() => removeStagingItem(s.id)}
+                                className="text-red-500 hover:text-red-700 flex-shrink-0"
+                                title="Remove"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     )}
