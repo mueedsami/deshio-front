@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ReactNode } from 'react';
 import { Search, X, Globe, AlertCircle, Eye, FileText } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -288,7 +288,7 @@ export default function SocialCommercePage() {
   };
 
   const getBaseUrl = () => {
-    const api = process.env.NEXT_PUBLIC_API_URL || '';
+    const api = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_API_URL || '' : '';
     return api ? api.replace(/\/api\/?$/, '') : '';
   };
 
@@ -1995,7 +1995,7 @@ export default function SocialCommercePage() {
                                   customerId={existingCustomer.id}
                                   initialTags={Array.isArray(existingCustomer.tags) ? existingCustomer.tags : []}
                                   compact
-                                  onTagsChange={(next) =>
+                                  onTagsChange={(next: any) =>
                                     setExistingCustomer((prev: any) => (prev ? { ...prev, tags: next } : prev))
                                   }
                                 />
@@ -2042,7 +2042,7 @@ export default function SocialCommercePage() {
                                             <div className="text-[11px] text-gray-700 dark:text-gray-200">
                                               {Array.isArray(o.items) && o.items.length > 0 ? (
                                                 <div className="space-y-0.5">
-                                                  {o.items.slice(0, 6).map((it, i) => {
+                                                  {o.items.slice(0, 6).map((it: any, i: number) => {
                                                     const name = it.product_name || 'Unnamed product';
                                                     const src = getRecentItemThumbSrc(it);
                                                     return (
