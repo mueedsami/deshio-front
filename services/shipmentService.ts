@@ -64,8 +64,10 @@ export interface ShipmentStatistics {
 }
 
 export interface BulkSendImmediateFailure {
-  shipment_id: number;
-  shipment_number: string;
+  shipment_id?: number | null;
+  shipment_number?: string | null;
+  order_id?: number | null;
+  order_number?: string | null;
   reason: string;
 }
 
@@ -186,6 +188,38 @@ class ShipmentService {
     } catch (error: any) {
       console.error('Start bulk send to Pathao error:', error);
       throw new Error(error.response?.data?.message || 'Failed to bulk send to Pathao');
+    }
+  }
+
+  async startBulkSendOrdersToPathao(
+    orderIds: number[],
+    options?: {
+      delivery_type?: 'home_delivery' | 'express';
+      package_weight?: number;
+      special_instructions?: string;
+    }
+  ): Promise<BulkSendQueuedResult> {
+    try {
+      const response = await axiosInstance.post('/shipments/bulk-send-orders-to-pathao', {
+        order_ids: orderIds,
+        delivery_type: options?.delivery_type ?? 'home_delivery',
+        package_weight: options?.package_weight ?? 1.0,
+        ...(options?.special_instructions ? { special_instructions: options.special_instructions } : {}),
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        const failures = result.data?.immediate_failures;
+        const failureText = Array.isArray(failures) && failures.length > 0
+          ? `: ${failures.map((f: any) => f.reason).join(', ')}`
+          : '';
+        throw new Error((result.message || 'Failed to bulk send orders to Pathao') + failureText);
+      }
+
+      return result.data;
+    } catch (error: any) {
+      console.error('Start bulk order send to Pathao error:', error);
+      throw new Error(error.response?.data?.message || error.message || 'Failed to bulk send orders to Pathao');
     }
   }
 
