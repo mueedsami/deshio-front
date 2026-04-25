@@ -609,7 +609,6 @@ export default function AmountDetailsPage() {
 
       // paymentOption === 'none' => no payment now
 
-      const isEditMode = !!orderData?.editOrderId;
       const actionWord = isEditMode ? 'updated' : 'placed';
       const msg =
         paymentOption === 'full'
