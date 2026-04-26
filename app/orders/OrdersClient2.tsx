@@ -1073,29 +1073,6 @@ const derivePaymentStatus = (order: any) => {
 
   const normalizeCourier = (v: any) => normalize(v).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-  // Restored from the pre-Pathao version: the menu and invoice button depend on this.
-  // Keep it broad so it works with transformed orders and raw backend orders.
-  const isSocialOrder = (order?: Partial<Order> | any | null) => {
-    const type = normalize(order?.orderType ?? order?.order_type).replace(/[\s-]+/g, '_');
-    const label = normalize(order?.orderTypeLabel ?? order?.order_type_label);
-    return type === 'social_commerce' || type === 'social' || label.includes('social');
-  };
-
-  const handleOpenMenu = (e: React.MouseEvent<HTMLButtonElement>, orderId: number) => {
-    e.stopPropagation();
-
-    if (activeMenu === orderId) {
-      setActiveMenu(null);
-      setMenuPosition(null);
-      return;
-    }
-
-    const rect = e.currentTarget.getBoundingClientRect();
-    const { top, left } = computeMenuPosition(rect, 224, 360, 4, 8);
-    setMenuPosition({ top, left });
-    setActiveMenu(orderId);
-  };
-
   // Only these values are allowed as order markers in UI
   const getAllowedCourierValue = (raw: any): string => {
     const n = normalizeCourier(raw);
@@ -2683,12 +2660,6 @@ const derivePaymentStatus = (order: any) => {
         status = await checkQZStatus();
       } catch {}
 
-      if (status.connected && !selectedPrinter) {
-        setShowPrinterSelect(true);
-        alert('Please select a printer first.');
-        return;
-      }
-
       if (!status.connected) {
         alert('QZ Tray is offline. Opening invoice preview (Print → Save as PDF).');
       }
@@ -3821,7 +3792,13 @@ const derivePaymentStatus = (order: any) => {
                             </button>
 
                             <button
-                              onClick={(e) => handleOpenMenu(e, order.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const { top, left } = computeMenuPosition(rect, 224, 360, 4, 8);
+                                setMenuPosition({ top, left });
+                                setActiveMenu(activeMenu === order.id ? null : order.id);
+                              }}
                               className="flex items-center justify-center w-10 h-10 rounded-lg border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800"
                               title="More Actions"
                             >
@@ -3997,7 +3974,14 @@ const derivePaymentStatus = (order: any) => {
                               </button>
 
                               <button
-                                onClick={(e) => handleOpenMenu(e, order.id)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const { top, left } = computeMenuPosition(rect, 224, 360, 4, 8);
+
+                                  setMenuPosition({ top, left });
+                                  setActiveMenu(activeMenu === order.id ? null : order.id);
+                                }}
                                 className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
                                 title="More Actions"
                               >
@@ -4202,7 +4186,6 @@ const derivePaymentStatus = (order: any) => {
         <div
           className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-2xl w-56 z-[60]"
           style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
-          onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={(e) => {
