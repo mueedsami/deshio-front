@@ -2239,6 +2239,61 @@ const derivePaymentStatus = (order: any) => {
       })();
     };
 
+
+    const startPathaoQueueFrontendRunner = (batchCode?: string) => {
+      const startedAt = Date.now();
+      const durationMs = 10 * 60 * 1000;
+      const intervalMs = 30 * 1000;
+      const maxRetryRequests = 3;
+      let retryRequests = 0;
+
+      const runTick = async () => {
+        let shouldContinue = false;
+
+        try {
+          const result = await shipmentService.runPathaoQueueTick({
+            max_jobs: 5,
+            max_time: 25,
+          });
+
+          console.log('Pathao queue tick result:', result);
+
+          if ((result?.pending_after ?? 0) > 0) {
+            shouldContinue = true;
+          } else if (batchCode && retryRequests < maxRetryRequests) {
+            const retryResult = await shipmentService.retryFailedPathaoBatch(batchCode, {
+              max_retries: 3,
+              wave_size: 5,
+            });
+
+            console.log('Pathao failed shipment retry result:', retryResult);
+
+            if ((retryResult?.queued_count ?? 0) > 0) {
+              retryRequests += 1;
+              shouldContinue = true;
+
+              setPathaoProgress((prev) => ({
+                ...prev,
+                batchStatus: 'processing',
+              }));
+            } else {
+              console.log('Pathao queue cleared and no retryable failed shipments remain. Frontend runner stopped.');
+            }
+          } else {
+            console.log('Pathao queue cleared. Frontend runner stopped.');
+          }
+        } catch (error) {
+          console.error('Pathao queue frontend runner failed:', error);
+          shouldContinue = true;
+        }
+
+        if (shouldContinue && Date.now() - startedAt < durationMs) {
+          setTimeout(runTick, intervalMs);
+        }
+      };
+
+      void runTick();
+    };
     const pollPathaoBatch = async (
       batchCode: string,
       initialFailedCount: number,
@@ -2359,6 +2414,7 @@ const derivePaymentStatus = (order: any) => {
         `Pathao batch queued successfully.\n\nBatch: ${batchCode}\nQueued: ${started.queued_count}\nImmediate Failed: ${failedCount}\n\nYou can continue working while it processes.`
       );
 
+      startPathaoQueueFrontendRunner(batchCode);
       void pollPathaoBatch(batchCode, failedCount, detailsBuffer);
     } catch (error: any) {
       console.error('Bulk send to Pathao error:', error);
