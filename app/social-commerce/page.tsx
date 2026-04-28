@@ -280,9 +280,56 @@ export default function SocialCommercePage() {
     return d.toLocaleString();
   };
 
-  const formatBDT = (v?: any) => {
+  const parseCurrencyNumber = (v?: any) => {
     const n = Number(String(v ?? '0').replace(/[^0-9.-]/g, ''));
-    const amt = Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const normalizeCartProductForState = (item: any): CartProduct | null => {
+    if (!item || typeof item !== 'object') return null;
+
+    const quantity = Math.max(1, Math.floor(parseCurrencyNumber(item.quantity ?? item.qty ?? 1) || 1));
+    const discountAmount = parseCurrencyNumber(item.discount_amount ?? item.discount ?? item.discountAmount ?? 0);
+    const apiLineTotal = parseCurrencyNumber(item.total_amount ?? item.total ?? item.line_total ?? item.amount ?? 0);
+
+    let unitPrice = parseCurrencyNumber(
+      item.unit_price ??
+        item.unitPrice ??
+        item.price ??
+        item.sell_price ??
+        item.selling_price ??
+        item.product?.sell_price ??
+        item.product?.selling_price ??
+        item.product?.price ??
+        0
+    );
+
+    // Recover legacy/preloaded edit carts where price became 0 but total exists.
+    if (unitPrice <= 0 && apiLineTotal > 0 && quantity > 0) {
+      unitPrice = (apiLineTotal + discountAmount) / quantity;
+    }
+
+    const amount = apiLineTotal > 0 ? apiLineTotal : Math.max(0, unitPrice * quantity - discountAmount);
+
+    return {
+      id: item.id ?? item.order_item_id ?? item.orderItemId ?? `${item.product_id ?? item.productId ?? item.product?.id ?? 'item'}-${Date.now()}`,
+      product_id: Number(item.product_id ?? item.productId ?? item.product?.id ?? 0) || 0,
+      batch_id: item.batch_id ?? item.product_batch_id ?? item.productBatchId ?? null,
+      productName: item.productName ?? item.product_name ?? item.name ?? item.product?.name ?? 'Unnamed product',
+      quantity,
+      unit_price: unitPrice,
+      discount_amount: discountAmount,
+      amount,
+      isDefective: Boolean(item.isDefective),
+      defectId: item.defectId,
+      isService: Boolean(item.isService),
+      serviceId: item.serviceId,
+      serviceCategory: item.serviceCategory,
+    };
+  };
+
+  const formatBDT = (v?: any) => {
+    const amt = parseCurrencyNumber(v);
     try {
       return new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amt);
     } catch {
@@ -702,7 +749,7 @@ export default function SocialCommercePage() {
   };
 
   const getProductUnitPrice = (product: any) => {
-    return Number(String(product?.attributes?.Price ?? product?.minPrice ?? '0').replace(/[^0-9.-]/g, '')) || 0;
+    return parseCurrencyNumber(product?.attributes?.Price ?? product?.minPrice ?? product?.price ?? product?.sell_price ?? 0);
   };
 
   const normalizeQtyForProduct = (product: any, rawQty: any) => {
@@ -997,7 +1044,7 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalCity === 'string') setInternationalCity(ep.internationalCity);
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
-          if (Array.isArray(ep.cart)) setCart(ep.cart);
+          if (Array.isArray(ep.cart)) setCart(ep.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
         }
         draftHydratedRef.current = true;
         return;
@@ -1044,7 +1091,7 @@ export default function SocialCommercePage() {
         if (typeof d.minPrice === 'string') setMinPrice(d.minPrice);
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
         if (typeof d.exactPrice === 'string') setExactPrice(d.exactPrice);
-        if (Array.isArray(d.cart)) setCart(d.cart);
+        if (Array.isArray(d.cart)) setCart(d.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
       }
     } catch (e) {
       console.warn('Failed to restore social commerce draft', e);

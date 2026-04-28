@@ -1745,18 +1745,52 @@ const derivePaymentStatus = (order: any) => {
 
         const cartItems = (fo.items ?? [])
           .filter((it: any) => !looksLikeService(it))
-          .map((it: any) => ({
-            id: it.id,
-            product_id: it.product_id,
-            batch_id: it.batch_id ?? null,
-            productName: it.product_name ?? '',
-            quantity: Number(it.quantity) || 1,
-            unit_price: Number(it.unit_price) || 0,
-            discount_amount: Number(it.discount_amount) || 0,
-            amount:
-              (Number(it.unit_price) || 0) * (Number(it.quantity) || 1) -
-              (Number(it.discount_amount) || 0),
-          }));
+          .map((it: any) => {
+            const quantity = Math.max(1, Math.floor(parseMoney(it.quantity ?? it.qty ?? 1) || 1));
+            const discountAmount = parseMoney(it.discount_amount ?? it.discount ?? it.discountAmount ?? 0);
+            const apiLineTotal = parseMoney(
+              it.total_amount ??
+                it.total ??
+                it.line_total ??
+                it.amount ??
+                it.subtotal ??
+                0
+            );
+
+            // Laravel detail API can return formatted strings like "1,600.00".
+            // Number("1,600.00") becomes NaN, so always use parseMoney here.
+            let unitPrice = parseMoney(
+              it.unit_price ??
+                it.unitPrice ??
+                it.price ??
+                it.sell_price ??
+                it.selling_price ??
+                it.batch?.sell_price ??
+                it.product?.sell_price ??
+                it.product?.selling_price ??
+                it.product?.price ??
+                0
+            );
+
+            // If a legacy response still misses unit_price but has line total + discount, infer it.
+            if (unitPrice <= 0 && apiLineTotal > 0 && quantity > 0) {
+              unitPrice = (apiLineTotal + discountAmount) / quantity;
+            }
+
+            const calculatedAmount = Math.max(0, unitPrice * quantity - discountAmount);
+            const amount = apiLineTotal > 0 ? apiLineTotal : calculatedAmount;
+
+            return {
+              id: it.id ?? it.order_item_id ?? `${it.product_id ?? it.product?.id ?? 'item'}-${Date.now()}`,
+              product_id: Number(it.product_id ?? it.productId ?? it.product?.id ?? 0) || 0,
+              batch_id: it.batch_id ?? it.product_batch_id ?? it.productBatchId ?? null,
+              productName: it.product_name ?? it.productName ?? it.product?.name ?? it.name ?? '',
+              quantity,
+              unit_price: unitPrice,
+              discount_amount: discountAmount,
+              amount,
+            };
+          });
 
         const prefill = {
           editOrderId: order.id,
@@ -1766,7 +1800,7 @@ const derivePaymentStatus = (order: any) => {
           userEmail: fo.customer_email ?? fo.customer?.email ?? '',
           socialId: fo.social_id ?? '',
           orderNotes: fo.notes ?? fo.customer_notes ?? '',
-          orderDiscountAmount: Number(fo.discount_amount) || 0,
+          orderDiscountAmount: parseMoney(fo.discount_amount),
           isInternational: isIntl,
           usePathaoAutoLocation: !sa.pathao_city_id,
           pathaoCityId: sa.pathao_city_id ? String(sa.pathao_city_id) : '',
