@@ -911,8 +911,6 @@ const derivePaymentStatus = (order: any) => {
   // 🔧 Central transformer
   const transformOrder = (order: any): Order => {
     const paid = parseMoney(order.paid_amount);
-    const due = parseMoney(order.outstanding_amount);
-    const total = parseMoney(order.total_amount);
 
     const oStatusRaw = order.status ?? '';
     const pStatusRaw = derivePaymentStatus(order);
@@ -996,6 +994,40 @@ const derivePaymentStatus = (order: any) => {
             };
           })
         : servicesFromItems;
+    const lineGrossSubtotal = [...productItems, ...services].reduce(
+      (sum, item) => sum + parseMoney(item.price) * (Number(item.quantity) || 1),
+      0
+    );
+    const lineDiscountTotal = [...productItems, ...services].reduce(
+      (sum, item) => sum + parseMoney(item.discount),
+      0
+    );
+    const computedNetSubtotal = Math.max(0, lineGrossSubtotal - lineDiscountTotal);
+    const backendSubtotal = parseMoney(order.subtotal);
+    const shippingAmount = parseMoney(order.shipping_amount);
+    let wholeOrderDiscount = parseMoney(order.discount_amount);
+
+    // Guard against old/broken records where order.discount_amount was overwritten
+    // with item discount total. If subtotal is already net and the order discount
+    // exactly equals item discounts, do not double-deduct it in the frontend.
+    if (
+      lineDiscountTotal > 0 &&
+      Math.abs(wholeOrderDiscount - lineDiscountTotal) < 0.01 &&
+      Math.abs(backendSubtotal - computedNetSubtotal) < 0.01
+    ) {
+      wholeOrderDiscount = 0;
+    }
+
+    const subtotalForDisplay = computedNetSubtotal > 0 ? computedNetSubtotal : backendSubtotal;
+    const computedTotal = Math.max(0, subtotalForDisplay - wholeOrderDiscount + shippingAmount);
+    const backendTotal = parseMoney(order.total_amount);
+    const total = computedTotal > 0 ? computedTotal : backendTotal;
+    const due = Math.max(0, total - paid);
+    const protectedPaymentStatus = ['failed', 'refunded', 'cancelled'].includes(normalize(pStatusRaw));
+    const computedPaymentStatus =
+      due <= 0 && total > 0 ? 'paid' : paid > 0 ? 'partial' : 'pending';
+    const finalPaymentStatus = protectedPaymentStatus ? normalize(pStatusRaw) : computedPaymentStatus;
+
     return {
       id: order.id,
       orderNumber: order.order_number,
@@ -1011,9 +1043,9 @@ const derivePaymentStatus = (order: any) => {
       items: productItems,
       services,
 
-      subtotal: parseMoney(order.subtotal),
-      discount: parseMoney(order.discount_amount),
-      shipping: parseMoney(order.shipping_amount),
+      subtotal: subtotalForDisplay,
+      discount: wholeOrderDiscount,
+      shipping: shippingAmount,
       amounts: {
         total: total,
         paid: paid,
@@ -1023,8 +1055,8 @@ const derivePaymentStatus = (order: any) => {
       status: normalize(oStatusRaw) || 'pending',
       statusLabel: statusLabel(oStatusRaw || 'pending'),
 
-      paymentStatus: normalize(pStatusRaw) || 'pending',
-      paymentStatusLabel: statusLabel(pStatusRaw || 'pending'),
+      paymentStatus: finalPaymentStatus,
+      paymentStatusLabel: statusLabel(finalPaymentStatus),
 
       intendedCourier: order.intended_courier ?? order.intendedCourier ?? null,
 
@@ -1051,14 +1083,14 @@ const derivePaymentStatus = (order: any) => {
   };
 
   const recalcOrderTotals = (order: Order): Order => {
-    const productsSubtotal = order.items.reduce((sum, item) => sum + (item.price - item.discount) * item.quantity, 0);
-    const servicesSubtotal = (order.services || []).reduce((sum, s) => sum + (s.price - s.discount) * s.quantity, 0);
+    const productsSubtotal = order.items.reduce((sum, item) => sum + Math.max(0, item.price * item.quantity - item.discount), 0);
+    const servicesSubtotal = (order.services || []).reduce((sum, s) => sum + Math.max(0, s.price * s.quantity - s.discount), 0);
     const subtotal = productsSubtotal + servicesSubtotal;
-    const discount = order.discount ?? 0;
+    const discount = order.discount ?? 0; // whole-order discount only
     const shipping = order.shipping ?? 0;
-    const total = subtotal - discount + shipping;
+    const total = Math.max(0, subtotal - discount + shipping);
     const paid = order.amounts.paid ?? 0;
-    const due = total - paid;
+    const due = Math.max(0, total - paid);
 
     return {
       ...order,
@@ -4736,7 +4768,7 @@ const derivePaymentStatus = (order: any) => {
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <p className="text-sm font-medium text-black dark:text-white">
-                                  ৳{((item.price - item.discount) * item.quantity).toFixed(2)}
+                                  ৳{Math.max(0, item.price * item.quantity - item.discount).toFixed(2)}
                                 </p>
                               </td>
                             </tr>
@@ -4803,7 +4835,7 @@ const derivePaymentStatus = (order: any) => {
                                 </td>
                                 <td className="px-4 py-3 text-right">
                                   <p className="text-sm font-medium text-black dark:text-white">
-                                    ৳{((svc.price - svc.discount) * svc.quantity).toFixed(2)}
+                                    ৳{Math.max(0, svc.price * svc.quantity - svc.discount).toFixed(2)}
                                   </p>
                                 </td>
                               </tr>
@@ -4818,44 +4850,66 @@ const derivePaymentStatus = (order: any) => {
 
                 <div>
                   <h3 className="text-sm font-bold text-black dark:text-white mb-3">Order Summary</h3>
-                  <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-700 dark:text-gray-300">Subtotal</p>
-                      <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.subtotal.toFixed(2)}</p>
-                    </div>
-                    {selectedOrder.discount > 0 && (
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm text-gray-700 dark:text-gray-300">Discount</p>
-                        <p className="text-sm font-medium text-red-600 dark:text-red-400">
-                          -৳{selectedOrder.discount.toFixed(2)}
-                        </p>
+                  {(() => {
+                    const lineDiscountTotal = [
+                      ...(selectedOrder.items || []),
+                      ...(selectedOrder.services || []),
+                    ].reduce((sum, line) => sum + (Number(line.discount) || 0), 0);
+                    const grossSubtotal = selectedOrder.subtotal + lineDiscountTotal;
+
+                    return (
+                      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-gray-700 dark:text-gray-300">Gross Subtotal</p>
+                          <p className="text-sm font-medium text-black dark:text-white">৳{grossSubtotal.toFixed(2)}</p>
+                        </div>
+                        {lineDiscountTotal > 0 && (
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-gray-700 dark:text-gray-300">Item Discounts</p>
+                            <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                              -৳{lineDiscountTotal.toFixed(2)}
+                            </p>
+                          </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-gray-700 dark:text-gray-300">Net Subtotal</p>
+                          <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.subtotal.toFixed(2)}</p>
+                        </div>
+                        {selectedOrder.discount > 0 && (
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-gray-700 dark:text-gray-300">Order Discount</p>
+                            <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                              -৳{selectedOrder.discount.toFixed(2)}
+                            </p>
+                          </div>
+                        )}
+                        {selectedOrder.shipping > 0 && (
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-gray-700 dark:text-gray-300">Shipping</p>
+                            <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.shipping.toFixed(2)}</p>
+                          </div>
+                        )}
+                        <div className="border-t border-gray-200 dark:border-gray-700 pt-2 flex items-center justify-between">
+                          <p className="text-sm font-bold text-black dark:text-white">Total</p>
+                          <p className="text-lg font-bold text-black dark:text-white">৳{selectedOrder.amounts.total.toFixed(2)}</p>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm text-gray-700 dark:text-gray-300">Paid</p>
+                          <p className="text-sm font-medium text-green-600 dark:text-green-400">
+                            ৳{selectedOrder.amounts.paid.toFixed(2)}
+                          </p>
+                        </div>
+                        {selectedOrder.amounts.due > 0 && (
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Due</p>
+                            <p className="text-sm font-bold text-red-600 dark:text-red-400">
+                              ৳{selectedOrder.amounts.due.toFixed(2)}
+                            </p>
+                          </div>
+                        )}
                       </div>
-                    )}
-                    {selectedOrder.shipping > 0 && (
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm text-gray-700 dark:text-gray-300">Shipping</p>
-                        <p className="text-sm font-medium text-black dark:text-white">৳{selectedOrder.shipping.toFixed(2)}</p>
-                      </div>
-                    )}
-                    <div className="border-t border-gray-200 dark:border-gray-700 pt-2 flex items-center justify-between">
-                      <p className="text-sm font-bold text-black dark:text-white">Total</p>
-                      <p className="text-lg font-bold text-black dark:text-white">৳{selectedOrder.amounts.total.toFixed(2)}</p>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <p className="text-sm text-gray-700 dark:text-gray-300">Paid</p>
-                      <p className="text-sm font-medium text-green-600 dark:text-green-400">
-                        ৳{selectedOrder.amounts.paid.toFixed(2)}
-                      </p>
-                    </div>
-                    {selectedOrder.amounts.due > 0 && (
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-bold text-gray-700 dark:text-gray-300">Due</p>
-                        <p className="text-sm font-bold text-red-600 dark:text-red-400">
-                          ৳{selectedOrder.amounts.due.toFixed(2)}
-                        </p>
-                      </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {selectedOrder.notes && (

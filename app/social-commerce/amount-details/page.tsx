@@ -125,9 +125,10 @@ export default function AmountDetailsPage() {
         amount: calculateItemAmount(item),
       }));
 
-      if (!parsedOrder.subtotal || parsedOrder.subtotal === 0) {
-        parsedOrder.subtotal = parsedOrder.items.reduce((sum: number, item: any) => sum + calculateItemAmount(item), 0);
-      }
+      // Always rebuild subtotal from line totals. Product/item discounts are already
+      // deducted in calculateItemAmount(), so this is the NET item subtotal.
+      // This prevents stale/gross subtotal from making the order total wrong.
+      parsedOrder.subtotal = parsedOrder.items.reduce((sum: number, item: any) => sum + calculateItemAmount(item), 0);
     }
 
     setOrderData(parsedOrder);
@@ -163,11 +164,15 @@ export default function AmountDetailsPage() {
     return orderData.deliveryAddress || orderData.shipping_address || orderData.delivery_address || null;
   }, [orderData]);
 
-  const subtotal = useMemo(() => parseNumber(orderData?.subtotal), [orderData]);
   const itemDiscountTotal = useMemo(() => {
     return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
-  const grossSubtotal = useMemo(() => subtotal + itemDiscountTotal, [subtotal, itemDiscountTotal]);
+  const grossSubtotal = useMemo(() => {
+    return (orderData?.items || []).reduce((sum: number, it: any) => {
+      return sum + parseNumber(it?.unit_price) * (parseNumber(it?.quantity) || 1);
+    }, 0);
+  }, [orderData]);
+  const subtotal = useMemo(() => Math.max(0, grossSubtotal - itemDiscountTotal), [grossSubtotal, itemDiscountTotal]);
   const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
   const total = useMemo(() => Math.max(0, subtotal - orderDiscount + transport), [subtotal, orderDiscount, transport]);
