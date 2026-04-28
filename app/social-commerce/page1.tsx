@@ -61,6 +61,7 @@ interface PathaoArea {
 const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
+const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
 
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
@@ -193,6 +194,8 @@ export default function SocialCommercePage() {
     if (typeof window === 'undefined') return;
     try {
       const draft = {
+        ...(editOrderId ? { editOrderId } : {}),
+        ...(editOrderNumber ? { editOrderNumber } : {}),
         date,
         salesBy,
         userName,
@@ -849,8 +852,17 @@ export default function SocialCommercePage() {
         sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
         const ep = JSON.parse(editRaw);
         if (ep && typeof ep === 'object') {
-          if (typeof ep.editOrderId === 'number') setEditOrderId(ep.editOrderId);
-          if (typeof ep.editOrderNumber === 'string') setEditOrderNumber(ep.editOrderNumber);
+          const incomingEditOrderId = Number(ep.editOrderId || 0) || null;
+          const incomingEditOrderNumber = typeof ep.editOrderNumber === 'string' ? ep.editOrderNumber : null;
+          if (incomingEditOrderId) {
+            setEditOrderId(incomingEditOrderId);
+            sessionStorage.setItem(
+              SC_EDIT_CONTEXT_KEY,
+              JSON.stringify({ editOrderId: incomingEditOrderId, editOrderNumber: incomingEditOrderNumber })
+            );
+          }
+          if (incomingEditOrderNumber) setEditOrderNumber(incomingEditOrderNumber);
+          if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
           if (typeof ep.userName === 'string') setUserName(ep.userName);
           if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
@@ -881,6 +893,16 @@ export default function SocialCommercePage() {
       }
       const d = JSON.parse(raw);
       if (d && typeof d === 'object') {
+        const draftEditOrderId = Number(d.editOrderId || 0) || null;
+        const draftEditOrderNumber = typeof d.editOrderNumber === 'string' ? d.editOrderNumber : null;
+        if (draftEditOrderId) {
+          setEditOrderId(draftEditOrderId);
+          sessionStorage.setItem(
+            SC_EDIT_CONTEXT_KEY,
+            JSON.stringify({ editOrderId: draftEditOrderId, editOrderNumber: draftEditOrderNumber })
+          );
+        }
+        if (draftEditOrderNumber) setEditOrderNumber(draftEditOrderNumber);
         if (typeof d.date === 'string') setDate(d.date);
         if (typeof d.salesBy === 'string') setSalesBy(d.salesBy);
         if (typeof d.userName === 'string') setUserName(d.userName);
@@ -943,6 +965,8 @@ export default function SocialCommercePage() {
     maxPrice,
     exactPrice,
     cart,
+    editOrderId,
+    editOrderNumber,
   ]);
 
   useEffect(() => {
@@ -1578,7 +1602,7 @@ export default function SocialCommercePage() {
     }
 
     try {
-      console.log('📦 CREATING SOCIAL COMMERCE ORDER');
+      console.log(editOrderId ? '✏️ EDITING SOCIAL COMMERCE ORDER' : '📦 CREATING SOCIAL COMMERCE ORDER');
 
       const isDomesticAuto = !isInternational && usePathaoAutoLocation;
 
@@ -1656,10 +1680,22 @@ export default function SocialCommercePage() {
             return base;
           })();
 
+      let effectiveEditOrderId = editOrderId;
+      let effectiveEditOrderNumber = editOrderNumber;
+      if (!effectiveEditOrderId) {
+        try {
+          const ctx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+          effectiveEditOrderId = Number(ctx.editOrderId || 0) || null;
+          effectiveEditOrderNumber = effectiveEditOrderNumber || (typeof ctx.editOrderNumber === 'string' ? ctx.editOrderNumber : null);
+        } catch {
+          // ignore bad session data
+        }
+      }
+
       const orderData = {
         order_type: 'social_commerce',
-        ...(editOrderId ? { editOrderId } : {}),
-        ...(editOrderNumber ? { editOrderNumber } : {}),
+        ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
+        ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
         store_id: parseInt(selectedStore),
         customer: {
           name: userName,

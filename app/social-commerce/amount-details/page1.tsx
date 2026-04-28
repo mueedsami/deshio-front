@@ -8,6 +8,8 @@ import axios from '@/lib/axios';
 import defectIntegrationService from '@/services/defectIntegrationService';
 import Toast from '@/components/Toast';
 
+const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
+
 interface PaymentMethod {
   id: number;
   code: string;
@@ -91,6 +93,30 @@ export default function AmountDetailsPage() {
     }
 
     const parsedOrder = JSON.parse(storedOrder);
+
+    // Keep social-commerce edit mode sticky across page transitions/drafts.
+    // If this id is missing, the old code fell back to POST /orders and created a duplicate order.
+    try {
+      const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+      const contextEditOrderId = Number(editCtx.editOrderId || 0) || null;
+      if (!parsedOrder.editOrderId && contextEditOrderId) {
+        parsedOrder.editOrderId = contextEditOrderId;
+      }
+      if (!parsedOrder.editOrderNumber && typeof editCtx.editOrderNumber === 'string') {
+        parsedOrder.editOrderNumber = editCtx.editOrderNumber;
+      }
+      if (parsedOrder.editOrderId) {
+        sessionStorage.setItem(
+          SC_EDIT_CONTEXT_KEY,
+          JSON.stringify({
+            editOrderId: Number(parsedOrder.editOrderId),
+            editOrderNumber: parsedOrder.editOrderNumber || editCtx.editOrderNumber || null,
+          })
+        );
+      }
+    } catch {
+      // ignore bad session data
+    }
 
     if (parsedOrder.items) {
       parsedOrder.items = parsedOrder.items.map((item: any) => ({
@@ -261,7 +287,18 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      const isEditMode = !!orderData?.editOrderId;
+      let editContextOrderId: number | null = null;
+      let editContextOrderNumber: string | null = null;
+      try {
+        const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+        editContextOrderId = Number(editCtx.editOrderId || 0) || null;
+        editContextOrderNumber = typeof editCtx.editOrderNumber === 'string' ? editCtx.editOrderNumber : null;
+      } catch {
+        // ignore bad session data
+      }
+
+      const effectiveEditOrderId = Number(orderData?.editOrderId || editContextOrderId || 0) || null;
+      const isEditMode = !!effectiveEditOrderId;
       const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
 
       const itemPayloads = (orderData.items || []).map((item: any) => ({
@@ -276,7 +313,7 @@ export default function AmountDetailsPage() {
       let createdOrder: any = null;
 
       if (isEditMode) {
-        const targetOrderId = Number(orderData.editOrderId);
+        const targetOrderId = Number(effectiveEditOrderId);
         if (!targetOrderId) {
           throw new Error('Edit order id missing');
         }
@@ -460,7 +497,7 @@ export default function AmountDetailsPage() {
       }
 
       // 4) Payments
-      if (paymentOption === 'full') {
+      if (!isEditMode && paymentOption === 'full') {
         const paymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
           amount: total,
@@ -503,7 +540,7 @@ export default function AmountDetailsPage() {
         }
       }
 
-      if (paymentOption === 'partial') {
+      if (!isEditMode && paymentOption === 'partial') {
         const advancePaymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
           amount: advance,
@@ -551,7 +588,7 @@ export default function AmountDetailsPage() {
       }
 
 
-      if (paymentOption === 'installment') {
+      if (!isEditMode && paymentOption === 'installment') {
         const firstPayment: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
           amount: advance,
@@ -613,6 +650,7 @@ export default function AmountDetailsPage() {
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
       sessionStorage.removeItem('socialCommerceDraftV1');
+      if (isEditMode) sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
 
       setTimeout(() => {
         window.location.href = '/orders';
