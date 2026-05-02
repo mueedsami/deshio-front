@@ -30,6 +30,8 @@ const employeeService = {
     role?: string; 
     is_active?: boolean;
     department?: string;
+    per_page?: number;
+    page?: number;
   }): Promise<Employee[]> {
     try {
       const response = await axiosInstance.get('/employees', { params });

@@ -10,6 +10,75 @@ import Toast from '@/components/Toast';
 
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
 
+type SocialCommerceEditContext = {
+  editMode?: boolean;
+  editOrderId?: number | string | null;
+  editOrderNumber?: string | null;
+  source?: string;
+  ts?: number;
+};
+
+const parseEditId = (value: any): number | null => {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const readEditContextFromBrowser = (): SocialCommerceEditContext => {
+  if (typeof window === 'undefined') return {};
+
+  const context: SocialCommerceEditContext = {};
+
+  const merge = (raw: string | null) => {
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') Object.assign(context, parsed);
+    } catch {
+      // ignore bad stored context
+    }
+  };
+
+  merge(localStorage.getItem(SC_EDIT_CONTEXT_KEY));
+  merge(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY));
+
+  const params = new URLSearchParams(window.location.search);
+  const urlEditId = parseEditId(params.get('editOrderId') || params.get('edit_order_id'));
+  if (urlEditId) {
+    context.editMode = true;
+    context.editOrderId = urlEditId;
+  }
+
+  const urlOrderNumber = params.get('editOrderNumber') || params.get('orderNumber');
+  if (urlOrderNumber) context.editOrderNumber = urlOrderNumber;
+
+  return context;
+};
+
+const persistEditContextToBrowser = (ctx: SocialCommerceEditContext) => {
+  if (typeof window === 'undefined') return;
+
+  const editOrderId = parseEditId(ctx.editOrderId);
+  if (!editOrderId) return;
+
+  const normalized: SocialCommerceEditContext = {
+    editMode: true,
+    editOrderId,
+    editOrderNumber: ctx.editOrderNumber || null,
+    source: ctx.source || 'amount-details',
+    ts: Date.now(),
+  };
+
+  const raw = JSON.stringify(normalized);
+  sessionStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
+  localStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
+};
+
+const clearEditContextFromBrowser = () => {
+  if (typeof window === 'undefined') return;
+  sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+  localStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+};
+
 interface PaymentMethod {
   id: number;
   code: string;
@@ -87,7 +156,7 @@ export default function AmountDetailsPage() {
   };
 
   useEffect(() => {
-    const storedOrder = sessionStorage.getItem('pendingOrder');
+    const storedOrder = sessionStorage.getItem('pendingOrder') || localStorage.getItem('pendingOrder');
     if (!storedOrder) {
       window.location.href = '/social-commerce';
       return;
@@ -96,24 +165,28 @@ export default function AmountDetailsPage() {
     const parsedOrder = JSON.parse(storedOrder);
 
     // Keep social-commerce edit mode sticky across page transitions/drafts.
-    // If this id is missing, the old code fell back to POST /orders and created a duplicate order.
+    // Edit identity is read from pendingOrder, URL, sessionStorage, and localStorage.
+    // If an edit id exists anywhere, we force this page into PATCH mode.
     try {
-      const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
-      const contextEditOrderId = Number(editCtx.editOrderId || 0) || null;
-      if (!parsedOrder.editOrderId && contextEditOrderId) {
-        parsedOrder.editOrderId = contextEditOrderId;
-      }
-      if (!parsedOrder.editOrderNumber && typeof editCtx.editOrderNumber === 'string') {
-        parsedOrder.editOrderNumber = editCtx.editOrderNumber;
-      }
-      if (parsedOrder.editOrderId) {
-        sessionStorage.setItem(
-          SC_EDIT_CONTEXT_KEY,
-          JSON.stringify({
-            editOrderId: Number(parsedOrder.editOrderId),
-            editOrderNumber: parsedOrder.editOrderNumber || editCtx.editOrderNumber || null,
-          })
-        );
+      const editCtx = readEditContextFromBrowser();
+      const contextEditOrderId = parseEditId(editCtx.editOrderId);
+      const pendingEditOrderId = parseEditId(parsedOrder.editOrderId || parsedOrder.edit_order_id);
+      const effectiveEditOrderId = pendingEditOrderId || contextEditOrderId;
+
+      if (effectiveEditOrderId) {
+        parsedOrder.editMode = true;
+        parsedOrder.editOrderId = effectiveEditOrderId;
+        parsedOrder.edit_order_id = effectiveEditOrderId;
+        parsedOrder.editOrderNumber =
+          parsedOrder.editOrderNumber ||
+          (typeof editCtx.editOrderNumber === 'string' ? editCtx.editOrderNumber : null);
+
+        persistEditContextToBrowser({
+          editMode: true,
+          editOrderId: effectiveEditOrderId,
+          editOrderNumber: parsedOrder.editOrderNumber || null,
+          source: 'amount-details-load',
+        });
       }
     } catch {
       // ignore bad session data
@@ -297,27 +370,36 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      let editContextOrderId: number | null = null;
-      let editContextOrderNumber: string | null = null;
-      try {
-        const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
-        editContextOrderId = Number(editCtx.editOrderId || 0) || null;
-        editContextOrderNumber = typeof editCtx.editOrderNumber === 'string' ? editCtx.editOrderNumber : null;
-      } catch {
-        // ignore bad session data
+      const editCtx = readEditContextFromBrowser();
+      const effectiveEditOrderId =
+        parseEditId(orderData?.editOrderId) ||
+        parseEditId(orderData?.edit_order_id) ||
+        parseEditId(editCtx.editOrderId);
+      const hasEditIntent = Boolean(orderData?.editMode || orderData?.editOrderId || orderData?.edit_order_id || editCtx.editMode || editCtx.editOrderId);
+      const isEditMode = !!effectiveEditOrderId;
+
+      if (hasEditIntent && !effectiveEditOrderId) {
+        throw new Error('Edit mode was detected, but the edit order ID is missing. Duplicate order creation was blocked. Please go back to Orders and click Edit again.');
       }
 
-      const effectiveEditOrderId = Number(orderData?.editOrderId || editContextOrderId || 0) || null;
-      const isEditMode = !!effectiveEditOrderId;
+      if (isEditMode) {
+        persistEditContextToBrowser({
+          editMode: true,
+          editOrderId: effectiveEditOrderId,
+          editOrderNumber: orderData?.editOrderNumber || editCtx.editOrderNumber || null,
+          source: 'amount-details-submit',
+        });
+      }
+
       const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
 
       const itemPayloads = (orderData.items || []).map((item: any) => ({
         id: item.id ?? null,
-        product_id: item.product_id,
-        batch_id: item.batch_id ?? null,
-        quantity: Number(item.quantity) || 1,
-        unit_price: Number(item.unit_price) || 0,
-        discount_amount: Number(item.discount_amount) || 0,
+        product_id: parseEditId(item.product_id) || parseEditId(item.productId) || 0,
+        batch_id: parseEditId(item.batch_id) || parseEditId(item.product_batch_id) || parseEditId(item.productBatchId) || null,
+        quantity: Math.max(1, Math.floor(parseNumber(item.quantity) || 1)),
+        unit_price: parseNumber(item.unit_price),
+        discount_amount: parseNumber(item.discount_amount),
       }));
 
       let createdOrder: any = null;
@@ -663,8 +745,9 @@ export default function AmountDetailsPage() {
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
+      localStorage.removeItem('pendingOrder');
       sessionStorage.removeItem('socialCommerceDraftV1');
-      if (isEditMode) sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+      if (isEditMode) clearEditContextFromBrowser();
 
       setTimeout(() => {
         window.location.href = '/orders';

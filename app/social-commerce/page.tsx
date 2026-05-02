@@ -63,6 +63,83 @@ const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
 
+type SocialCommerceEditContext = {
+  editMode?: boolean;
+  editOrderId?: number | string | null;
+  editOrderNumber?: string | null;
+  source?: string;
+  ts?: number;
+};
+
+const parseEditId = (value: any): number | null => {
+  const n = Number(value || 0);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const readEditContextFromBrowser = (): SocialCommerceEditContext => {
+  if (typeof window === 'undefined') return {};
+
+  const context: SocialCommerceEditContext = {};
+
+  const merge = (raw: string | null) => {
+    if (!raw) return;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') Object.assign(context, parsed);
+    } catch {
+      // ignore bad stored context
+    }
+  };
+
+  merge(localStorage.getItem(SC_EDIT_CONTEXT_KEY));
+  merge(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY));
+
+  const params = new URLSearchParams(window.location.search);
+  const urlEditId = parseEditId(params.get('editOrderId') || params.get('edit_order_id'));
+  if (urlEditId) {
+    context.editMode = true;
+    context.editOrderId = urlEditId;
+  }
+
+  const urlOrderNumber = params.get('editOrderNumber') || params.get('orderNumber');
+  if (urlOrderNumber) context.editOrderNumber = urlOrderNumber;
+
+  return context;
+};
+
+const persistEditContextToBrowser = (ctx: SocialCommerceEditContext) => {
+  if (typeof window === 'undefined') return;
+
+  const editOrderId = parseEditId(ctx.editOrderId);
+  if (!editOrderId) return;
+
+  const normalized: SocialCommerceEditContext = {
+    editMode: true,
+    editOrderId,
+    editOrderNumber: ctx.editOrderNumber || null,
+    source: ctx.source || 'social-commerce',
+    ts: Date.now(),
+  };
+
+  const raw = JSON.stringify(normalized);
+  sessionStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
+  localStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
+};
+
+const clearEditContextFromBrowser = () => {
+  if (typeof window === 'undefined') return;
+  sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+  localStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+};
+
+const buildSocialCommerceUrlWithEdit = (editOrderId?: number | null, editOrderNumber?: string | null) => {
+  if (!editOrderId) return '/social-commerce';
+  const params = new URLSearchParams();
+  params.set('editOrderId', String(editOrderId));
+  if (editOrderNumber) params.set('editOrderNumber', editOrderNumber);
+  return `/social-commerce?${params.toString()}`;
+};
+
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -1008,22 +1085,34 @@ export default function SocialCommercePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
+      const browserEditCtx = readEditContextFromBrowser();
+      const browserEditOrderId = parseEditId(browserEditCtx.editOrderId);
+      const browserEditOrderNumber =
+        typeof browserEditCtx.editOrderNumber === 'string' ? browserEditCtx.editOrderNumber : null;
+
       // ── Check for edit-order prefill first (overrides any draft) ──
       const editRaw = sessionStorage.getItem(SC_EDIT_PREFILL_KEY);
       if (editRaw) {
         sessionStorage.removeItem(SC_EDIT_PREFILL_KEY);
-        // Also clear any stale draft so prefill values win
+        // Also clear stale draft/queue/pending order so prefill values win
         sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
+        sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
+        sessionStorage.removeItem('pendingOrder');
+        localStorage.removeItem('pendingOrder');
         const ep = JSON.parse(editRaw);
         if (ep && typeof ep === 'object') {
-          const incomingEditOrderId = Number(ep.editOrderId || 0) || null;
-          const incomingEditOrderNumber = typeof ep.editOrderNumber === 'string' ? ep.editOrderNumber : null;
+          const incomingEditOrderId = parseEditId(ep.editOrderId) || browserEditOrderId;
+          const incomingEditOrderNumber =
+            (typeof ep.editOrderNumber === 'string' ? ep.editOrderNumber : null) || browserEditOrderNumber;
+
           if (incomingEditOrderId) {
             setEditOrderId(incomingEditOrderId);
-            sessionStorage.setItem(
-              SC_EDIT_CONTEXT_KEY,
-              JSON.stringify({ editOrderId: incomingEditOrderId, editOrderNumber: incomingEditOrderNumber })
-            );
+            persistEditContextToBrowser({
+              editMode: true,
+              editOrderId: incomingEditOrderId,
+              editOrderNumber: incomingEditOrderNumber,
+              source: 'social-commerce-prefill',
+            });
           }
           if (incomingEditOrderNumber) setEditOrderNumber(incomingEditOrderNumber);
           if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
@@ -1052,19 +1141,35 @@ export default function SocialCommercePage() {
 
       const raw = sessionStorage.getItem(SC_DRAFT_STORAGE_KEY);
       if (!raw) {
+        // URL/localStorage context still matters after product-list return or refresh.
+        if (browserEditOrderId) {
+          setEditOrderId(browserEditOrderId);
+          setEditOrderNumber(browserEditOrderNumber);
+          persistEditContextToBrowser({
+            editMode: true,
+            editOrderId: browserEditOrderId,
+            editOrderNumber: browserEditOrderNumber,
+            source: 'social-commerce-url-or-storage',
+          });
+        }
         draftHydratedRef.current = true;
         return;
       }
+
       const d = JSON.parse(raw);
       if (d && typeof d === 'object') {
-        const draftEditOrderId = Number(d.editOrderId || 0) || null;
-        const draftEditOrderNumber = typeof d.editOrderNumber === 'string' ? d.editOrderNumber : null;
+        const draftEditOrderId = parseEditId(d.editOrderId) || browserEditOrderId;
+        const draftEditOrderNumber =
+          (typeof d.editOrderNumber === 'string' ? d.editOrderNumber : null) || browserEditOrderNumber;
+
         if (draftEditOrderId) {
           setEditOrderId(draftEditOrderId);
-          sessionStorage.setItem(
-            SC_EDIT_CONTEXT_KEY,
-            JSON.stringify({ editOrderId: draftEditOrderId, editOrderNumber: draftEditOrderNumber })
-          );
+          persistEditContextToBrowser({
+            editMode: true,
+            editOrderId: draftEditOrderId,
+            editOrderNumber: draftEditOrderNumber,
+            source: 'social-commerce-draft',
+          });
         }
         if (draftEditOrderNumber) setEditOrderNumber(draftEditOrderNumber);
         if (typeof d.date === 'string') setDate(d.date);
@@ -1862,21 +1967,24 @@ export default function SocialCommercePage() {
             return base;
           })();
 
-      let effectiveEditOrderId = editOrderId;
-      let effectiveEditOrderNumber = editOrderNumber;
-      if (!effectiveEditOrderId) {
-        try {
-          const ctx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
-          effectiveEditOrderId = Number(ctx.editOrderId || 0) || null;
-          effectiveEditOrderNumber = effectiveEditOrderNumber || (typeof ctx.editOrderNumber === 'string' ? ctx.editOrderNumber : null);
-        } catch {
-          // ignore bad session data
-        }
+      const browserEditCtx = readEditContextFromBrowser();
+      const effectiveEditOrderId = editOrderId || parseEditId(browserEditCtx.editOrderId);
+      const effectiveEditOrderNumber =
+        editOrderNumber || (typeof browserEditCtx.editOrderNumber === 'string' ? browserEditCtx.editOrderNumber : null);
+
+      if (effectiveEditOrderId) {
+        persistEditContextToBrowser({
+          editMode: true,
+          editOrderId: effectiveEditOrderId,
+          editOrderNumber: effectiveEditOrderNumber,
+          source: 'social-commerce-submit',
+        });
       }
 
       const orderData = {
         order_type: 'social_commerce',
-        ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
+        editMode: !!effectiveEditOrderId,
+        ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId, edit_order_id: effectiveEditOrderId } : {}),
         ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
         store_id: parseInt(selectedStore),
         customer: {
@@ -1917,28 +2025,32 @@ export default function SocialCommercePage() {
         ].filter(Boolean).join(' '),
       };
 
-      sessionStorage.setItem(
-        'pendingOrder',
-        JSON.stringify({
-          ...orderData,
-          salesBy,
-          date,
-          isInternational,
-          subtotal,
-          deliveryAddress: deliveryAddressForUi,
+      const pendingOrderPayload = {
+        ...orderData,
+        salesBy,
+        date,
+        isInternational,
+        subtotal,
+        deliveryAddress: deliveryAddressForUi,
 
-          defectiveItems: cart
-            .filter((item) => item.isDefective)
-            .map((item) => ({
-              defectId: item.defectId,
-              price: item.unit_price,
-              productName: item.productName,
-            })),
-        })
-      );
+        defectiveItems: cart
+          .filter((item) => item.isDefective)
+          .map((item) => ({
+            defectId: item.defectId,
+            price: item.unit_price,
+            productName: item.productName,
+          })),
+      };
+
+      const pendingOrderRaw = JSON.stringify(pendingOrderPayload);
+      sessionStorage.setItem('pendingOrder', pendingOrderRaw);
+      localStorage.setItem('pendingOrder', pendingOrderRaw);
 
       console.log('✅ Order data prepared, redirecting...');
-      window.location.href = '/social-commerce/amount-details';
+      const amountDetailsUrl = effectiveEditOrderId
+        ? `/social-commerce/amount-details?editOrderId=${effectiveEditOrderId}${effectiveEditOrderNumber ? `&editOrderNumber=${encodeURIComponent(effectiveEditOrderNumber)}` : ''}`
+        : '/social-commerce/amount-details';
+      window.location.href = amountDetailsUrl;
     } catch (error) {
       console.error('❌ Error:', error);
       alert('Failed to process order');
@@ -1966,7 +2078,7 @@ export default function SocialCommercePage() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => { setEditOrderId(null); setEditOrderNumber(null); }}
+                      onClick={() => { setEditOrderId(null); setEditOrderNumber(null); clearEditContextFromBrowser(); }}
                       className="ml-auto text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200"
                       title="Dismiss"
                     >
@@ -2525,7 +2637,8 @@ export default function SocialCommercePage() {
                         type="button"
                         onClick={() => {
                           saveDraftToSession();
-                          window.location.href = `/product/list?selectMode=true&redirect=${encodeURIComponent('/social-commerce')}`;
+                          const returnUrl = buildSocialCommerceUrlWithEdit(editOrderId, editOrderNumber);
+                          window.location.href = `/product/list?selectMode=true&redirect=${encodeURIComponent(returnUrl)}`;
                         }}
                         disabled={!selectedStore}
                         className="px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"

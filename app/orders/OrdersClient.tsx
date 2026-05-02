@@ -1817,12 +1817,32 @@ const derivePaymentStatus = (order: any) => {
           cart: cartItems,
         };
 
-        sessionStorage.setItem('socialCommerceEditPrefillV1', JSON.stringify(prefill));
-        sessionStorage.setItem(
-          'socialCommerceEditContextV1',
-          JSON.stringify({ editOrderId: order.id, editOrderNumber: fo.order_number || order.orderNumber || null })
-        );
-        router.push('/social-commerce');
+        const editContext = {
+          editMode: true,
+          editOrderId: Number(order.id),
+          editOrderNumber: fo.order_number || order.orderNumber || null,
+          source: 'orders-client',
+          ts: Date.now(),
+        };
+
+        // Keep the edit context in BOTH storage layers and in the URL.
+        // This prevents the social commerce flow from losing edit mode during
+        // page navigation, product-list browsing, refresh, or session restore.
+        const serializedPrefill = JSON.stringify({ ...prefill, ...editContext });
+        const serializedContext = JSON.stringify(editContext);
+        sessionStorage.removeItem('pendingOrder');
+        localStorage.removeItem('pendingOrder');
+        sessionStorage.removeItem('socialCommerceDraftV1');
+        sessionStorage.removeItem('socialCommerceSelectionQueueV1');
+
+        sessionStorage.setItem('socialCommerceEditPrefillV1', serializedPrefill);
+        sessionStorage.setItem('socialCommerceEditContextV1', serializedContext);
+        localStorage.setItem('socialCommerceEditContextV1', serializedContext);
+
+        const params = new URLSearchParams();
+        params.set('editOrderId', String(order.id));
+        if (editContext.editOrderNumber) params.set('editOrderNumber', String(editContext.editOrderNumber));
+        router.push(`/social-commerce?${params.toString()}`);
       } catch (error: any) {
         console.error('Failed to load social order for editing:', error);
         alert('Failed to load order details: ' + error.message);
