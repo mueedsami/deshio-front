@@ -707,7 +707,7 @@ export default function ProductDetailPage() {
   const handleVariantChange = async (variant: ProductVariant) => {
     // 3.8 — Prevent scroll-to-top on variant change
     if (typeof window !== 'undefined') {
-      (window as any).__ERRUM_SKIP_SCROLL__ = true;
+      (window as any).__Deshio_SKIP_SCROLL__ = true;
     }
 
     // Instantly update for responsiveness (shows primary image from the list)
@@ -965,7 +965,7 @@ export default function ProductDetailPage() {
 
   const originalSellingPrice = Number(selectedVariant.selling_price ?? 0);
   const costPrice = Number((product as any).cost_price ?? 0);
-  
+
   const categoryId = getCategoryId(product.category);
   const salePromo = getApplicablePromotion(selectedVariant.id, categoryId ?? null);
   const salePercent = salePromo?.discount_value ?? 0;
@@ -1015,17 +1015,17 @@ export default function ProductDetailPage() {
               <span className="text-gray-200 lg:inline hidden">/</span>
               <span className="text-gray-900 lg:inline hidden truncate max-w-[200px]">{baseName}</span>
             </div>
-            
+
             <div className="flex items-center gap-4 text-gray-400">
-               <button onClick={() => router.back()} className="hover:text-gray-900 transition-colors flex items-center gap-1">
-                 <ChevronLeft size={16} />
-               </button>
-               <button onClick={() => router.push('/e-commerce/search')} className="hover:text-gray-900 transition-colors">
-                 <Grid size={16} />
-               </button>
-               <button className="hover:text-gray-900 transition-colors opacity-30 cursor-not-allowed">
-                 <ChevronRight size={16} />
-               </button>
+              <button onClick={() => router.back()} className="hover:text-gray-900 transition-colors flex items-center gap-1">
+                <ChevronLeft size={16} />
+              </button>
+              <button onClick={() => router.push('/e-commerce/search')} className="hover:text-gray-900 transition-colors">
+                <Grid size={16} />
+              </button>
+              <button className="hover:text-gray-900 transition-colors opacity-30 cursor-not-allowed">
+                <ChevronRight size={16} />
+              </button>
             </div>
           </div>
         </div>
@@ -1094,9 +1094,8 @@ export default function ProductDetailPage() {
                   </div>
                   <div className="h-[4px] w-full bg-white rounded-full overflow-hidden">
                     <div
-                      className={`h-full transition-all duration-1000 ease-out ${
-                        availableInventory <= 5 ? 'bg-[#b83228]' : 'bg-gray-400'
-                      }`}
+                      className={`h-full transition-all duration-1000 ease-out ${availableInventory <= 5 ? 'bg-[#b83228]' : 'bg-gray-400'
+                        }`}
                       style={{ width: `${Math.min((availableInventory / 25) * 100, 100)}%` }}
                     />
                   </div>
@@ -1113,7 +1112,7 @@ export default function ProductDetailPage() {
                 />
               )}
 
-               {/* Quantity + CTAs */}
+              {/* Quantity + CTAs */}
               <div className="space-y-4 pt-2">
                 <div className="flex items-center gap-4">
                   <div className="flex items-center h-[52px] border border-gray-200 rounded-lg overflow-hidden bg-white">
@@ -1132,9 +1131,8 @@ export default function ProductDetailPage() {
                     ref={mainCtaRef}
                     onClick={handleAddToCart}
                     disabled={!selectedVariant.in_stock || isAdding || availableInventory <= 0}
-                    className={`flex-1 h-[52px] rounded-lg font-bold uppercase tracking-wider text-[11px] flex items-center justify-center gap-3 transition-all active:scale-95 disabled:bg-gray-100 disabled:text-gray-400 ${
-                      cartStatus === 'success' ? 'bg-[#1a9456] text-white' : 'bg-black text-white hover:bg-gray-800'
-                    }`}
+                    className={`flex-1 h-[52px] rounded-lg font-bold uppercase tracking-wider text-[11px] flex items-center justify-center gap-3 transition-all active:scale-95 disabled:bg-gray-100 disabled:text-gray-400 ${cartStatus === 'success' ? 'bg-[#1a9456] text-white' : 'bg-black text-white hover:bg-gray-800'
+                      }`}
                   >
                     {cartStatus === 'idle' && <ShoppingCart size={16} />}
                     {cartStatus === 'loading' && <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}

@@ -15,16 +15,16 @@ export default function LoginRegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  const [loginEmail,    setLoginEmail]    = useState('');
+  const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
-  const [registerName,            setRegisterName]            = useState('');
-  const [registerEmail,           setRegisterEmail]           = useState('');
-  const [registerPhone,           setRegisterPhone]           = useState('');
-  const [registerPassword,        setRegisterPassword]        = useState('');
+  const [registerName, setRegisterName] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerPhone, setRegisterPhone] = useState('');
+  const [registerPassword, setRegisterPassword] = useState('');
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
 
-  const [alert,     setAlert]     = useState({ show: false, type: '', message: '' });
+  const [alert, setAlert] = useState({ show: false, type: '', message: '' });
   const [isLoading, setIsLoading] = useState(false);
 
   useEffect(() => { if (isAuthenticated) router.replace('/e-commerce/my-account'); }, [isAuthenticated, router]);
@@ -43,7 +43,7 @@ export default function LoginRegisterPage() {
       try {
         const guestCart = await cartService.getCart();
         if (guestCart?.items?.length) await cartService.mergeGuestCart();
-      } catch {}
+      } catch { }
       showAlert('success', 'Welcome back!');
       setTimeout(() => router.push('/e-commerce'), 800);
     } catch (err: any) {
@@ -59,7 +59,7 @@ export default function LoginRegisterPage() {
     setIsLoading(true);
     try {
       await register(registerName, registerEmail, registerPhone, registerPassword, registerConfirmPassword);
-      showAlert('success', 'Account created! Welcome to Errum.');
+      showAlert('success', 'Account created! Welcome to Deshio.');
       setTimeout(() => router.push('/e-commerce'), 800);
     } catch (err: any) {
       showAlert('error', err?.message || 'Registration failed. Please try again.');
@@ -78,7 +78,7 @@ export default function LoginRegisterPage() {
           {/* Header */}
           <div className="mb-8 text-center">
             <h1 style={{ fontFamily: "'Poppins', sans-serif", fontSize: '48px', fontWeight: 500, color: 'white', letterSpacing: '-0.02em', lineHeight: 1 }}>
-              {activeTab === 'login' ? 'Welcome Back' : 'Join Errum'}
+              {activeTab === 'login' ? 'Welcome Back' : 'Join Deshio'}
             </h1>
             <p className="mt-2 text-[14px]" style={{ color: 'rgba(255,255,255,0.4)' }}>
               {activeTab === 'login' ? 'Sign in to your account' : 'Create your account today'}
@@ -99,10 +99,10 @@ export default function LoginRegisterPage() {
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className="flex-1 rounded-lg py-2.5 text-[12px] font-semibold transition-all capitalize"
                 style={{
-                  background:    activeTab === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
-                  color:         activeTab === tab ? 'white' : 'rgba(255,255,255,0.4)',
+                  background: activeTab === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
+                  color: activeTab === tab ? 'white' : 'rgba(255,255,255,0.4)',
                   letterSpacing: '0.06em',
-                  fontFamily:    "'Poppins', sans-serif",
+                  fontFamily: "'Poppins', sans-serif",
                 }}
               >
                 {tab === 'login' ? 'Sign In' : 'Register'}
@@ -134,9 +134,9 @@ export default function LoginRegisterPage() {
             ) : (
               <form onSubmit={handleRegister} className="space-y-4">
                 {[
-                  { label: 'FULL NAME',    val: registerName,    set: setRegisterName,    type: 'text',     ph: 'Your full name' },
-                  { label: 'EMAIL',        val: registerEmail,   set: setRegisterEmail,   type: 'email',    ph: 'you@example.com' },
-                  { label: 'PHONE',        val: registerPhone,   set: setRegisterPhone,   type: 'tel',      ph: '01XXXXXXXXX' },
+                  { label: 'FULL NAME', val: registerName, set: setRegisterName, type: 'text', ph: 'Your full name' },
+                  { label: 'EMAIL', val: registerEmail, set: setRegisterEmail, type: 'email', ph: 'you@example.com' },
+                  { label: 'PHONE', val: registerPhone, set: setRegisterPhone, type: 'tel', ph: '01XXXXXXXXX' },
                 ].map(({ label, val, set, type, ph }) => (
                   <div key={label}>
                     <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>{label}</label>
@@ -144,8 +144,8 @@ export default function LoginRegisterPage() {
                   </div>
                 ))}
                 {[
-                  { label: 'PASSWORD',         val: registerPassword,        set: setRegisterPassword,        show: showPassword,        toggle: () => setShowPassword(v=>!v) },
-                  { label: 'CONFIRM PASSWORD', val: registerConfirmPassword, set: setRegisterConfirmPassword, show: showConfirmPassword, toggle: () => setShowConfirmPassword(v=>!v) },
+                  { label: 'PASSWORD', val: registerPassword, set: setRegisterPassword, show: showPassword, toggle: () => setShowPassword(v => !v) },
+                  { label: 'CONFIRM PASSWORD', val: registerConfirmPassword, set: setRegisterConfirmPassword, show: showConfirmPassword, toggle: () => setShowConfirmPassword(v => !v) },
                 ].map(({ label, val, set, show, toggle }) => (
                   <div key={label}>
                     <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>{label}</label>
@@ -166,8 +166,8 @@ export default function LoginRegisterPage() {
 
           <div className="mt-5 text-center">
             <Link href="/e-commerce" className="inline-flex items-center gap-1.5 text-[12px] transition-colors" style={{ color: 'rgba(255,255,255,0.35)' }}
-                  onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
-                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.35)')}>
+              onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.35)')}>
               <ArrowLeft className="h-3.5 w-3.5" /> Back to store
             </Link>
           </div>

@@ -140,13 +140,13 @@ function ViewInventoryPageContent() {
 
   useEffect(() => {
     fetchInventory();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewMode, selectedCategoryId]);
 
   // --- Same approach as GalleryPage: normalize image paths to absolute URLs ---
   const getBaseUrl = () => {
-    // Example: NEXT_PUBLIC_API_URL = https://backend.errumbd.com/api
-    // We need base = https://backend.errumbd.com
+    // Example: NEXT_PUBLIC_API_URL = https://backend.Deshiobd.com/api
+    // We need base = https://backend.Deshiobd.com
     const api = process.env.NEXT_PUBLIC_API_URL || '';
     return api ? api.replace(/\/api\/?$/, '') : '';
   };
@@ -496,7 +496,7 @@ function ViewInventoryPageContent() {
 
       const [categoriesResponse, inventoryResponse] = await Promise.all([
         categoryService.getCategories(),
-        inventoryService.getGlobalInventory({ 
+        inventoryService.getGlobalInventory({
           skipStoreScope: true,
           category_id: viewMode === 'category' ? (selectedCategoryId || undefined) : undefined
         }),
@@ -690,9 +690,9 @@ function ViewInventoryPageContent() {
                   View all products and their stock levels across outlets
                 </p>
               </div>
-              <ExportInventoryButton 
-                categories={categories} 
-                allStores={allStores} 
+              <ExportInventoryButton
+                categories={categories}
+                allStores={allStores}
                 selectedCategoryId={viewMode === 'category' ? selectedCategoryId : null}
               />
             </div>
@@ -776,13 +776,13 @@ function ViewInventoryPageContent() {
                           <th className="p-3 text-left font-bold text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">Category</th>
                           <th className="p-3 text-left font-bold text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">Subcategory</th>
                           <th className="p-3 text-left font-bold text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">Variation</th>
-                          
+
                           {allStores.map(store => (
                             <th key={store.id} className="p-3 text-center font-bold text-gray-700 dark:text-gray-300 whitespace-normal break-words max-w-[100px] leading-tight border-r border-gray-200 dark:border-gray-700">
                               {store.name}
                             </th>
                           ))}
-                          
+
                           <th className="p-3 text-center font-bold text-blue-700 dark:text-blue-300 bg-blue-50/50 dark:bg-blue-900/20 border-r border-gray-200 dark:border-gray-700">Available</th>
                           <th className="p-3 text-center font-bold text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">Physical</th>
                           <th className="p-3 text-center font-bold text-gray-700 dark:text-gray-300 border-r border-gray-200 dark:border-gray-700">Reserved</th>
@@ -820,7 +820,7 @@ function ViewInventoryPageContent() {
                                     </td>
                                   </>
                                 )}
-                                
+
                                 <td className="p-3 border-r border-gray-200 dark:border-gray-700">
                                   <span className="inline-flex items-center px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold">
                                     {suffix}

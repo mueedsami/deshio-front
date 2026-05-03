@@ -10,7 +10,7 @@ export type ReceiptModalPayload = {
   template?: ReceiptTemplate;
 };
 
-export const RECEIPT_MODAL_EVENT = 'errum:receipt-modal';
+export const RECEIPT_MODAL_EVENT = 'Deshio:receipt-modal';
 
 function dispatch(payload: ReceiptModalPayload) {
   if (typeof window === 'undefined') return;

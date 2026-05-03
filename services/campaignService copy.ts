@@ -1,7 +1,7 @@
 import axiosInstance from '@/lib/axios';
 import axios from 'axios';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://backend2.errumbd.com/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://backend2.Deshiobd.com/api';
 
 // Unauthenticated axios for public endpoints (no auth header injected)
 const publicAxios = axios.create({ baseURL: API_BASE });

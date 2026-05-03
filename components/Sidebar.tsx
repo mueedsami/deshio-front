@@ -55,15 +55,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const { isRole, isSuperAdmin, isLoading } = useAuth();
 
   const canAccessHref = (href: string) => {
-    if (isSuperAdmin) return true;
-    if (isLoading) return true;
-    
-    const clean = href.split('?')[0];
-    const allowedRoles = PAGE_ACCESS[clean];
-    
-    if (!allowedRoles) return true; // no mapping = accessible
-    
-    return isRole(allowedRoles);
+    return true; // For now, literally always allow access to show all pages
   };
 
   const toggleSubMenu = (label: string) => {

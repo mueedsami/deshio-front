@@ -5,11 +5,11 @@ import { ChevronLeft, ChevronRight, Instagram } from 'lucide-react';
 import InstagramEmbed from './InstagramEmbed';
 
 const REEL_URLS = [
-  'https://www.instagram.com/reel/DW6uSbkERA9/',
-  'https://www.instagram.com/p/DW6DQUGk-ho/',
-  'https://www.instagram.com/reel/DW323H0EboK/',
-  'https://www.instagram.com/reel/DWtnHXJkSSA/',
-  'https://www.instagram.com/reel/DWmUzxuE5OZ/'
+  'https://www.instagram.com/reel/DXuLQ16DuEr/',
+  'https://www.instagram.com/reel/DXs4c_fkyfi/',
+  'https://www.instagram.com/reel/DXdbpF-kfTg/',
+  'https://www.instagram.com/reel/DXdbpF-kfTg/',
+  'https://www.instagram.com/reel/DXOALPBDArO/'
 ];
 
 export default function InstagramReelViewer() {
@@ -104,7 +104,7 @@ export default function InstagramReelViewer() {
             Explore our latest drops, community styling, and behind-the-scenes highlights straight from our studio.
           </p>
           <a
-            href="https://www.instagram.com/errum_bd/"
+            href="https://www.instagram.com/Deshio_bd/"
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -124,7 +124,7 @@ export default function InstagramReelViewer() {
             }}
           >
             <Instagram size={14} />
-            <span>Follow @errum_bd</span>
+            <span>Follow @Deshio_bd</span>
           </a>
         </div>
       </div>

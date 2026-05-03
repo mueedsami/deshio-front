@@ -124,7 +124,7 @@ const Navbar = () => {
   return (
     <>
 
-    {/* ── Mobile Bottom Tab Bar ─────────────────────────────────── */}
+      {/* ── Mobile Bottom Tab Bar ─────────────────────────────────── */}
       <nav
         className="flex items-stretch"
         style={{
@@ -148,8 +148,17 @@ const Navbar = () => {
         <Link href="/e-commerce"
           style={{ flex: 1.2, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '2px', textDecoration: 'none', color: '#111111' }}
         >
-          <img src="/logo.png" alt="" style={{ height: '22px', width: 'auto' }} />
-          <span style={{ fontSize: '13px', fontWeight: 800, fontFamily: "'Poppins', sans-serif", letterSpacing: '0.04em' }}>ERRUM</span>
+          <div style={{ 
+            background: 'rgba(0,0,0,0.08)', 
+            padding: '4px 6px', 
+            borderRadius: '6px', 
+            display: 'flex', 
+            alignItems: 'center', 
+            justifyContent: 'center' 
+          }}>
+            <img src="/logo.png" alt="" style={{ height: '22px', width: 'auto' }} />
+          </div>
+          <span style={{ fontSize: '13px', fontWeight: 800, fontFamily: "'Poppins', sans-serif", letterSpacing: '0.04em' }}>Deshio</span>
         </Link>
 
         {/* Search */}
@@ -223,10 +232,10 @@ const Navbar = () => {
         </button>
       </nav>
 
-      <GlobalCategorySidebar 
-        categories={categories} 
-        isOpen={isCategorySidebarOpen} 
-        onClose={() => setIsCategorySidebarOpen(false)} 
+      <GlobalCategorySidebar
+        categories={categories}
+        isOpen={isCategorySidebarOpen}
+        onClose={() => setIsCategorySidebarOpen(false)}
       />
     </>
   );

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation'; 
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -49,7 +49,7 @@ export default function AddEditProductPage({
   const { permissionsResolved, isRole } = useAuth();
   const canAccess = isRole(['super-admin', 'admin', 'online-moderator']);
   const [modeResolved, setModeResolved] = useState(false);
-  
+
   // Read from sessionStorage if props not provided
   const [productId, setProductId] = useState<string | undefined>(propProductId);
   const [mode, setMode] = useState<'create' | 'edit' | 'addVariation'>(propMode);
@@ -71,7 +71,7 @@ export default function AddEditProductPage({
         setProductId(storedProductId);
         sessionStorage.removeItem('editProductId');
       }
-      
+
       if (storedMode) {
         setMode(storedMode as 'create' | 'edit' | 'addVariation');
         sessionStorage.removeItem('productMode');
@@ -102,7 +102,7 @@ export default function AddEditProductPage({
 
   const isEditMode = mode === 'edit';
   const addVariationMode = mode === 'addVariation';
-  
+
   const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'general' | 'variations'>('general');
@@ -155,7 +155,7 @@ export default function AddEditProductPage({
   const [vendors, setVendors] = useState<Vendor[]>([]);
 
 
-  // --- Size presets (Errum): quickly select full size chart for a category ---
+  // --- Size presets (Deshio): quickly select full size chart for a category ---
   const findCategoryNameById = (nodes: CategoryTree[], id: string): string => {
     const target = String(id || '').trim();
     if (!target) return '';
@@ -266,73 +266,73 @@ export default function AddEditProductPage({
 
   useEffect(() => {
     if (isEditMode && productId && availableFields.length > 0) {
-        fetchProduct();
-      } else if (addVariationMode) {
-        setFormData({
-          name: storedBaseName,
-          sku: storedBaseSku,
-          description: '',
-        });
-        setCategorySelection({ level0: storedCategoryId });
-        if (storedVendorId) {
-          setSelectedVendorId(String(storedVendorId));
-        }
-        setHasVariations(true);
-        setActiveTab('general');
+      fetchProduct();
+    } else if (addVariationMode) {
+      setFormData({
+        name: storedBaseName,
+        sku: storedBaseSku,
+        description: '',
+      });
+      setCategorySelection({ level0: storedCategoryId });
+      if (storedVendorId) {
+        setSelectedVendorId(String(storedVendorId));
       }
+      setHasVariations(true);
+      setActiveTab('general');
+    }
   }, [isEditMode, productId, availableFields, addVariationMode, storedBaseName, storedBaseSku, storedCategoryId, storedVendorId]);
 
   useEffect(() => {
-      if (hasVariations && !isEditMode) {
-        setActiveTab('variations');
-      }
-    }, [hasVariations, isEditMode]);
+    if (hasVariations && !isEditMode) {
+      setActiveTab('variations');
+    }
+  }, [hasVariations, isEditMode]);
 
-    // In edit mode, fetch SKU group by product id (backend provides /sku-group)
-    useEffect(() => {
-      if (!isEditMode) return;
-      if (!productId) return;
-      fetchSkuGroupByProductId(productId);
-    }, [isEditMode, productId]);
+  // In edit mode, fetch SKU group by product id (backend provides /sku-group)
+  useEffect(() => {
+    if (!isEditMode) return;
+    if (!productId) return;
+    fetchSkuGroupByProductId(productId);
+  }, [isEditMode, productId]);
 
-    /**
-     * Normalize category tree so sub-categories always render.
-     *
-     * Some API responses return nested nodes in `all_children` (and may omit `children`).
-     * Our UI (CategoryTreeSelector) prefers `children`, so we unify both into `children`.
-     */
-    const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
-      const getChildren = (cat: CategoryTree): CategoryTree[] => {
-        const rawChildren = (cat as any)?.children;
-        const rawAllChildren = (cat as any)?.all_children;
+  /**
+   * Normalize category tree so sub-categories always render.
+   *
+   * Some API responses return nested nodes in `all_children` (and may omit `children`).
+   * Our UI (CategoryTreeSelector) prefers `children`, so we unify both into `children`.
+   */
+  const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
+    const getChildren = (cat: CategoryTree): CategoryTree[] => {
+      const rawChildren = (cat as any)?.children;
+      const rawAllChildren = (cat as any)?.all_children;
 
-        if (Array.isArray(rawChildren) && rawChildren.length > 0) return rawChildren;
-        if (Array.isArray(rawAllChildren) && rawAllChildren.length > 0) return rawAllChildren;
-        return [];
-      };
-
-      return (Array.isArray(cats) ? cats : [])
-        .filter((cat) => Boolean(cat) && Boolean((cat as any).is_active))
-        .map((cat) => {
-          const nested = filterActiveCategories(getChildren(cat));
-          return {
-            ...cat,
-            children: nested,
-            // keep for backward-compatibility, but ensure it doesn't shadow children
-            all_children: nested,
-          } as CategoryTree;
-        });
+      if (Array.isArray(rawChildren) && rawChildren.length > 0) return rawChildren;
+      if (Array.isArray(rawAllChildren) && rawAllChildren.length > 0) return rawAllChildren;
+      return [];
     };
+
+    return (Array.isArray(cats) ? cats : [])
+      .filter((cat) => Boolean(cat) && Boolean((cat as any).is_active))
+      .map((cat) => {
+        const nested = filterActiveCategories(getChildren(cat));
+        return {
+          ...cat,
+          children: nested,
+          // keep for backward-compatibility, but ensure it doesn't shadow children
+          all_children: nested,
+        } as CategoryTree;
+      });
+  };
 
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      
+
       const fieldsData = await productService.getAvailableFields();
       setAvailableFields(Array.isArray(fieldsData) ? fieldsData : []);
 
       const categoriesData = await categoryService.getTree(true);
-      
+
       const filteredCategories = filterActiveCategories(
         Array.isArray(categoriesData) ? categoriesData : []
       );
@@ -917,7 +917,7 @@ export default function AddEditProductPage({
 
   const handleVariationImageChange = (variationId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    
+
     if (files.length === 0) return;
 
     const invalidFiles = files.filter(f => !f.type.startsWith('image/'));
@@ -959,10 +959,10 @@ export default function AddEditProductPage({
     setVariations(variations.map(v =>
       v.id === variationId
         ? {
-            ...v,
-            images: v.images.filter((_, idx) => idx !== imageIndex),
-            imagePreviews: v.imagePreviews.filter((_, idx) => idx !== imageIndex),
-          }
+          ...v,
+          images: v.images.filter((_, idx) => idx !== imageIndex),
+          imagePreviews: v.imagePreviews.filter((_, idx) => idx !== imageIndex),
+        }
         : v
     ));
   };
@@ -1085,7 +1085,7 @@ export default function AddEditProductPage({
 
             for (const size of sizesToCreate) {
               const variationSuffix = buildVariationSuffix(variation.color, size);
-              
+
               const varCustomFields = [...baseCustomFields];
 
               // Color / Size are optional (only attach the field if both exist and value is non-empty)
@@ -1235,14 +1235,14 @@ export default function AddEditProductPage({
 
           const failedCount = variationsToCreate.length - createdProducts.length;
           if (failedCount > 0) {
-            setToast({ 
-              message: `Created ${createdProducts.length} variations. ${failedCount} failed - please check console for details.`, 
-              type: 'warning' 
+            setToast({
+              message: `Created ${createdProducts.length} variations. ${failedCount} failed - please check console for details.`,
+              type: 'warning'
             });
           } else {
-            setToast({ 
-              message: `Successfully created all ${createdProducts.length} product variations!`, 
-              type: 'success' 
+            setToast({
+              message: `Successfully created all ${createdProducts.length} product variations!`,
+              type: 'success'
             });
           }
         } else {
@@ -1256,16 +1256,16 @@ export default function AddEditProductPage({
 
           if (productImages.length > 0 && createdProduct.id) {
             console.log(`Step 2: Uploading ${productImages.length} images...`);
-            
+
             let successCount = 0;
-            
+
             for (let i = 0; i < productImages.length; i++) {
               const imageItem = productImages[i];
-              
+
               if (imageItem.file && !imageItem.uploaded) {
                 try {
                   console.log(`Uploading image ${i + 1}: ${imageItem.file.name}`);
-                  
+
                   await productImageService.uploadImage(
                     createdProduct.id,
                     imageItem.file,
@@ -1275,7 +1275,7 @@ export default function AddEditProductPage({
                       sort_order: imageItem.sort_order || i,
                     }
                   );
-                  
+
                   successCount++;
                   console.log(`Image ${i + 1} uploaded and attached successfully`);
                 } catch (error) {
@@ -1283,7 +1283,7 @@ export default function AddEditProductPage({
                 }
               }
             }
-            
+
             console.log(`Successfully uploaded ${successCount}/${productImages.length} images`);
           }
 
@@ -1379,11 +1379,11 @@ export default function AddEditProductPage({
                   {isEditMode ? 'Edit Product' : addVariationMode ? 'Add Product Variation' : 'Add New Product'}
                 </h1>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  {isEditMode 
-                    ? 'Update product information' 
-                    : addVariationMode 
-                    ? 'Create a new variation for existing product'
-                    : 'Create a new product in your catalog'}
+                  {isEditMode
+                    ? 'Update product information'
+                    : addVariationMode
+                      ? 'Create a new variation for existing product'
+                      : 'Create a new product in your catalog'}
                 </p>
               </div>
             </div>
@@ -1391,22 +1391,20 @@ export default function AddEditProductPage({
             <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 mb-6">
               <button
                 onClick={() => setActiveTab('general')}
-                className={`px-6 py-3 font-medium border-b-2 transition-all ${
-                  activeTab === 'general'
+                className={`px-6 py-3 font-medium border-b-2 transition-all ${activeTab === 'general'
                     ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
                     : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-                }`}
+                  }`}
               >
                 General Information
               </button>
               {showVariationsTab && (
                 <button
                   onClick={() => setActiveTab('variations')}
-                  className={`px-6 py-3 font-medium border-b-2 transition-all ${
-                    activeTab === 'variations'
+                  className={`px-6 py-3 font-medium border-b-2 transition-all ${activeTab === 'variations'
                       ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
                       : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
-                  }`}
+                    }`}
                 >
                   Product Variations
                   {variations.length > 0 && (
@@ -1565,14 +1563,12 @@ export default function AddEditProductPage({
                                   setVariations([]);
                                 }
                               }}
-                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:ring-offset-2 ${
-                                hasVariations ? 'bg-gray-900 dark:bg-white' : 'bg-gray-200 dark:bg-gray-700'
-                              }`}
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:ring-offset-2 ${hasVariations ? 'bg-gray-900 dark:bg-white' : 'bg-gray-200 dark:bg-gray-700'
+                                }`}
                             >
                               <span
-                                className={`inline-block h-4 w-4 transform rounded-full bg-white dark:bg-gray-900 transition-transform ${
-                                  hasVariations ? 'translate-x-6' : 'translate-x-1'
-                                }`}
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white dark:bg-gray-900 transition-transform ${hasVariations ? 'translate-x-6' : 'translate-x-1'
+                                  }`}
                               />
                             </button>
                           </div>
