@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
+import Image from 'next/image';
 import { ShoppingCart, Heart, Star, ArrowRight, Eye } from 'lucide-react';
 
-export default function SaleProducts() {
+const SaleProducts = memo(function SaleProducts() {
   const [hoveredId, setHoveredId] = useState<number | null>(null);
 
   const products = [
@@ -55,7 +56,7 @@ export default function SaleProducts() {
         </div>
 
         {/* Products Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
           {products.map((product) => (
             <div
               key={product.id}
@@ -65,23 +66,25 @@ export default function SaleProducts() {
             >
               {/* Product Image */}
               <div className="relative aspect-[3/4] overflow-hidden bg-gray-100">
-                <img
+                <Image
                   src={product.image}
                   alt={product.name}
-                  className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                  fill
+                  sizes="(max-width: 768px) 50vw, (max-width: 1024px) 25vw, 25vw"
+                  className="object-cover group-hover:scale-110 transition-transform duration-500"
                   onError={(e) => {
-                    e.currentTarget.style.display = 'none';
+                    (e.currentTarget as HTMLImageElement).style.display = 'none';
                   }}
                 />
-                
+
                 {/* Discount Badge */}
-                <span className="absolute top-3 left-3 bg-red-500 text-white px-3 py-1.5 text-xs font-bold rounded-lg shadow-lg">
+                <span className="absolute top-3 left-3 bg-rose-500 text-white px-3 py-1.5 text-xs font-bold rounded-lg shadow-lg">
                   {product.discount}
                 </span>
 
                 {/* Action Buttons */}
                 <div className={`absolute top-3 right-3 flex flex-col gap-2 transition-all duration-300 ${hoveredId === product.id ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-4'}`}>
-                  <button className="p-2.5 bg-white rounded-lg shadow-lg hover:bg-red-50 transition-colors">
+                  <button className="p-2.5 bg-white rounded-lg shadow-lg hover:bg-rose-50 transition-colors">
                     <Heart size={18} className="text-gray-700" />
                   </button>
                   <button className="p-2.5 bg-white rounded-lg shadow-lg hover:bg-blue-50 transition-colors">
@@ -90,9 +93,8 @@ export default function SaleProducts() {
                 </div>
 
                 {/* Add to Cart Button */}
-                <button className={`absolute bottom-0 left-0 right-0 bg-red-700 text-white py-3.5 font-semibold transition-transform duration-300 flex items-center justify-center gap-2 ${hoveredId === product.id ? 'translate-y-0' : 'translate-y-full'}`}>
-                  <ShoppingCart size={18} />
-                  Add to Cart
+                <button className={`absolute bottom-0 left-0 right-0 bg-neutral-900 text-white py-3.5 font-semibold transition-transform duration-300 flex items-center justify-center gap-2 ${hoveredId === product.id ? 'translate-y-0' : 'translate-y-full'}`}>
+                  Choose Options
                 </button>
               </div>
 
@@ -104,7 +106,7 @@ export default function SaleProducts() {
                   ))}
                 </div>
 
-                <h3 className="text-sm font-semibold text-gray-900 mb-3 line-clamp-2 group-hover:text-red-700 transition-colors cursor-pointer">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3 line-clamp-2 group-hover:text-neutral-900 transition-colors cursor-pointer">
                   {product.name}
                 </h3>
 
@@ -126,4 +128,6 @@ export default function SaleProducts() {
       </div>
     </section>
   );
-}
+});
+
+export default SaleProducts;

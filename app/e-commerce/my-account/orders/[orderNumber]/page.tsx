@@ -33,7 +33,7 @@ export default function MyAccountOrderDetailsPage({ params }: { params: { orderN
       </button>
 
       {error ? (
-        <div className="border border-red-200 bg-red-50 text-red-700 rounded-md p-3 text-sm mb-4">
+        <div className="border border-rose-200 bg-rose-50 text-neutral-900 rounded-md p-3 text-sm mb-4">
           {error}
         </div>
       ) : null}

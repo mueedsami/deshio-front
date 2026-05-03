@@ -487,18 +487,12 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   </span>
                 </div>
               </div>
-              {order.payments.paid > 0 && (
-                <div className="pt-3 border-t border-gray-300 dark:border-gray-700">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">
-                      {order.payments.due > 0 ? 'Advance Payment Deducted' : 'Amount Paid'}
-                    </span>
-                    <span className={`font-medium ${order.payments.due > 0 ? 'text-red-500 dark:text-red-400' : 'text-gray-900 dark:text-white'}`}>
-                      {order.payments.due > 0 ? '-৳' : '৳'}{order.payments.paid.toLocaleString()}
-                    </span>
-                  </div>
+              <div className="pt-3 border-t border-gray-300 dark:border-gray-700">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-gray-600 dark:text-gray-400">Amount Paid</span>
+                  <span className="font-medium text-gray-900 dark:text-white">৳{order.payments.paid.toLocaleString()}</span>
                 </div>
-              )}
+              </div>
               {order.payments.due > 0 && (
                 <div className="bg-orange-50 dark:bg-orange-900/20 rounded-lg p-3 border border-orange-200 dark:border-orange-800">
                   <div className="flex justify-between items-center">
@@ -679,14 +673,12 @@ export default function OrderDetailsModal({ order, onClose, onEdit }: OrderDetai
                   </div>
                 </div>
 
-                {order.payments.paid > 0 && (
-                  <div className="bg-gray-100 -mx-2 px-2 py-2 mb-2">
-                    <div className="flex justify-between font-semibold">
-                      <span>{order.payments.due > 0 ? 'Advance Deducted:' : 'Amount Paid:'}</span>
-                      <span>{order.payments.due > 0 ? '-Tk' : 'Tk'}{order.payments.paid.toLocaleString()}</span>
-                    </div>
+                <div className="bg-gray-100 -mx-2 px-2 py-2 mb-2">
+                  <div className="flex justify-between font-semibold">
+                    <span>Amount Paid:</span>
+                    <span>Tk{order.payments.paid.toLocaleString()}</span>
                   </div>
-                )}
+                </div>
 
                 {order.payments.due > 0 && (
                   <div className="bg-black text-white -mx-2 px-2 py-2 mb-3">

@@ -1,19 +1,23 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, memo } from 'react';
+import Image from 'next/image';
 import { X, Plus, Minus, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import cartService from '@/services/cartService';
 import { useCart } from '../../../app/e-commerce/CartContext';
+import { usePromotion } from '@/contexts/PromotionContext';
 
 interface CartItemProps {
   item: {
     id: number;
     productId: number;
+    categoryId?: number;
     name: string;
     image?: string;
     price: string | number;
     quantity: number;
+    maxQuantity?: number;
     sku?: string;
     color?: string;
     size?: string;
@@ -23,34 +27,43 @@ interface CartItemProps {
   isUpdating?: boolean;
 }
 
-export default function CartItem({ item, onQuantityChange, onRemove, isUpdating: externalIsUpdating }: CartItemProps) {
+const formatBDT = (value: number) => {
+  return `৳${value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const CartItem = memo(function CartItem({ item, onQuantityChange, onRemove, isUpdating: externalIsUpdating }: CartItemProps) {
   const { refreshCart } = useCart();
   const router = useRouter();
+  const { getApplicablePromotion } = usePromotion();
   const [internalIsUpdating, setInternalIsUpdating] = useState(false);
-  
+
   // Use external isUpdating if provided, otherwise use internal
   const isUpdating = externalIsUpdating !== undefined ? externalIsUpdating : internalIsUpdating;
-  
+
   // Safely parse price
-  const price = typeof item?.price === 'string' 
-    ? parseFloat(item.price) 
-    : typeof item?.price === 'number' 
-    ? item.price 
-    : 0;
-  
-  const itemTotal = price * (item?.quantity || 0);
+  const originalPrice = typeof item?.price === 'string'
+    ? parseFloat(item.price)
+    : typeof item?.price === 'number'
+      ? item.price
+      : 0;
+
+  const promo = getApplicablePromotion(item.productId, item.categoryId ?? null);
+  const discountPercent = promo?.discount_value ?? 0;
+  const activePrice = discountPercent > 0 ? Math.max(0, originalPrice - (originalPrice * discountPercent / 100)) : originalPrice;
+
+  const itemTotal = activePrice * (item?.quantity || 0);
 
   // ✅ Handle quantity update with backend
   const handleQuantityChange = async (delta: number) => {
     const newQuantity = item.quantity + delta;
     if (newQuantity < 1) return;
-    
+
     // If parent provides handler, use it
     if (onQuantityChange) {
       await onQuantityChange(item.id, newQuantity);
       return;
     }
-    
+
     // Otherwise handle internally
     try {
       setInternalIsUpdating(true);
@@ -68,13 +81,13 @@ export default function CartItem({ item, onQuantityChange, onRemove, isUpdating:
   // ✅ Handle direct input change
   const handleInputChange = async (newQuantity: number) => {
     if (newQuantity < 1 || isNaN(newQuantity)) return;
-    
+
     // If parent provides handler, use it
     if (onQuantityChange) {
       await onQuantityChange(item.id, newQuantity);
       return;
     }
-    
+
     // Otherwise handle internally
     try {
       setInternalIsUpdating(true);
@@ -92,13 +105,13 @@ export default function CartItem({ item, onQuantityChange, onRemove, isUpdating:
   // ✅ Handle remove item with backend
   const handleRemove = async () => {
     if (!confirm('Remove this item from cart?')) return;
-    
+
     // If parent provides handler, use it
     if (onRemove) {
       await onRemove(item.id);
       return;
     }
-    
+
     // Otherwise handle internally
     try {
       setInternalIsUpdating(true);
@@ -124,23 +137,31 @@ export default function CartItem({ item, onQuantityChange, onRemove, isUpdating:
   }
 
   return (
-    <div className="flex gap-4 border-b pb-4 relative">
+    <div className="flex gap-4 p-4 rounded-[var(--radius-md)] bg-[var(--bg-surface)] border border-[var(--border-default)] relative transition-all duration-300 hover:border-[var(--border-strong)]"
+      style={{
+        borderColor: typeof item.maxQuantity === 'number' && item.quantity > item.maxQuantity ? 'rgba(224, 82, 82, 0.4)' : undefined
+      }}
+    >
       {/* Loading Overlay */}
       {isUpdating && (
-        <div className="absolute inset-0 bg-white/70 flex items-center justify-center z-10 rounded">
-          <Loader2 className="animate-spin text-gray-400" size={24} />
+        <div
+          className="absolute inset-0 flex items-center justify-center z-10 rounded-[var(--radius-md)] bg-[var(--bg-depth)]/80 backdrop-blur-[2px]"
+        >
+          <Loader2 className="animate-spin text-[var(--cyan)]" size={24} />
         </div>
       )}
 
       {/* Product Image */}
-      <div 
-        className="relative w-20 h-20 flex-shrink-0 cursor-pointer"
+      <div
+        className="relative w-20 h-20 flex-shrink-0 cursor-pointer overflow-hidden rounded-[var(--radius-sm)] border border-[var(--border-default)]"
         onClick={handleNavigateToProduct}
       >
-        <img
+        <Image
           src={item.image || '/placeholder-product.png'}
           alt={item.name}
-          className="w-full h-full object-cover rounded hover:opacity-80 transition-opacity"
+          fill
+          sizes="(max-width: 768px) 80px, 80px"
+          className="object-cover hover:scale-110 transition-transform duration-500"
         />
       </div>
 
@@ -148,80 +169,91 @@ export default function CartItem({ item, onQuantityChange, onRemove, isUpdating:
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between mb-2">
           <div className="flex-1 min-w-0 pr-2">
-            <h3 
-              className="text-sm font-semibold text-gray-900 line-clamp-2 cursor-pointer hover:text-teal-600 transition-colors"
+            <h3
+              className="text-[14px] font-medium line-clamp-2 cursor-pointer transition-colors text-[var(--text-primary)] hover:text-[var(--cyan)]"
+              style={{ fontFamily: "'Poppins', sans-serif" }}
               onClick={handleNavigateToProduct}
             >
               {item.name}
             </h3>
-            
+
             {/* Variant Info */}
             {(item.color || item.size) && (
-              <p className="text-xs text-gray-500 mt-1">
-                {item.color && <span>Color: {item.color}</span>}
-                {item.color && item.size && <span> | </span>}
-                {item.size && <span>Size: {item.size}</span>}
+              <p className="text-[11px] mt-1 text-[var(--text-muted)] uppercase tracking-tight" style={{ fontFamily: "'Poppins', sans-serif" }}>
+                {item.color && <span>{item.color}</span>}
+                {item.color && item.size && <span className="mx-1 opacity-30">|</span>}
+                {item.size && <span>{item.size}</span>}
               </p>
             )}
-            
+
             {item.sku && (
-              <p className="text-xs text-gray-500 mt-1">SKU: {item.sku}</p>
+              <p className="text-[10px] mt-0.5 text-[var(--text-muted)] uppercase tracking-tight opacity-60" style={{ fontFamily: "'Poppins', sans-serif" }}>{item.sku}</p>
             )}
+
+            {/* Stock Warning (5.5) */}
+            {typeof item.maxQuantity === 'number' && item.quantity > item.maxQuantity ? (
+              <div className="mt-2">
+                <p className="text-[12px] font-medium text-[var(--status-danger)]">
+                  ⚠️ Only {item.maxQuantity} available in stock
+                </p>
+              </div>
+            ) : typeof item.maxQuantity === 'number' && item.maxQuantity > 0 && item.maxQuantity < 5 ? (
+              <div className="mt-2">
+                <p className="text-[12px] font-medium text-[var(--gold-bright)]">
+                  Only {item.maxQuantity} remaining
+                </p>
+              </div>
+            ) : null}
           </div>
           <button
             onClick={handleRemove}
             disabled={isUpdating}
-            className="p-1 hover:bg-gray-100 rounded-full transition-colors flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-1 rounded-full text-[var(--text-muted)] hover:text-[var(--status-danger)] hover:bg-[var(--status-danger)]/10 transition-all flex-shrink-0 disabled:opacity-50"
             title="Remove from cart"
           >
-            <X size={16} className="text-gray-500" />
+            <X size={16} />
           </button>
         </div>
 
         {/* Quantity and Price */}
         <div className="flex items-center justify-between">
-          {/* Quantity Controls */}
-          <div className="flex items-center border border-gray-300 rounded">
+          {/* Quantity Controls (5.2) */}
+          {/* Quantity Controls (5.2) */}
+          <div className="flex items-center rounded-[var(--radius-sm)] overflow-hidden bg-[var(--bg-lifted)] border border-[var(--border-strong)]">
             <button
               onClick={() => handleQuantityChange(-1)}
               disabled={isUpdating || item.quantity <= 1}
-              className="p-1.5 hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-8 h-8 flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--border-default)] transition-all disabled:opacity-30"
             >
-              <Minus size={14} />
+              <Minus size={12} />
             </button>
-            <input
-              type="number"
-              value={item.quantity}
-              onChange={(e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val) && val >= 1 && !isUpdating) {
-                  handleInputChange(val);
-                }
-              }}
-              disabled={isUpdating}
-              className="w-12 text-center border-x border-gray-300 outline-none text-sm font-semibold disabled:bg-gray-50 disabled:cursor-not-allowed"
-              min="1"
-            />
+            <div className="w-8 text-center text-[13px] font-semibold text-[var(--text-primary)]">
+              {item.quantity}
+            </div>
             <button
               onClick={() => handleQuantityChange(1)}
-              disabled={isUpdating}
-              className="p-1.5 hover:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isUpdating || (typeof item.maxQuantity === 'number' && item.quantity >= item.maxQuantity)}
+              className="w-8 h-8 flex items-center justify-center text-[var(--text-primary)] hover:bg-[var(--border-default)] transition-all disabled:opacity-30"
             >
-              <Plus size={14} />
+              <Plus size={12} />
             </button>
           </div>
 
           {/* Price */}
-          <div className="text-right">
-            <p className="text-xs text-gray-500 mb-1">
-              ৳{price.toLocaleString('en-BD', { minimumFractionDigits: 2 })} each
+          <div className="text-right flex flex-col items-end">
+            <p className="text-[14px] font-bold text-[var(--gold)]" style={{ fontFamily: "'Poppins', sans-serif" }}>
+              {formatBDT(activePrice * item.quantity)}
             </p>
-            <p className="text-sm font-bold text-red-700">
-              ৳{itemTotal.toLocaleString('en-BD', { minimumFractionDigits: 2 })}
-            </p>
+            {discountPercent > 0 && originalPrice > 0 && (
+              <p className="text-[12px] line-through text-[var(--text-muted)] opacity-60" style={{ fontFamily: "'Poppins', sans-serif" }}>
+                {formatBDT(originalPrice * item.quantity)}
+              </p>
+            )}
           </div>
         </div>
       </div>
     </div>
   );
-}
+});
+
+export default CartItem;

@@ -1,33 +1,25 @@
 'use client';
-
 import { useState, useEffect, useMemo } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import { X, Plus, Eye, Check, Package, FileText, Loader2, AlertCircle, ChevronDown, ChevronUp, Edit2 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import Link from 'next/link';
 import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
-import { renderBarcodeLabelBase64 } from '@/components/MultiBarcodePrinter';
-import { barcodeTrackingService } from '@/services/barcodeTrackingService';
-import purchaseOrderService, { 
-  PurchaseOrder, 
+import purchaseOrderService, {
+  PurchaseOrder,
   ReceiveItemData,
-  PurchaseOrderFilters 
+  PurchaseOrderFilters
 } from '@/services/purchase-order.service';
 import { vendorService, Vendor } from '@/services/vendorService';
 import { productService, Product } from '@/services/productService';
-
+import categoryService, { CategoryTree } from '@/services/categoryService';
+import AccessControl from '@/components/AccessControl';
+import { useAuth } from '@/contexts/AuthContext';
 // --- Image helpers (same approach as Orders page) ---
 const getApiBaseUrl = () => {
   const raw = process.env.NEXT_PUBLIC_API_URL || '';
   return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
 };
-
-// For PDF endpoints we need the API base WITH /api
-const getApiUrlBaseWithApi = () => {
-  const raw = process.env.NEXT_PUBLIC_API_URL || '';
-  return raw.replace(/\/$/, '');
-};
-
 const toPublicImageUrl = (imagePath?: string | null) => {
   if (!imagePath) return null;
   const p = String(imagePath);
@@ -37,7 +29,6 @@ const toPublicImageUrl = (imagePath?: string | null) => {
   if (p.startsWith('storage/')) return `${getApiBaseUrl()}/${p}`;
   return `${getApiBaseUrl()}/storage/${p.replace(/^\//, '')}`;
 };
-
 const pickPOItemImage = (item: any): string | null => {
   const direct =
     item?.product_image ||
@@ -48,41 +39,33 @@ const pickPOItemImage = (item: any): string | null => {
     item?.product?.image_path ||
     item?.product?.image ||
     item?.product?.thumbnail;
-
   if (direct) return toPublicImageUrl(direct);
-
   const imgs: any[] = item?.product?.images || item?.images || item?.product_images || item?.product?.product_images || [];
   if (Array.isArray(imgs) && imgs.length > 0) {
     const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
     const path = primary?.image_url || primary?.image_path || primary?.url;
     return toPublicImageUrl(path);
   }
-
   return null;
 };
-
 const pickProductImage = (p: any): string | null => {
   if (!p) return null;
   const direct = p?.image_url || p?.image_path || p?.image || p?.thumbnail;
   if (direct) return toPublicImageUrl(direct);
-
   const imgs: any[] = p?.images || p?.product_images || [];
   if (Array.isArray(imgs) && imgs.length > 0) {
     const primary = imgs.find((x) => x?.is_primary && x?.is_active) || imgs.find((x) => x?.is_primary) || imgs[0];
     const path = primary?.image_url || primary?.image_path || primary?.url || primary?.image;
     return toPublicImageUrl(path);
   }
-
   return null;
 };
-
 // Utility function to safely format currency
 const formatCurrency = (value: any): string => {
   if (value === null || value === undefined || value === '') return '0.00';
   const numValue = typeof value === 'string' ? parseFloat(value) : value;
   return isNaN(numValue) ? '0.00' : numValue.toFixed(2);
 };
-
 const formatDate = (dateString: string) => {
   if (!dateString) return 'N/A';
   return new Date(dateString).toLocaleDateString('en-GB', {
@@ -91,23 +74,21 @@ const formatDate = (dateString: string) => {
     year: 'numeric'
   });
 };
-
 const Modal = ({ isOpen, onClose, title, children, size = 'md' }: {
   isOpen: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'md' | 'lg' | 'xl' | '2xl';
+  size?: 'md' | 'lg' | 'xl' | '2xl' | '3xl';
 }) => {
   if (!isOpen) return null;
-
   const sizeClasses = {
     'md': 'max-w-md',
     'lg': 'max-w-lg',
-    'xl': 'max-w-4xl',
-    '2xl': 'max-w-6xl'
+    'xl': 'max-w-6xl',
+    '2xl': 'max-w-[1400px]',
+    '3xl': 'max-w-[95vw]'
   };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm overflow-y-auto p-4">
       <div className={`bg-white dark:bg-gray-800 rounded-xl shadow-xl w-full ${sizeClasses[size]} max-h-[90vh] overflow-y-auto`}>
@@ -127,16 +108,13 @@ const Modal = ({ isOpen, onClose, title, children, size = 'md' }: {
     </div>
   );
 };
-
 const Alert = ({ type, message }: { type: 'success' | 'error'; message: string }) => (
-  <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${
-    type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-  }`}>
+  <div className={`fixed top-4 right-4 z-50 flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+    }`}>
     <AlertCircle className="w-5 h-5" />
     <span>{message}</span>
   </div>
 );
-
 const StatusBadge = ({ status }: { status: string }) => {
   const colors = {
     draft: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300',
@@ -145,41 +123,34 @@ const StatusBadge = ({ status }: { status: string }) => {
     received: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400',
     cancelled: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
   };
-
   const color = colors[status as keyof typeof colors] || colors.draft;
-
   return (
     <span className={`px-2 py-1 text-xs font-medium rounded-full ${color}`}>
       {status.replace('_', ' ').toUpperCase()}
     </span>
   );
 };
-
 const PaymentStatusBadge = ({ status }: { status: string }) => {
   const colors = {
     unpaid: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400',
     partially_paid: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400',
     paid: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
   };
-
   const color = colors[status as keyof typeof colors] || colors.unpaid;
-
   return (
     <span className={`px-2 py-1 text-xs font-medium rounded-full ${color}`}>
       {status.replace('_', ' ').toUpperCase()}
     </span>
   );
 };
-
 export default function PurchaseOrdersPage() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
+  const { isRole } = useAuth();
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
   // ✅ Image preview (same UX as Orders page)
   const [imagePreview, setImagePreview] = useState<{ url: string; name: string } | null>(null);
-
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [pagination, setPagination] = useState<{
     current_page: number;
@@ -192,42 +163,34 @@ export default function PurchaseOrdersPage() {
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [expandedPO, setExpandedPO] = useState<number | null>(null);
-
   // ✅ Barcode Center (Print ALL unit-level barcodes for a PO)
   const poBarcodeSources: BatchBarcodeSource[] = useMemo(() => {
     const items = (selectedPO?.items ?? []) as any[];
     if (!Array.isArray(items) || items.length === 0) return [];
-
     const toNumber = (v: any) => {
       if (v === null || v === undefined || v === '') return 0;
       const n = typeof v === 'string' ? Number(String(v).replace(/,/g, '')) : Number(v);
       return Number.isFinite(n) ? n : 0;
     };
-
     const out: BatchBarcodeSource[] = [];
-
     for (const it of items) {
       // Backend may return different shapes; keep it defensive.
       const pb = it?.productBatch || it?.product_batch || it?.batch || it?.product_batch_data;
       const batchId = pb?.id;
       if (!batchId) continue;
-
       const productName =
         it?.product_name ||
         it?.product?.name ||
         pb?.product?.name ||
         it?.product_sku ||
         'Product';
-
-      // Prefer sell price if provided by PO receive flow; otherwise fallback.
-      const price = toNumber(it?.unit_sell_price ?? pb?.sell_price ?? it?.unit_cost ?? 0);
-
+      // Prefer sell price if provided by PO receive flow; otherwise fallback (avoid leaking cost to moderators).
+      const price = toNumber(it?.unit_sell_price ?? pb?.sell_price ?? (isRole(['online-moderator']) ? 0 : it?.unit_cost) ?? 0);
       const fallbackCode =
         pb?.barcode?.barcode ||
         pb?.barcode ||
         pb?.primary_barcode ||
         pb?.batch_number;
-
       out.push({
         batchId: Number(batchId),
         productName: String(productName),
@@ -235,140 +198,16 @@ export default function PurchaseOrdersPage() {
         fallbackCode: fallbackCode ? String(fallbackCode) : undefined,
       });
     }
-
     return out;
   }, [selectedPO]);
-
-  // ─────────────────────────────────────────────────────────
-  // CSV download for a PO
-  // ─────────────────────────────────────────────────────────
-  const downloadPoCsv = async (po: PurchaseOrder) => {
-    const api = getApiUrlBaseWithApi();
-    if (!api || !po.id) return;
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    try {
-      const res = await fetch(`${api}/purchase-orders/${po.id}/csv`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!res.ok) throw new Error('Failed to download CSV');
-      const blob = await res.blob();
-      const cd = res.headers.get('content-disposition') || '';
-      const m = cd.match(/filename="?([^";]+)"?/i);
-      const filename = m?.[1] || `${po.po_number || `PO-${po.id}`}-detail.csv`;
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setAlert({ type: 'error', message: e?.message || 'Failed to download CSV' });
-    }
-  };
-
-  // ✅ Per-batch / per-barcode printing UI helpers (inside PO details modal)
-  const [expandedBatchIds, setExpandedBatchIds] = useState<Record<number, boolean>>({});
-  const [batchBarcodeCache, setBatchBarcodeCache] = useState<
-    Record<number, { loading: boolean; codes: string[]; error?: string }>
-  >({});
-
-  const toggleBatchBarcodes = async (source: BatchBarcodeSource) => {
-    const batchId = Number(source.batchId);
-    if (!batchId) return;
-
-    setExpandedBatchIds((prev) => ({ ...prev, [batchId]: !prev[batchId] }));
-
-    // If we're collapsing, no need to fetch
-    const willExpand = !expandedBatchIds[batchId];
-    if (!willExpand) return;
-
-    // Already loaded
-    if (batchBarcodeCache[batchId]?.codes?.length) return;
-    if (batchBarcodeCache[batchId]?.loading) return;
-
-    setBatchBarcodeCache((prev) => ({
-      ...prev,
-      [batchId]: { loading: true, codes: [], error: undefined },
-    }));
-
-    try {
-      const res = await barcodeTrackingService.getBatchBarcodes(batchId);
-      const codes = (res.data?.barcodes || [])
-        .filter((b) => b.is_active)
-        .map((b) => String(b.barcode))
-        .filter(Boolean);
-
-      // Fallback to primary barcode if no per-unit barcodes exist
-      const finalCodes = codes.length ? codes : source.fallbackCode ? [String(source.fallbackCode)] : [];
-
-      setBatchBarcodeCache((prev) => ({
-        ...prev,
-        [batchId]: { loading: false, codes: finalCodes, error: undefined },
-      }));
-    } catch (e: any) {
-      console.error('Failed to fetch batch barcodes:', batchId, e);
-      setBatchBarcodeCache((prev) => ({
-        ...prev,
-        [batchId]: { loading: false, codes: [], error: e?.message || 'Failed to load barcodes' },
-      }));
-    }
-  };
-
-  const quickPrintSingleBarcode = async (params: { barcode: string; productName: string; price: number }) => {
-    try {
-      const qz = (window as any)?.qz;
-      if (!qz) throw new Error('QZ Tray not available');
-
-      if (!(await qz.websocket.isActive())) {
-        await qz.websocket.connect();
-      }
-
-      // Pick default printer (fallback to first available)
-      let printer: string | null = null;
-      try {
-        printer = await qz.printers.getDefault();
-      } catch (e) {
-        const list = await qz.printers.find();
-        if (Array.isArray(list) && list.length) printer = list[0];
-      }
-      if (!printer) throw new Error('No printer found. Set a default printer and try again.');
-
-      const LABEL_W_MM = 39;
-      const LABEL_H_MM = 25;
-      const DPI = 300;
-      const mmToIn = (mm: number) => mm / 25.4;
-
-      const base64 = await renderBarcodeLabelBase64({
-        code: params.barcode,
-        productName: params.productName,
-        price: params.price,
-        dpi: DPI,
-      });
-
-      const config = qz.configs.create(printer, {
-        units: 'in',
-        size: { width: mmToIn(LABEL_W_MM), height: mmToIn(LABEL_H_MM) },
-        margins: { top: 0, right: 0, bottom: 0, left: 0 },
-        density: DPI,
-        colorType: 'blackwhite',
-        interpolation: 'nearest-neighbor',
-        scaleContent: false,
-      });
-
-      const data: any[] = [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }];
-      await qz.print(config, data);
-    } catch (err: any) {
-      console.error('Single barcode print failed:', err);
-      alert(err?.message || 'Failed to print barcode');
-    }
-  };
-
   // Modals
   const [showViewModal, setShowViewModal] = useState(false);
   const [showReceiveModal, setShowReceiveModal] = useState(false);
-
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteStep, setDeleteStep] = useState(1);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deletePassword, setDeletePassword] = useState('');
+  const [poToDelete, setPoToDelete] = useState<PurchaseOrder | null>(null);
   // Filters
   const [filters, setFilters] = useState<PurchaseOrderFilters>({
     vendor_id: undefined,
@@ -380,8 +219,6 @@ export default function PurchaseOrdersPage() {
     per_page: 50,
     page: 1,
   });
-
-
   // Receive form
   const [receiveForm, setReceiveForm] = useState<{
     items: Array<{
@@ -394,7 +231,6 @@ export default function PurchaseOrdersPage() {
   }>({
     items: []
   });
-
   // Edit Purchase Order
   const [showEditModal, setShowEditModal] = useState(false);
   const [editPO, setEditPO] = useState<PurchaseOrder | null>(null);
@@ -427,12 +263,41 @@ export default function PurchaseOrdersPage() {
     items: [],
     new_items: [],
   });
-
-  // Add more products in PO Edit
-  const [editProductSearch, setEditProductSearch] = useState('');
+  const [editBulkQty, setEditBulkQty] = useState('');
+  const [editBulkCost, setEditBulkCost] = useState('');
+  const [editBulkSell, setEditBulkSell] = useState('');
+  const applyEditBulk = () => {
+    if (!editBulkQty && !editBulkCost && !editBulkSell) return;
+    setEditForm((prev) => ({
+      ...prev,
+      items: prev.items.map((it) => ({
+        ...it,
+        quantity_ordered: editBulkQty || it.quantity_ordered,
+        unit_cost: editBulkCost || it.unit_cost,
+        unit_sell_price: editBulkSell || it.unit_sell_price,
+      })),
+      new_items: prev.new_items.map((it) => ({
+        ...it,
+        quantity_ordered: editBulkQty || it.quantity_ordered,
+        unit_cost: editBulkCost || it.unit_cost,
+        unit_sell_price: editBulkSell || it.unit_sell_price,
+      })),
+    }));
+    setEditBulkQty('');
+    setEditBulkCost('');
+    setEditBulkSell('');
+  };
+  // Add more products in PO Edit — category-based browser
+  const [categoryList, setCategoryList] = useState<CategoryTree[]>([]);
+  const [categoryListLoading, setCategoryListLoading] = useState(false);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
   const [editProductResults, setEditProductResults] = useState<Product[]>([]);
   const [editProductSearching, setEditProductSearching] = useState(false);
-
+  const [productPage, setProductPage] = useState(1);
+  const [productTotalPages, setProductTotalPages] = useState(1);
+  const [productLoadingMore, setProductLoadingMore] = useState(false);
+  const [editProductSearch, setEditProductSearch] = useState('');
+  const [expandedSkuGroups, setExpandedSkuGroups] = useState<Set<string>>(new Set());
   const [editOriginal, setEditOriginal] = useState<{
     tax_amount: number;
     discount_amount: number;
@@ -440,66 +305,82 @@ export default function PurchaseOrdersPage() {
     notes: string;
     items: Record<number, { quantity_ordered: number; unit_cost: number; unit_sell_price: number }>;
   } | null>(null);
-
-
   useEffect(() => {
     loadPurchaseOrders();
     loadVendors();
   }, []);
-
   useEffect(() => {
     loadPurchaseOrders();
   }, [filters.vendor_id, filters.status, filters.payment_status, filters.page, filters.per_page]);
-
-  // 🔎 Live product search inside PO edit (debounced)
+  // Load flat category list when edit modal opens
   useEffect(() => {
-    if (!showEditModal || !editPO) return;
-
-    const q = editProductSearch.trim();
-    if (!q) {
+    if (!showEditModal) return;
+    setCategoryListLoading(true);
+    categoryService.getTree(true)
+      .then((tree) => {
+        const flat: CategoryTree[] = [];
+        const flatten = (nodes: CategoryTree[], depth = 0) => {
+          nodes.forEach((n) => {
+            flat.push({ ...n, level: depth });
+            if (n.children?.length) flatten(n.children, depth + 1);
+          });
+        };
+        flatten(tree || []);
+        setCategoryList(flat);
+      })
+      .catch(() => setCategoryList([]))
+      .finally(() => setCategoryListLoading(false));
+  }, [showEditModal]);
+  // Load products when category or search query changes
+  useEffect(() => {
+    if (!showEditModal) return;
+    if (!selectedCategoryId && !editProductSearch.trim()) {
       setEditProductResults([]);
       return;
     }
-
     let cancelled = false;
-    const t = setTimeout(async () => {
+    setEditProductSearching(true);
+    const run = async () => {
       try {
-        setEditProductSearching(true);
-        const res = await productService.advancedSearch({
-          query: q,
-          vendor_id: editPO.vendor_id,
+        const params: any = {
+          per_page: 50,
+          page: 1,
           is_archived: false,
-          enable_fuzzy: true,
-          fuzzy_threshold: 60,
-          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-          per_page: 15,
-        });
-        if (!cancelled) setEditProductResults(Array.isArray(res?.items) ? res.items : []);
+        };
+        if (selectedCategoryId) params.category_id = selectedCategoryId;
+        if (editProductSearch.trim()) params.search = editProductSearch.trim();
+        if (params.search) params.per_page = 20; // smaller batch for search
+        const res = await productService.getAll(params);
+        if (!cancelled) {
+          setEditProductResults(Array.isArray(res?.data) ? res.data : []);
+          setProductPage(1);
+          setProductTotalPages(res?.last_page ?? 1);
+          setExpandedSkuGroups(new Set());
+        }
       } catch {
         if (!cancelled) setEditProductResults([]);
       } finally {
         if (!cancelled) setEditProductSearching(false);
       }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
     };
-  }, [editProductSearch, showEditModal, editPO]);
-
+    if (editProductSearch.trim()) {
+      const t = setTimeout(run, 250);
+      return () => { cancelled = true; clearTimeout(t); };
+    } else {
+      run();
+      return () => { cancelled = true; };
+    }
+  }, [showEditModal, selectedCategoryId, editProductSearch]);
   const showAlert = (type: 'success' | 'error', message: string) => {
     setAlert({ type, message });
     setTimeout(() => setAlert(null), 3000);
   };
-
   const updateFilters = (
-  partial: Partial<PurchaseOrderFilters>,
-  opts?: { resetPage?: boolean }
-) => {
-  const resetPage = opts?.resetPage ?? true;
-
-  setFilters((prev) => ({
+    partial: Partial<PurchaseOrderFilters>,
+    opts?: { resetPage?: boolean }
+  ) => {
+    const resetPage = opts?.resetPage ?? true;
+    setFilters((prev) => ({
       ...prev,
       ...partial,
       // reset to page 1 by default when changing filters,
@@ -507,13 +388,10 @@ export default function PurchaseOrdersPage() {
       ...(resetPage && !('page' in partial) ? { page: 1 } : {}),
     }));
   };
-
-
   const loadPurchaseOrders = async () => {
     try {
       setLoading(true);
       const response = await purchaseOrderService.getAll(filters);
-
       // Support both paginated and non-paginated shapes
       const paginated = (response as any)?.data && !Array.isArray((response as any).data) ? (response as any).data : null;
       const list = Array.isArray(paginated?.data)
@@ -525,9 +403,7 @@ export default function PurchaseOrdersPage() {
             : Array.isArray((response as any)?.data?.data)
               ? (response as any).data.data
               : [];
-
       setPurchaseOrders(Array.isArray(list) ? list : []);
-
       // Try to keep pagination meta if available
       const meta = paginated;
       if (meta && typeof (meta as any).current_page === 'number') {
@@ -558,7 +434,6 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
-
   const loadVendors = async () => {
     try {
       const data = await vendorService.getAll({ is_active: true });
@@ -568,28 +443,22 @@ export default function PurchaseOrdersPage() {
       setVendors([]);
     }
   };
-
   const handleViewPO = async (po: PurchaseOrder) => {
     try {
       setLoading(true);
       const res = await purchaseOrderService.getById(po.id);
-
       // ✅ unwrap ApiResponse
       const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
-
       setSelectedPO(fullPO);
       setShowViewModal(true);
-    }  catch (error: any) {
+    } catch (error: any) {
       showAlert('error', 'Failed to load purchase order details');
     } finally {
       setLoading(false);
     }
   };
-
-
   const handleApprovePO = async (id: number) => {
     if (!confirm('Are you sure you want to approve this purchase order?')) return;
-
     try {
       setLoading(true);
       await purchaseOrderService.approve(id);
@@ -601,121 +470,102 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
-
   const openReceiveModal = async (po: PurchaseOrder) => {
-  try {
-    setLoading(true);
-    const res = await purchaseOrderService.getById(po.id);
-
-    const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
-    setSelectedPO(fullPO);
-
-    const items = (fullPO.items ?? []).map((item: any) => {
-      const ordered = Number(item.quantity_ordered ?? 0);
-      const received = Number(item.quantity_received ?? 0);
-      const remaining = Math.max(0, ordered - received);
-
-      return {
-        item_id: item.id || 0,
-        quantity_received: String(remaining),
-        batch_number: '',
-        manufactured_date: '',
-        expiry_date: '',
-      };
-    });
-
-    setReceiveForm({ items });
-    setShowReceiveModal(true);
-  } catch (error: any) {
-    showAlert('error', 'Failed to load purchase order details');
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-  const openEditModal = async (po: PurchaseOrder) => {
-  try {
-    setLoading(true);
-
-    const res = await purchaseOrderService.getById(po.id);
-    const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
-
-    const items = (fullPO.items ?? []).map((it: any) => ({
-      id: it.id,
-      product_label: it.product?.name
-        ? `${it.product.name}${it.product.sku ? ` (${it.product.sku})` : ''}`
-        : `Item #${it.id}`,
-      quantity_ordered: String(it.quantity_ordered ?? 0),
-      unit_cost: String(it.unit_cost ?? 0),
-      unit_sell_price: String(it.unit_sell_price ?? 0),
-    }));
-
-    const originalItems: Record<number, { quantity_ordered: number; unit_cost: number; unit_sell_price: number }> = {};
-    (fullPO.items ?? []).forEach((it: any) => {
-      originalItems[it.id] = {
-        quantity_ordered: Number(it.quantity_ordered ?? 0),
-        unit_cost: Number(it.unit_cost ?? 0),
-        unit_sell_price: Number(it.unit_sell_price ?? 0),
-      };
-    });
-
-    setEditPO(fullPO);
-    setEditForm({
-      tax_amount: String((fullPO as any).tax_amount ?? 0),
-      discount_amount: String((fullPO as any).discount_amount ?? 0),
-      shipping_cost: String((fullPO as any).shipping_cost ?? 0),
-      notes: String((fullPO as any).notes ?? ''),
-      items,
-      new_items: [],
-    });
-
-    setEditOriginal({
-      tax_amount: Number((fullPO as any).tax_amount ?? 0),
-      discount_amount: Number((fullPO as any).discount_amount ?? 0),
-      shipping_cost: Number((fullPO as any).shipping_cost ?? 0),
-      notes: String((fullPO as any).notes ?? ''),
-      items: originalItems,
-    });
-
-    setEditProductSearch('');
-    setEditProductResults([]);
-
-    setShowEditModal(true);
-  } catch (error) {
-    console.error('Error loading PO for edit:', error);
-    showAlert('error', 'Failed to load purchase order for editing');
-  } finally {
-    setLoading(false);
-  }
-};
-
-
-  const handleSaveEditPO = async () => {
-    if (!editPO) return;
-
     try {
       setLoading(true);
-
+      const res = await purchaseOrderService.getById(po.id);
+      const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
+      setSelectedPO(fullPO);
+      const items = (fullPO.items ?? []).map((item: any) => {
+        const ordered = Number(item.quantity_ordered ?? 0);
+        const received = Number(item.quantity_received ?? 0);
+        const remaining = Math.max(0, ordered - received);
+        return {
+          item_id: item.id || 0,
+          quantity_received: String(remaining),
+          batch_number: '',
+          manufactured_date: '',
+          expiry_date: '',
+        };
+      });
+      setReceiveForm({ items });
+      setShowReceiveModal(true);
+    } catch (error: any) {
+      showAlert('error', 'Failed to load purchase order details');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const openEditModal = async (po: PurchaseOrder) => {
+    try {
+      setLoading(true);
+      const res = await purchaseOrderService.getById(po.id);
+      const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data ?? po;
+      const items = (fullPO.items ?? []).map((it: any) => ({
+        id: it.id,
+        product_label: it.product?.name || `Item #${it.id}`,
+        quantity_ordered: String(it.quantity_ordered ?? 0),
+        unit_cost: String(it.unit_cost ?? 0),
+        unit_sell_price: String(it.unit_sell_price ?? 0),
+      }));
+      const originalItems: Record<number, { quantity_ordered: number; unit_cost: number; unit_sell_price: number }> = {};
+      (fullPO.items ?? []).forEach((it: any) => {
+        originalItems[it.id] = {
+          quantity_ordered: Number(it.quantity_ordered ?? 0),
+          unit_cost: Number(it.unit_cost ?? 0),
+          unit_sell_price: Number(it.unit_sell_price ?? 0),
+        };
+      });
+      setEditPO(fullPO);
+      setEditForm({
+        tax_amount: String((fullPO as any).tax_amount ?? 0),
+        discount_amount: String((fullPO as any).discount_amount ?? 0),
+        shipping_cost: String((fullPO as any).shipping_cost ?? 0),
+        notes: String((fullPO as any).notes ?? ''),
+        items,
+        new_items: [],
+      });
+      setEditOriginal({
+        tax_amount: Number((fullPO as any).tax_amount ?? 0),
+        discount_amount: Number((fullPO as any).discount_amount ?? 0),
+        shipping_cost: Number((fullPO as any).shipping_cost ?? 0),
+        notes: String((fullPO as any).notes ?? ''),
+        items: originalItems,
+      });
+      setEditProductSearch('');
+      setEditProductResults([]);
+      setExpandedSkuGroups(new Set());
+      setSelectedCategoryId(null);
+      setProductPage(1);
+      setProductTotalPages(1);
+      setShowEditModal(true);
+    } catch (error) {
+      console.error('Error loading PO for edit:', error);
+      showAlert('error', 'Failed to load purchase order for editing');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const handleSaveEditPO = async () => {
+    if (!editPO) return;
+    try {
+      setLoading(true);
       const tax = parseFloat(editForm.tax_amount || '0') || 0;
       const discount = parseFloat(editForm.discount_amount || '0') || 0;
       const shipping = parseFloat(editForm.shipping_cost || '0') || 0;
       const notes = String(editForm.notes || '');
-
       await purchaseOrderService.update(editPO.id, {
         tax_amount: tax,
         discount_amount: discount,
         shipping_cost: shipping,
         notes,
       });
-
       if (editOriginal) {
         for (const it of editForm.items) {
           const qty = parseInt(it.quantity_ordered || '0', 10) || 0;
           const cost = parseFloat(it.unit_cost || '0') || 0;
           const sell = parseFloat(it.unit_sell_price || '0') || 0;
           const orig = editOriginal.items[it.id];
-
           if (!orig || orig.quantity_ordered !== qty || Number(orig.unit_cost) !== cost || Number(orig.unit_sell_price) !== sell) {
             await purchaseOrderService.updateItem(editPO.id, it.id, {
               quantity_ordered: qty,
@@ -725,19 +575,15 @@ export default function PurchaseOrdersPage() {
           }
         }
       }
-
       // Add any newly appended products
       if (Array.isArray(editForm.new_items) && editForm.new_items.length > 0) {
         for (const ni of editForm.new_items) {
           const pid = Number(ni.product_id);
           if (!pid) continue;
-
           const qty = parseInt(ni.quantity_ordered || '0', 10) || 0;
           if (qty <= 0) continue;
-
           const cost = parseFloat(ni.unit_cost || '0') || 0;
           const sell = parseFloat(ni.unit_sell_price || '0') || 0;
-
           await purchaseOrderService.addItem(editPO.id, {
             product_id: pid,
             quantity_ordered: qty,
@@ -746,7 +592,6 @@ export default function PurchaseOrdersPage() {
           });
         }
       }
-
       showAlert('success', 'Purchase order updated successfully');
       setShowEditModal(false);
       setEditPO(null);
@@ -758,17 +603,36 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
-
+  const loadMoreProducts = async () => {
+    if (productLoadingMore || productPage >= productTotalPages) return;
+    const nextPage = productPage + 1;
+    setProductLoadingMore(true);
+    try {
+      const params: any = {
+        per_page: 50,
+        page: nextPage,
+        is_archived: false,
+      };
+      if (selectedCategoryId) params.category_id = selectedCategoryId;
+      if (editProductSearch.trim()) params.search = editProductSearch.trim();
+      const res = await productService.getAll(params);
+      setEditProductResults((prev) => [...prev, ...(Array.isArray(res?.data) ? res.data : [])]);
+      setProductPage(nextPage);
+      setProductTotalPages(res?.last_page ?? 1);
+    } catch {
+      // silent
+    } finally {
+      setProductLoadingMore(false);
+    }
+  };
   const appendProductToEdit = (p: Product) => {
     if (!p || !p.id) return;
-
     // Prevent adding duplicates (already in PO items)
     const existing = (editPO?.items ?? []).some((it: any) => Number(it?.product_id) === Number(p.id));
     if (existing) {
       showAlert('error', 'This product is already in the PO');
       return;
     }
-
     const foundIdx = editForm.new_items.findIndex((x) => Number(x.product_id) === Number(p.id));
     if (foundIdx >= 0) {
       // If already in new-items, just increment qty
@@ -782,8 +646,7 @@ export default function PurchaseOrdersPage() {
       }));
       return;
     }
-
-    const label = `${p.name}${p.sku ? ` (${p.sku})` : ''}`;
+    const label = p.name;
     setEditForm((prev) => ({
       ...prev,
       new_items: [
@@ -800,32 +663,24 @@ export default function PurchaseOrdersPage() {
       ],
     }));
   };
-
   const removeEditNewItem = (tempId: number) => {
     setEditForm((prev) => ({
       ...prev,
       new_items: prev.new_items.filter((x) => x.temp_id !== tempId),
     }));
   };
-
-
-
   const handleReceivePO = async () => {
     if (!selectedPO) return;
-
     // Validate that at least one item has quantity
-    const hasItems = receiveForm.items.some(item => 
+    const hasItems = receiveForm.items.some(item =>
       item.quantity_received && parseFloat(item.quantity_received) > 0
     );
-
     if (!hasItems) {
       showAlert('error', 'Please enter quantity received for at least one item');
       return;
     }
-
     try {
       setLoading(true);
-
       const receiveData: { items: ReceiveItemData[] } = {
         items: receiveForm.items
           .filter(item => item.quantity_received && parseFloat(item.quantity_received) > 0)
@@ -837,7 +692,6 @@ export default function PurchaseOrdersPage() {
             expiry_date: item.expiry_date || undefined
           }))
       };
-
       await purchaseOrderService.receive(selectedPO.id, receiveData);
       showAlert('success', 'Products received successfully');
       setShowReceiveModal(false);
@@ -848,17 +702,14 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
-
   const updateReceiveItem = (index: number, field: string, value: string) => {
     const newItems = [...receiveForm.items];
     newItems[index] = { ...newItems[index], [field]: value };
     setReceiveForm({ items: newItems });
   };
-
   const handleCancelPO = async (id: number) => {
     const reason = prompt('Enter cancellation reason (optional):');
     if (reason === null) return; // User clicked cancel
-
     try {
       setLoading(true);
       await purchaseOrderService.cancel(id, reason);
@@ -870,10 +721,42 @@ export default function PurchaseOrdersPage() {
       setLoading(false);
     }
   };
-
+  const openDeleteModal = (po: PurchaseOrder) => {
+    setPoToDelete(po);
+    setDeleteStep(1);
+    setDeleteConfirmText('');
+    setDeletePassword('');
+    setShowDeleteModal(true);
+  };
+  const handleDeletePO = async () => {
+    if (!poToDelete) return;
+    if (deleteStep === 1) {
+      if (deleteConfirmText.toLowerCase() !== 'yes') {
+        showAlert('error', 'Please type "yes" to confirm');
+        return;
+      }
+      setDeleteStep(2);
+      return;
+    }
+    if (!deletePassword) {
+      showAlert('error', 'Please enter your password');
+      return;
+    }
+    try {
+      setLoading(true);
+      await purchaseOrderService.delete(poToDelete.id, deletePassword);
+      showAlert('success', 'Purchase order deleted successfully');
+      setShowDeleteModal(false);
+      setPoToDelete(null);
+      loadPurchaseOrders();
+    } catch (error: any) {
+      showAlert('error', error.response?.data?.message || error.message || 'Failed to delete purchase order');
+    } finally {
+      setLoading(false);
+    }
+  };
   const getTotalOrderedQty = (items?: any[]) =>
     (Array.isArray(items) ? items : []).reduce((sum, it) => sum + Number(it?.quantity_ordered ?? 0), 0);
-
   return (
     <div className={`${darkMode ? 'dark' : ''} flex min-h-screen`}>
       <Sidebar isOpen={isSidebarOpen} setIsOpen={setIsSidebarOpen} />
@@ -883,9 +766,80 @@ export default function PurchaseOrdersPage() {
           setDarkMode={setDarkMode}
           toggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         />
-
         {alert && <Alert type={alert.type} message={alert.message} />}
-
+        {/* Delete PO Modal */}
+        <Modal
+          isOpen={showDeleteModal}
+          onClose={() => !loading && setShowDeleteModal(false)}
+          title="Delete Purchase Order"
+        >
+          <div className="space-y-4">
+            {deleteStep === 1 ? (
+              <>
+                <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg">
+                  <p className="font-medium">Warning: This action cannot be undone.</p>
+                  <p className="text-sm mt-1">
+                    Deleting this purchase order will also delete all related batches and barcodes from inventory.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Are you sure you want to delete this purchase order?
+                  </label>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                    Type <span className="font-bold">yes</span> to confirm.
+                  </p>
+                  <input
+                    type="text"
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    placeholder='Type "yes" here'
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-4 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-lg">
+                  <p className="font-medium">Identity Verification Required</p>
+                  <p className="text-sm mt-1">
+                    Please enter your account password to authorize this deletion.
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Your Password
+                  </label>
+                  <input
+                    type="password"
+                    value={deletePassword}
+                    onChange={(e) => setDeletePassword(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                    placeholder="Enter your password"
+                    autoFocus
+                  />
+                </div>
+              </>
+            )}
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                className="flex-1 px-4 py-2 text-gray-700 dark:text-gray-200 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
+                disabled={loading}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeletePO}
+                disabled={loading || (deleteStep === 1 && deleteConfirmText.toLowerCase() !== 'yes') || (deleteStep === 2 && !deletePassword)}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+                {deleteStep === 1 ? 'Next' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </Modal>
         {/* 🖼️ Product image preview (same UX as Orders > View Details) */}
         {imagePreview && (
           <div
@@ -906,39 +860,27 @@ export default function PurchaseOrdersPage() {
                   <X className="h-5 w-5 text-gray-600 dark:text-gray-300" />
                 </button>
               </div>
-
               <div className="p-3">
                 <img
                   src={imagePreview.url}
                   alt={imagePreview.name}
                   className="w-full max-h-[70vh] object-contain rounded-lg bg-white dark:bg-black"
                   onError={(e) => {
-                    e.currentTarget.src = '/placeholder-product.png';
+                    if (!e.currentTarget.src.includes('/placeholder-product.png')) {
+                      e.currentTarget.src = '/placeholder-product.png';
+                    }
                   }}
                 />
               </div>
             </div>
           </div>
         )}
-
         <main className="p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">
               Purchase Orders
             </h1>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Link
-                href="/purchase-order/reports"
-                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-black text-white hover:bg-gray-900 text-sm"
-                title="Generate PO summary PDF report"
-              >
-                <FileText className="w-4 h-4" />
-                PO Reports (PDF)
-              </Link>
-            </div>
           </div>
-
           {/* Filters */}
           <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm p-4 mb-6">
             <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -957,7 +899,6 @@ export default function PurchaseOrdersPage() {
                   ))}
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Status
@@ -975,7 +916,6 @@ export default function PurchaseOrdersPage() {
                   <option value="cancelled">Cancelled</option>
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Payment Status
@@ -991,7 +931,6 @@ export default function PurchaseOrdersPage() {
                   <option value="paid">Paid</option>
                 </select>
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Search
@@ -1005,7 +944,6 @@ export default function PurchaseOrdersPage() {
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                 />
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Per Page
@@ -1022,7 +960,6 @@ export default function PurchaseOrdersPage() {
               </div>
             </div>
           </div>
-
           {/* Purchase Orders List */}
           {loading && purchaseOrders.length === 0 ? (
             <div className="flex items-center justify-center py-12">
@@ -1052,7 +989,6 @@ export default function PurchaseOrdersPage() {
                           </p>
                         </div>
                       </div>
-
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => setExpandedPO(expandedPO === po.id ? null : po.id)}
@@ -1065,7 +1001,6 @@ export default function PurchaseOrdersPage() {
                             <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                           )}
                         </button>
-
                         <button
                           onClick={() => handleViewPO(po)}
                           className="flex items-center gap-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
@@ -1073,15 +1008,6 @@ export default function PurchaseOrdersPage() {
                         >
                           <Eye className="w-4 h-4" />
                           View
-                        </button>
-
-                        <button
-                          onClick={() => downloadPoCsv(po)}
-                          className="flex items-center gap-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
-                          title="Download PO as CSV"
-                        >
-                          <FileText className="w-4 h-4" />
-                          CSV
                         </button>
                         {po.status === 'draft' && (
                           <button
@@ -1093,19 +1019,18 @@ export default function PurchaseOrdersPage() {
                             Edit
                           </button>
                         )}
-
-
                         {po.status === 'draft' && (
-                          <button
-                            onClick={() => handleApprovePO(po.id)}
-                            className="flex items-center gap-1 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
-                            title="Approve"
-                          >
-                            <Check className="w-4 h-4" />
-                            Approve
-                          </button>
+                          <AccessControl roles={['super-admin', 'admin']}>
+                            <button
+                              onClick={() => handleApprovePO(po.id)}
+                              className="flex items-center gap-1 px-3 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+                              title="Approve"
+                            >
+                              <Check className="w-4 h-4" />
+                              Approve
+                            </button>
+                          </AccessControl>
                         )}
-
                         {(po.status === 'approved' || po.status === 'partially_received') && (
                           <button
                             onClick={() => openReceiveModal(po)}
@@ -1116,7 +1041,6 @@ export default function PurchaseOrdersPage() {
                             Receive
                           </button>
                         )}
-
                         {po.status !== 'received' && po.status !== 'cancelled' && (
                           <button
                             onClick={() => handleCancelPO(po.id)}
@@ -1127,30 +1051,43 @@ export default function PurchaseOrdersPage() {
                             Cancel
                           </button>
                         )}
+                        {po.payment_status === 'unpaid' && (
+                          <AccessControl roles={['super-admin', 'admin']}>
+                            <button
+                              onClick={() => openDeleteModal(po)}
+                              className="flex items-center gap-1 px-3 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-600 dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 rounded-lg transition-colors"
+                              title="Delete PO"
+                            >
+                              <X className="w-4 h-4" />
+                              Delete
+                            </button>
+                          </AccessControl>
+                        )}
                       </div>
                     </div>
                   </div>
-
                   {/* PO Summary */}
                   <div className="p-4 bg-gray-50 dark:bg-gray-700/30 grid grid-cols-4 gap-4">
-                    <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400">Total Amount</p>
-                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                        ৳{formatCurrency(po.total_amount)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400">Paid Amount</p>
-                      <p className="text-lg font-semibold text-green-600 dark:text-green-400">
-                        ৳{formatCurrency(po.paid_amount)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-600 dark:text-gray-400">Outstanding</p>
-                      <p className="text-lg font-semibold text-yellow-600 dark:text-yellow-400">
-                        ৳{formatCurrency(po.outstanding_amount)}
-                      </p>
-                    </div>
+                    <AccessControl roles={['super-admin', 'admin']}>
+                      <div>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">Total Amount</p>
+                        <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                          ৳{formatCurrency(po.total_amount)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">Paid Amount</p>
+                        <p className="text-lg font-semibold text-green-600 dark:text-green-400">
+                          ৳{formatCurrency(po.paid_amount)}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-600 dark:text-gray-400">Outstanding</p>
+                        <p className="text-lg font-semibold text-yellow-600 dark:text-yellow-400">
+                          ৳{formatCurrency(po.outstanding_amount)}
+                        </p>
+                      </div>
+                    </AccessControl>
                     <div>
                       <p className="text-xs text-gray-600 dark:text-gray-400">Expected Delivery</p>
                       <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
@@ -1158,7 +1095,6 @@ export default function PurchaseOrdersPage() {
                       </p>
                     </div>
                   </div>
-
                   {/* Expanded Details */}
                   {expandedPO === po.id && (
                     <div className="p-4 border-t border-gray-200 dark:border-gray-700">
@@ -1173,8 +1109,12 @@ export default function PurchaseOrdersPage() {
                               <th className="px-4 py-2 text-left text-gray-900 dark:text-gray-100">Product</th>
                               <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Qty Ordered</th>
                               <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Qty Received</th>
-                              <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Unit Cost</th>
-                              <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Total</th>
+                              <AccessControl roles={['super-admin', 'admin']}>
+                                <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Unit Cost</th>
+                              </AccessControl>
+                              <AccessControl roles={['super-admin', 'admin']}>
+                                <th className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">Total</th>
+                              </AccessControl>
                             </tr>
                           </thead>
                           <tbody>
@@ -1196,7 +1136,9 @@ export default function PurchaseOrdersPage() {
                                           alt={item.product_name || 'Product'}
                                           className="w-full h-full object-cover"
                                           onError={(e) => {
-                                            e.currentTarget.src = '/placeholder-product.png';
+                                            if (!e.currentTarget.src.includes('/placeholder-product.png')) {
+                                              e.currentTarget.src = '/placeholder-product.png';
+                                            }
                                           }}
                                         />
                                       </button>
@@ -1215,12 +1157,16 @@ export default function PurchaseOrdersPage() {
                                 <td className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">
                                   {item.quantity_received || 0}
                                 </td>
-                                <td className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">
-                                  ৳{formatCurrency(item.unit_cost)}
-                                </td>
-                                <td className="px-4 py-2 text-right font-medium text-gray-900 dark:text-gray-100">
-                                  ৳{formatCurrency((item.quantity_ordered || 0) * (item.unit_cost || 0))}
-                                </td>
+                                <AccessControl roles={['super-admin', 'admin']}>
+                                  <td className="px-4 py-2 text-right text-gray-900 dark:text-gray-100">
+                                    ৳{formatCurrency(item.unit_cost)}
+                                  </td>
+                                </AccessControl>
+                                <AccessControl roles={['super-admin', 'admin']}>
+                                  <td className="px-4 py-2 text-right font-medium text-gray-900 dark:text-gray-100">
+                                    ৳{formatCurrency((item.quantity_ordered || 0) * (item.unit_cost || 0))}
+                                  </td>
+                                </AccessControl>
                               </tr>
                             ))}
                           </tbody>
@@ -1230,14 +1176,12 @@ export default function PurchaseOrdersPage() {
                   )}
                 </div>
               ))}
-
               {purchaseOrders.length > 0 && (
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 py-3 px-2">
                   <div className="text-sm text-gray-600 dark:text-gray-400">
                     Showing <span className="font-medium text-gray-900 dark:text-gray-100">{pagination.from}</span>–<span className="font-medium text-gray-900 dark:text-gray-100">{pagination.to}</span> of{' '}
                     <span className="font-medium text-gray-900 dark:text-gray-100">{pagination.total}</span>
                   </div>
-
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -1247,11 +1191,9 @@ export default function PurchaseOrdersPage() {
                     >
                       Prev
                     </button>
-
                     <div className="text-sm text-gray-700 dark:text-gray-300 px-2">
                       Page <span className="font-semibold">{pagination.current_page}</span> / <span className="font-semibold">{pagination.last_page}</span>
                     </div>
-
                     <button
                       type="button"
                       onClick={() => updateFilters({ page: Math.min(pagination.last_page || 1, (filters.page || 1) + 1) }, { resetPage: false })}
@@ -1263,7 +1205,6 @@ export default function PurchaseOrdersPage() {
                   </div>
                 </div>
               )}
-
               {purchaseOrders.length === 0 && !loading && (
                 <div className="text-center py-12 text-gray-500 dark:text-gray-400">
                   No purchase orders found.
@@ -1273,13 +1214,12 @@ export default function PurchaseOrdersPage() {
           )}
         </main>
       </div>
-
       {/* View Modal */}
       <Modal
         isOpen={showViewModal}
         onClose={() => setShowViewModal(false)}
         title="Purchase Order Details"
-        size="lg"
+        size="3xl"
       >
         {selectedPO && (
           <div className="space-y-4">
@@ -1311,7 +1251,6 @@ export default function PurchaseOrdersPage() {
                 </p>
               </div>
             </div>
-
             {/* 📝 Notes / Terms */}
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
               <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-1">Notes</h4>
@@ -1327,7 +1266,6 @@ export default function PurchaseOrdersPage() {
                 </div>
               )}
             </div>
-
             {/* ✅ PO Barcode Center */}
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -1347,7 +1285,6 @@ export default function PurchaseOrdersPage() {
                     </p>
                   )}
                 </div>
-
                 <div className="flex items-center gap-2">
                   <GroupedAllBarcodesPrinter
                     sources={poBarcodeSources}
@@ -1357,185 +1294,111 @@ export default function PurchaseOrdersPage() {
                   />
                 </div>
               </div>
-
-              {/* ✅ Per-batch + per-unit controls */}
-              {poBarcodeSources.length > 0 ? (
-                <div className="mt-4 space-y-3">
-                  <div className="text-xs text-gray-600 dark:text-gray-400">
-                    Tip: Use <b>Print this batch</b> to print all active unit barcodes for a single received batch.
-                    Or expand a batch to <b>print any unit barcode one by one</b>.
-                  </div>
-
-                  {poBarcodeSources.map((s) => {
-                    const open = !!expandedBatchIds[s.batchId];
-                    const cache = batchBarcodeCache[s.batchId];
-                    const priceText = `৳${formatCurrency(s.price)}`;
-
-                    return (
-                      <div
-                        key={s.batchId}
-                        className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3"
-                      >
-                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="font-semibold text-gray-900 dark:text-gray-100 truncate">
-                              {s.productName}
-                            </div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400">
-                              Batch ID: {s.batchId}
-                              {s.fallbackCode ? ` • Primary: ${s.fallbackCode}` : ''}
-                              {s.price ? ` • Price: ${priceText}` : ''}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <GroupedAllBarcodesPrinter
-                              sources={[s]}
-                              buttonLabel="Print this batch"
-                              title={`PO ${selectedPO.po_number} — Batch ${s.batchId}`}
-                              softLimit={600}
-                            />
-
-                            <button
-                              type="button"
-                              onClick={() => toggleBatchBarcodes(s)}
-                              className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800"
-                            >
-                              {open ? 'Hide barcodes' : 'Show barcodes'}
-                            </button>
-                          </div>
-                        </div>
-
-                        {open ? (
-                          <div className="mt-3">
-                            {cache?.loading ? (
-                              <div className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2">
-                                <Loader2 className="w-4 h-4 animate-spin" /> Loading barcodes...
-                              </div>
-                            ) : cache?.error ? (
-                              <div className="text-xs text-red-600 dark:text-red-400">{cache.error}</div>
-                            ) : (cache?.codes?.length || 0) === 0 ? (
-                              <div className="text-xs text-amber-600 dark:text-amber-400">
-                                No active unit barcodes found for this batch.
-                              </div>
-                            ) : (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                {cache!.codes.map((code) => (
-                                  <div
-                                    key={code}
-                                    className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/40 px-3 py-2"
-                                  >
-                                    <div className="text-xs font-mono text-gray-900 dark:text-gray-100 truncate">
-                                      {code}
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => quickPrintSingleBarcode({ barcode: code, productName: s.productName, price: s.price })}
-                                      className="px-2.5 py-1.5 rounded-md text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700"
-                                      title="Print this single barcode"
-                                    >
-                                      Print 1
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        ) : null}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : null}
             </div>
-
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-              <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-3">Items</h4>
-              <div className="space-y-2">
+              <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 text-2xl">Items</h4>
+              {/* Header Row */}
+              <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-gray-100 dark:bg-gray-800/80 rounded-t-lg font-semibold text-xl text-gray-700 dark:text-gray-300 mb-2">
+                <div className="col-span-12 md:col-span-5">Product Info</div>
+                <div className="hidden md:block md:col-span-1 text-center">Qty</div>
+                <AccessControl roles={['super-admin', 'admin']}>
+                  <div className="hidden md:block md:col-span-3 text-center">Cost Price / Unit</div>
+                </AccessControl>
+                <div className={`hidden md:block text-center ${isRole(['super-admin', 'admin']) ? 'md:col-span-3' : 'md:col-span-6'}`}>Unit Sell Price</div>
+              </div>
+              <div className="space-y-3">
                 {Array.isArray(selectedPO.items) && selectedPO.items.map((item, idx) => {
                   const img = pickPOItemImage(item);
+                  const isAdmin = isRole(['super-admin', 'admin']);
                   return (
-                    <div key={idx} className="flex justify-between gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                      <div className="flex items-start gap-3 min-w-0">
+                    <div key={idx} className="grid grid-cols-12 items-center gap-4 p-4 bg-gray-50 dark:bg-gray-700/50 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+                      {/* Product Info */}
+                      <div className="col-span-12 md:col-span-5 flex items-start gap-4 min-w-0">
                         {img && (
                           <button
                             type="button"
                             onClick={() => setImagePreview({ url: img, name: item.product_name || 'Product image' })}
-                            className="w-11 h-11 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 flex-shrink-0"
+                            className="w-16 h-16 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 flex-shrink-0"
                             title="View image"
                           >
-                            <img
-                              src={img}
-                              alt={item.product_name || 'Product'}
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.src = '/placeholder-product.png';
-                              }}
-                            />
+                            <img src={img} alt={item.product_name || 'Product'} className="w-full h-full object-cover" />
                           </button>
                         )}
-
                         <div className="min-w-0">
-                          <p className="font-medium text-gray-900 dark:text-gray-100 truncate">{item.product_name}</p>
-                          <p className="text-sm text-gray-600 dark:text-gray-400">
-                            Qty: {item.quantity_ordered} × ৳{formatCurrency(item.unit_cost)}
+                          <p className="text-xl font-semibold text-gray-900 dark:text-gray-100 leading-tight">
+                            {item.product_name}
                           </p>
+                          <div className="md:hidden mt-2 space-y-1">
+                            <p className="text-lg font-semibold">Qty: {item.quantity_ordered}</p>
+                            <AccessControl roles={['super-admin', 'admin']}>
+                              <p className="text-lg font-semibold">Cost: ৳{formatCurrency(item.unit_cost)}</p>
+                            </AccessControl>
+                            <p className="text-lg font-semibold">Sell: ৳{formatCurrency(item.unit_sell_price)}</p>
+                          </div>
                         </div>
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="font-semibold text-gray-900 dark:text-gray-100">
-                          ৳{formatCurrency((item.quantity_ordered || 0) * (item.unit_cost || 0))}
-                        </p>
+                      {/* Qty */}
+                      <div className="hidden md:block md:col-span-1 text-center text-xl font-bold text-gray-900 dark:text-gray-100">
+                        {item.quantity_ordered}
+                      </div>
+                      {/* Cost Price (Admin Only) */}
+                      <AccessControl roles={['super-admin', 'admin']}>
+                        <div className="hidden md:block md:col-span-3 text-center text-xl font-semibold text-gray-900 dark:text-gray-100">
+                          ৳{formatCurrency(item.unit_cost)}
+                        </div>
+                      </AccessControl>
+                      {/* Unit Sell Price */}
+                      <div className={`hidden md:block text-center text-xl font-semibold text-gray-900 dark:text-gray-100 ${isAdmin ? 'md:col-span-3' : 'md:col-span-6'}`}>
+                        ৳{formatCurrency(item.unit_sell_price)}
                       </div>
                     </div>
                   );
                 })}
               </div>
             </div>
-
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
-                    ৳{formatCurrency(selectedPO.subtotal_amount)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Tax</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
-                    ৳{formatCurrency(selectedPO.tax_amount)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Discount</span>
-                  <span className="font-medium text-red-600 dark:text-red-400">
-                    -৳{formatCurrency(selectedPO.discount_amount)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600 dark:text-gray-400">Shipping</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">
-                    ৳{formatCurrency(selectedPO.shipping_cost)}
-                  </span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-gray-200 dark:border-gray-700">
-                  <span className="font-semibold text-gray-900 dark:text-gray-100">Total</span>
-                  <span className="font-bold text-lg text-gray-900 dark:text-gray-100">
-                    ৳{formatCurrency(selectedPO.total_amount)}
-                  </span>
+            <AccessControl roles={['super-admin', 'admin']}>
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-6 mt-4">
+                <div className="space-y-3 max-w-sm ml-auto">
+                  <div className="flex justify-between text-xl font-semibold">
+                    <span className="text-gray-600 dark:text-gray-400">Subtotal</span>
+                    <span className="text-gray-900 dark:text-gray-100">
+                      ৳{formatCurrency(selectedPO.subtotal_amount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xl font-semibold">
+                    <span className="text-gray-600 dark:text-gray-400">Tax</span>
+                    <span className="text-gray-900 dark:text-gray-100">
+                      ৳{formatCurrency(selectedPO.tax_amount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xl font-semibold">
+                    <span className="text-gray-600 dark:text-gray-400">Discount</span>
+                    <span className="text-red-600 dark:text-red-400">
+                      -৳{formatCurrency(selectedPO.discount_amount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xl font-semibold">
+                    <span className="text-gray-600 dark:text-gray-400">Shipping</span>
+                    <span className="text-gray-900 dark:text-gray-100">
+                      ৳{formatCurrency(selectedPO.shipping_cost)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between pt-4 border-t-2 border-gray-200 dark:border-gray-700 mt-2">
+                    <span className="text-2xl font-bold text-gray-800 dark:text-gray-200">Total Amount</span>
+                    <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">
+                      ৳{formatCurrency(selectedPO.total_amount)}
+                    </span>
+                  </div>
                 </div>
               </div>
-            </div>
+            </AccessControl>
           </div>
         )}
       </Modal>
-
-      
       {/* Edit Modal */}
       {showEditModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-[1400px] w-full max-h-[90vh] overflow-hidden">
             <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Edit Purchase Order</h2>
               <button
@@ -1545,47 +1408,46 @@ export default function PurchaseOrdersPage() {
                 ✕
               </button>
             </div>
-
             <div className="p-6 overflow-y-auto max-h-[70vh] space-y-6">
               {editPO?.status && editPO.status !== 'draft' && (
                 <div className="p-3 rounded-md bg-yellow-50 text-yellow-800 text-sm">
                   Note: Your backend may allow editing only in <b>draft</b> status. If saving fails, change the PO back to draft first.
                 </div>
               )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Amount</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editForm.tax_amount}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, tax_amount: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
+              <AccessControl roles={['super-admin', 'admin']}>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Tax Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editForm.tax_amount}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, tax_amount: e.target.value }))}
+                      className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discount Amount</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editForm.discount_amount}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, discount_amount: e.target.value }))}
+                      className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Shipping Cost</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={editForm.shipping_cost}
+                      onChange={(e) => setEditForm((prev) => ({ ...prev, shipping_cost: e.target.value }))}
+                      className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Discount Amount</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editForm.discount_amount}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, discount_amount: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Shipping Cost</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={editForm.shipping_cost}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, shipping_cost: e.target.value }))}
-                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                </div>
-              </div>
-
+              </AccessControl>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Notes</label>
                 <textarea
@@ -1596,93 +1458,212 @@ export default function PurchaseOrdersPage() {
                   placeholder="Add a note for this purchase order"
                 />
               </div>
-
-              {/* ➕ Add more products in this PO */}
+              {/* ➕ Add more products in this PO — category browser */}
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Add More Products</h3>
-                    <p className="text-xs text-gray-600 dark:text-gray-400">Search vendor products and add them to this PO before saving.</p>
-                  </div>
-                </div>
-
-                <div className="mt-3">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-0.5">Add More Products</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">Browse by category or search by name / SKU.</p>
+                {/* Controls row */}
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={selectedCategoryId ?? ''}
+                    onChange={(e) => {
+                      setSelectedCategoryId(e.target.value ? Number(e.target.value) : null);
+                      setEditProductSearch('');
+                    }}
+                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="">— Select a category —</option>
+                    {categoryListLoading && <option disabled>Loading…</option>}
+                    {categoryList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {'　'.repeat(c.level)}{c.level > 0 ? '↳ ' : ''}{c.title}
+                      </option>
+                    ))}
+                  </select>
                   <input
                     type="text"
                     value={editProductSearch}
-                    onChange={(e) => setEditProductSearch(e.target.value)}
-                    placeholder="Search products by name / SKU"
-                    className="w-full px-3 py-2 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                    onChange={(e) => {
+                      setEditProductSearch(e.target.value);
+                      if (e.target.value.trim()) setSelectedCategoryId(null);
+                    }}
+                    placeholder="Or search by name / SKU…"
+                    className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   />
-                  {editProductSearching && (
-                    <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">Searching…</p>
-                  )}
                 </div>
-
-                {editProductSearch.trim() && (
-                  <div className="mt-3 max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-md divide-y divide-gray-200 dark:divide-gray-700">
-                    {editProductResults.map((p) => {
-                      const img = pickProductImage(p);
-                      return (
-                        <div key={p.id} className="flex items-center justify-between gap-3 p-3 bg-white dark:bg-gray-800">
-                          <div className="flex items-center gap-3 min-w-0">
-                            {img ? (
-                              <button
-                                type="button"
-                                onClick={() => setImagePreview({ url: img, name: p.name })}
-                                className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 flex-shrink-0"
-                                title="View image"
-                              >
-                                <img
-                                  src={img}
-                                  alt={p.name}
-                                  className="w-full h-full object-cover"
-                                  onError={(e) => {
-                                    e.currentTarget.src = '/placeholder-product.png';
-                                  }}
-                                />
-                              </button>
-                            ) : (
-                              <div className="w-10 h-10 rounded-lg bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600" />
-                            )}
-
-                            <div className="min-w-0">
-                              <div className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{(p as any).sku || ''}</div>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() => appendProductToEdit(p)}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white rounded-md"
-                          >
-                            <Plus className="w-3 h-3" />
-                            Add
-                          </button>
+                {/* Results panel */}
+                {(selectedCategoryId || editProductSearch.trim()) && (
+                  <div className="mt-3 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                    {editProductSearching ? (
+                      <div className="flex items-center justify-center gap-2 py-8 text-gray-400">
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span className="text-sm">Loading products…</span>
+                      </div>
+                    ) : editProductResults.length === 0 ? (
+                      <div className="py-6 text-sm text-gray-500 dark:text-gray-400 text-center">No products found in this category.</div>
+                    ) : (
+                      <>
+                        <div className="max-h-80 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                          {(() => {
+                            // Group by SKU — all variations of the same product share one SKU
+                            const groups = editProductResults.reduce<Record<string, { sku: string; baseName: string; products: Product[] }>>((acc, p) => {
+                              const key = p.sku || `__${p.id}`;
+                              if (!acc[key]) acc[key] = { sku: key, baseName: p.base_name || p.name, products: [] };
+                              acc[key].products.push(p);
+                              return acc;
+                            }, {});
+                            return Object.values(groups).map((group) => {
+                              const isMulti = group.products.length > 1;
+                              const isExpanded = expandedSkuGroups.has(group.sku);
+                              const groupImg = pickProductImage(group.products[0]);
+                              return (
+                                <div key={group.sku} className="border-b border-gray-100 dark:border-gray-700 last:border-0">
+                                  {/* ── Group row (base name + thumb + action) ── */}
+                                  <div className="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                                    {/* thumbnail */}
+                                    <button type="button" onClick={() => groupImg && setImagePreview({ url: groupImg, name: group.baseName })}
+                                      className="w-9 h-9 flex-shrink-0 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-700">
+                                      {groupImg
+                                        ? <img src={groupImg} alt={group.baseName} className="w-full h-full object-cover" onError={(e) => { if (!e.currentTarget.src.includes('/placeholder-product.png')) e.currentTarget.src = '/placeholder-product.png'; }} />
+                                        : <Package className="w-4 h-4 text-gray-400 m-auto mt-2.5" />}
+                                    </button>
+                                    {/* info */}
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xl font-semibold text-gray-900 dark:text-white truncate">{group.baseName}</p>
+                                      <div className="flex items-center gap-2 mt-0.5">
+                                        <span className="text-[11px] text-gray-400 font-mono">SKU: {group.sku.startsWith('__') ? '—' : group.sku}</span>
+                                        {isMulti && (
+                                          <span className="text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full">
+                                            {group.products.length} variations
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                    {/* action */}
+                                    {isMulti ? (
+                                      <button type="button"
+                                        onClick={() => setExpandedSkuGroups((prev) => { const n = new Set(prev); n.has(group.sku) ? n.delete(group.sku) : n.add(group.sku); return n; })}
+                                        className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-md text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                        {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                        {isExpanded ? 'Collapse' : 'Variations'}
+                                      </button>
+                                    ) : (() => {
+                                      const p = group.products[0];
+                                      const added = (editPO?.items ?? []).some((it: any) => Number(it?.product_id) === Number(p.id)) || editForm.new_items.some((x) => Number(x.product_id) === Number(p.id));
+                                      return (
+                                        <button type="button" onClick={() => appendProductToEdit(p)} disabled={added}
+                                          className={`flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-md ${added ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 text-white'}`}>
+                                          {added ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                                          {added ? 'Added' : 'Add'}
+                                        </button>
+                                      );
+                                    })()}
+                                  </div>
+                                  {/* ── Expanded variation rows ── */}
+                                  {isMulti && isExpanded && (
+                                    <div className="divide-y divide-gray-100 dark:divide-gray-700/40 bg-gray-50 dark:bg-gray-900/20">
+                                      {group.products.map((p) => {
+                                        const img = pickProductImage(p);
+                                        const added = (editPO?.items ?? []).some((it: any) => Number(it?.product_id) === Number(p.id)) || editForm.new_items.some((x) => Number(x.product_id) === Number(p.id));
+                                        const suffix = p.variation_suffix || (p.name !== group.baseName ? p.name.replace(group.baseName, '').trim() : '') || p.name;
+                                        return (
+                                          <div key={p.id} className="flex items-center gap-3 pl-12 pr-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700/30">
+                                            <button type="button" onClick={() => img && setImagePreview({ url: img, name: p.name })}
+                                              className="w-7 h-7 flex-shrink-0 rounded overflow-hidden border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-700">
+                                              {img ? <img src={img} alt={suffix} className="w-full h-full object-cover" onError={(e) => { if (!e.currentTarget.src.includes('/placeholder-product.png')) e.currentTarget.src = '/placeholder-product.png'; }} /> : <Package className="w-3.5 h-3.5 text-gray-400 m-auto mt-1.5" />}
+                                            </button>
+                                            <span className="flex-1 text-2xl font-semibold text-blue-700 dark:text-blue-300 truncate">{suffix}</span>
+                                            <button type="button" onClick={() => appendProductToEdit(p)} disabled={added}
+                                              className={`flex-shrink-0 inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md ${added ? 'bg-gray-100 dark:bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700 text-white'}`}>
+                                              {added ? <Check className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
+                                              {added ? 'Added' : 'Add'}
+                                            </button>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            });
+                          })()}
                         </div>
-                      );
-                    })}
-
-                    {!editProductSearching && editProductResults.length === 0 && (
-                      <div className="p-4 text-sm text-gray-500 dark:text-gray-400">No products found.</div>
+                        {/* Load more footer */}
+                        {productPage < productTotalPages && (
+                          <div className="px-3 py-2 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 flex items-center justify-between">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {editProductResults.length} loaded · more available
+                            </span>
+                            <button type="button" onClick={loadMoreProducts} disabled={productLoadingMore}
+                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-md disabled:opacity-50">
+                              {productLoadingMore ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                              Load more
+                            </button>
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}
               </div>
-
               <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                 <div className="px-4 py-3 bg-gray-50 dark:bg-gray-700/50 border-b border-gray-200 dark:border-gray-700">
                   <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Items (Quantity &amp; Prices)</h3>
                 </div>
-
+                <div className="p-4 bg-gray-50 dark:bg-gray-700/30 border-b border-gray-200 dark:border-gray-700">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Bulk Qty</label>
+                      <input
+                        type="number"
+                        value={editBulkQty}
+                        onChange={(e) => setEditBulkQty(e.target.value)}
+                        placeholder="Qty for all"
+                        className="w-full px-3 py-1.5 text-sm border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    </div>
+                    <AccessControl roles={['super-admin', 'admin']}>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Bulk Cost</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={editBulkCost}
+                          onChange={(e) => setEditBulkCost(e.target.value)}
+                          placeholder="Cost for all"
+                          className="w-full px-3 py-1.5 text-sm border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                        />
+                      </div>
+                    </AccessControl>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Bulk Sell</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={editBulkSell}
+                        onChange={(e) => setEditBulkSell(e.target.value)}
+                        placeholder="Sell for all"
+                        className="w-full px-3 py-1.5 text-sm border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={applyEditBulk}
+                      className="px-4 py-1.5 text-sm bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-md font-medium hover:bg-gray-700 dark:hover:bg-gray-200 transition-colors"
+                    >
+                      Apply to all
+                    </button>
+                  </div>
+                </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead className="bg-gray-50 dark:bg-gray-700/50">
                       <tr>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Product</th>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Qty Ordered</th>
-                        <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                        <AccessControl roles={['super-admin', 'admin']}>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                        </AccessControl>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Sell</th>
                         <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Actions</th>
                       </tr>
@@ -1690,7 +1671,20 @@ export default function PurchaseOrdersPage() {
                     <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                       {editForm.items.map((it, idx) => (
                         <tr key={it.id} className="bg-white dark:bg-gray-800">
-                          <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">{it.product_label}</td>
+                          <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">
+                            <div className="flex items-center gap-3">
+                              {pickPOItemImage(it) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setImagePreview({ url: pickPOItemImage(it)!, name: it.product_label || 'Product' })}
+                                  className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex-shrink-0 hover:opacity-80 transition-opacity"
+                                >
+                                  <img src={pickPOItemImage(it)!} alt={it.product_label} className="w-full h-full object-cover" />
+                                </button>
+                              )}
+                              <span className="text-2xl font-semibold text-gray-900 dark:text-white truncate">{it.product_label}</span>
+                            </div>
+                          </td>
                           <td className="px-4 py-2">
                             <input
                               type="number"
@@ -1705,21 +1699,23 @@ export default function PurchaseOrdersPage() {
                               className="w-28 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                             />
                           </td>
-                          <td className="px-4 py-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={it.unit_cost}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  items: prev.items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
-                                }));
-                              }}
-                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                            />
-                          </td>
+                          <AccessControl roles={['super-admin', 'admin']}>
+                            <td className="px-4 py-2">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={it.unit_cost}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditForm((prev) => ({
+                                    ...prev,
+                                    items: prev.items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
+                                  }));
+                                }}
+                                className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                              />
+                            </td>
+                          </AccessControl>
                           <td className="px-4 py-2">
                             <input
                               type="number"
@@ -1738,13 +1734,21 @@ export default function PurchaseOrdersPage() {
                           <td className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">—</td>
                         </tr>
                       ))}
-
                       {editForm.new_items.map((it, idx) => (
                         <tr key={`new-${it.temp_id}`} className="bg-emerald-50/60 dark:bg-emerald-900/10">
                           <td className="px-4 py-2 text-sm text-gray-900 dark:text-white">
                             <div className="flex items-center gap-2">
                               <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-600 text-white">NEW</span>
-                              <span>{it.product_label}</span>
+                              {pickPOItemImage(it) && (
+                                <button
+                                  type="button"
+                                  onClick={() => setImagePreview({ url: pickPOItemImage(it)!, name: it.product_label || 'Product' })}
+                                  className="w-10 h-10 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 flex-shrink-0 hover:opacity-80 transition-opacity"
+                                >
+                                  <img src={pickPOItemImage(it)!} alt={it.product_label} className="w-full h-full object-cover" />
+                                </button>
+                              )}
+                              <span className="text-2xl font-semibold text-gray-900 dark:text-white truncate">{it.product_label}</span>
                             </div>
                           </td>
                           <td className="px-4 py-2">
@@ -1761,21 +1765,23 @@ export default function PurchaseOrdersPage() {
                               className="w-28 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                             />
                           </td>
-                          <td className="px-4 py-2">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={it.unit_cost}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setEditForm((prev) => ({
-                                  ...prev,
-                                  new_items: prev.new_items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
-                                }));
-                              }}
-                              className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                            />
-                          </td>
+                          <AccessControl roles={['super-admin', 'admin']}>
+                            <td className="px-4 py-2">
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={it.unit_cost}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditForm((prev) => ({
+                                    ...prev,
+                                    new_items: prev.new_items.map((x, i) => (i === idx ? { ...x, unit_cost: v } : x)),
+                                  }));
+                                }}
+                                className="w-32 px-2 py-1 border rounded-md dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                              />
+                            </td>
+                          </AccessControl>
                           <td className="px-4 py-2">
                             <input
                               type="number"
@@ -1807,7 +1813,6 @@ export default function PurchaseOrdersPage() {
                 </div>
               </div>
             </div>
-
             <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
               <button
                 onClick={() => setShowEditModal(false)}
@@ -1826,8 +1831,7 @@ export default function PurchaseOrdersPage() {
           </div>
         </div>
       )}
-
-{/* Receive Modal */}
+      {/* Receive Modal */}
       <Modal
         isOpen={showReceiveModal}
         onClose={() => setShowReceiveModal(false)}
@@ -1844,12 +1848,10 @@ export default function PurchaseOrdersPage() {
                 Vendor: {selectedPO.vendor?.name}
               </p>
             </div>
-
             <div className="space-y-4">
               {receiveForm.items.map((item, index) => {
                 const poItem = selectedPO.items?.[index];
                 if (!poItem) return null;
-
                 return (
                   <div key={index} className="border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                     <h4 className="font-medium text-gray-900 dark:text-gray-100 mb-3">
@@ -1859,10 +1861,9 @@ export default function PurchaseOrdersPage() {
                       </span>
                     </h4>
                     <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                      Ordered: {poItem.quantity_ordered} • 
+                      Ordered: {poItem.quantity_ordered} •
                       Already Received: {poItem.quantity_received || 0}
                     </p>
-
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -1878,7 +1879,6 @@ export default function PurchaseOrdersPage() {
                           placeholder="0"
                         />
                       </div>
-
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Batch Number
@@ -1891,7 +1891,6 @@ export default function PurchaseOrdersPage() {
                           placeholder="BATCH-001"
                         />
                       </div>
-
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Manufactured Date
@@ -1903,7 +1902,6 @@ export default function PurchaseOrdersPage() {
                           className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                         />
                       </div>
-
                       <div>
                         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                           Expiry Date
@@ -1921,7 +1919,6 @@ export default function PurchaseOrdersPage() {
                 );
               })}
             </div>
-
             <div className="flex gap-3 justify-end pt-4 border-t border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => setShowReceiveModal(false)}

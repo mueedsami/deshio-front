@@ -53,48 +53,55 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
         }
 
         // Verify payment status from backend
-        console.log('✅ Checking payment status for order:', paymentIntent.order_id);
-        
-        const result = await sslcommerzService.checkPaymentStatus(paymentIntent.order_id);
+        console.log('✅ Checking payment status for order:', paymentIntent.order_number);
+
+        const result = await sslcommerzService.checkPaymentStatus(paymentIntent.order_number);
 
         console.log('📊 Payment status result:', result);
 
+        const paymentStatus = (result.order.payment_status || '').toLowerCase();
+
         // Determine payment outcome
-        if (result.order.payment_status === 'completed') {
+        if (paymentStatus === 'completed' || paymentStatus === 'paid') {
           setPaymentResult({
             status: 'success',
             orderNumber: result.order.order_number,
             message: 'Payment successful! Your order has been confirmed.',
           });
-          
+
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'completed');
           }
-        } else if (result.order.status === 'payment_failed') {
+        } else if (paymentStatus === 'failed' || result.order.status === 'payment_failed') {
           setPaymentResult({
             status: 'failed',
             orderNumber: result.order.order_number,
             message: 'Payment failed. Please try again or choose a different payment method.',
           });
-          
+
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'failed');
           }
-        } else if (result.order.status === 'cancelled') {
+        } else if (paymentStatus === 'cancelled' || result.order.status === 'cancelled') {
           setPaymentResult({
             status: 'cancelled',
             orderNumber: result.order.order_number,
             message: 'Payment was cancelled. You can retry payment from your orders.',
           });
-          
+
           if (onPaymentVerified) {
             onPaymentVerified(result.order.id, 'cancelled');
           }
         }
+        else {
+          // Still unpaid/pending/processing → keep intent so we can re-check later
+          setPaymentResult({ status: null, orderNumber: null, message: null });
+          return;
+        }
 
         // Clear payment intent after verification
         sslcommerzService.clearPaymentIntent();
-        
+
         // Hide notification after 10 seconds
         setTimeout(() => {
           setPaymentResult({ status: null, orderNumber: null, message: null });
@@ -102,7 +109,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
 
       } catch (error: any) {
         console.error('❌ Payment verification error:', error);
-        
+
         // Show error notification
         setPaymentResult({
           status: 'failed',
@@ -128,7 +135,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
   // Render checking state
   if (checking) {
     return (
-      <div className="fixed top-4 right-4 z-50 bg-white rounded-lg shadow-lg p-4 max-w-md animate-slide-in">
+      <div className="fixed top-4 right-4 z-50 bg-white rounded-xl shadow-lg p-4 max-w-md animate-slide-in">
         <div className="flex items-center gap-3">
           <Loader2 className="animate-spin text-blue-600" size={24} />
           <div>
@@ -143,41 +150,63 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
   // Render result notification
   if (paymentResult.status) {
     return (
-      <div className="fixed top-4 right-4 z-50 max-w-md animate-slide-in">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
         {paymentResult.status === 'success' && (
-          <div className="bg-green-50 border-2 border-green-500 rounded-lg shadow-lg p-4">
-            <div className="flex items-start gap-3">
-              <CheckCircle className="text-green-600 flex-shrink-0" size={24} />
-              <div className="flex-1">
-                <h4 className="font-bold text-green-900 mb-1">Payment Successful!</h4>
-                <p className="text-sm text-green-800 mb-2">{paymentResult.message}</p>
-                {paymentResult.orderNumber && (
-                  <p className="text-xs text-green-700 font-mono">
-                    Order: {paymentResult.orderNumber}
-                  </p>
-                )}
-              </div>
+          <div className="absolute inset-0 bg-[var(--bg-root)] flex flex-col items-center justify-center text-center p-6 ec-anim-fade-in">
+            <div className="relative mb-10 scale-125">
+              <div className="w-24 h-24 rounded-full border-4 border-[var(--status-success)] opacity-20" />
+              <svg
+                className="absolute inset-0 w-24 h-24 text-[var(--status-success)]"
+                viewBox="0 0 52 52"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path className="ec-check-draw" style={{ strokeDasharray: 50, strokeDashoffset: 50, animation: 'ec-draw 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards' }} d="M14 27l7 7 16-16" />
+              </svg>
+            </div>
+
+            <h2 className="text-5xl md:text-6xl font-medium text-[var(--text-primary)] mb-4 ec-anim-fade-up" style={{ fontFamily: "'Poppins', sans-serif" }}>Order Placed!</h2>
+            
+            <div className="ec-anim-fade-up ec-delay-1 mb-8">
+               <p className="text-[var(--text-muted)] text-[10px] uppercase font-bold tracking-[0.3em] mb-2" style={{ fontFamily: "'Poppins', sans-serif" }}>Confirmation ID</p>
+               <p className="text-[var(--cyan)] text-xl font-bold tracking-widest" style={{ fontFamily: "'Poppins', sans-serif" }}>#{paymentResult.orderNumber}</p>
+            </div>
+
+            <p className="text-[var(--text-secondary)] text-[15px] mb-10 max-w-md ec-anim-fade-up ec-delay-2 leading-relaxed">
+              Experience the art of confidence. Your wardrobe expansion has been secured and we are preparing your selection for transit.
+            </p>
+
+            <div className="flex flex-col sm:flex-row gap-4 ec-anim-fade-up ec-delay-3">
+              <button
+                onClick={() => router.push(`/e-commerce/my-account/orders/${paymentResult.orderNumber}`)}
+                className="ec-btn-primary px-10 py-4 text-[11px] font-bold uppercase tracking-widest"
+              >
+                Track Journey
+              </button>
               <button
                 onClick={() => setPaymentResult({ status: null, orderNumber: null, message: null })}
-                className="text-green-600 hover:text-green-800"
+                className="ec-btn-ghost px-10 py-4 text-[11px] font-bold uppercase tracking-widest"
               >
-                ✕
+                Continue Exploring
               </button>
             </div>
           </div>
         )}
 
         {paymentResult.status === 'failed' && (
-          <div className="bg-red-50 border-2 border-red-500 rounded-lg shadow-lg p-4">
+          <div className="bg-rose-50 border-2 border-rose-300 rounded-xl shadow-lg p-4">
             <div className="flex items-start gap-3">
-              <XCircle className="text-red-600 flex-shrink-0" size={24} />
+              <XCircle className="text-rose-600 flex-shrink-0" size={24} />
               <div className="flex-1">
-                <h4 className="font-bold text-red-900 mb-1">Payment Failed</h4>
-                <p className="text-sm text-red-800 mb-2">{paymentResult.message}</p>
+                <h4 className="font-bold text-rose-900 mb-1">Payment Failed</h4>
+                <p className="text-sm text-rose-800 mb-2">{paymentResult.message}</p>
                 {paymentResult.orderNumber && (
                   <button
                     onClick={() => router.push('/e-commerce/my-account')}
-                    className="text-xs text-red-700 font-medium hover:underline"
+                    className="text-xs text-neutral-900 font-medium hover:underline"
                   >
                     View Orders →
                   </button>
@@ -185,7 +214,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
               </div>
               <button
                 onClick={() => setPaymentResult({ status: null, orderNumber: null, message: null })}
-                className="text-red-600 hover:text-red-800"
+                className="text-rose-600 hover:text-neutral-900"
               >
                 ✕
               </button>
@@ -194,7 +223,7 @@ export default function PaymentStatusChecker({ onPaymentVerified }: PaymentStatu
         )}
 
         {paymentResult.status === 'cancelled' && (
-          <div className="bg-yellow-50 border-2 border-yellow-500 rounded-lg shadow-lg p-4">
+          <div className="bg-yellow-50 border-2 border-yellow-500 rounded-xl shadow-lg p-4">
             <div className="flex items-start gap-3">
               <AlertTriangle className="text-yellow-600 flex-shrink-0" size={24} />
               <div className="flex-1">

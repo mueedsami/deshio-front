@@ -2,10 +2,13 @@
 
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import cartService from '@/services/cartService';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
+import { usePromotion } from '@/contexts/PromotionContext';
 
 export type CartSidebarItem = {
   id: number; // cart item id
   productId: number;
+  categoryId?: number;
   name: string;
   price: number;
   image?: string;
@@ -27,17 +30,21 @@ type CartContextType = {
   updateQuantity: (cartItemId: number, quantity: number) => Promise<void>;
   clearCart: () => Promise<void>;
   refreshCart: () => Promise<void>;
+  validateCart: () => Promise<any>;
 };
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 function pickImage(product: any): string | undefined {
-  const images = product?.images || [];
-  const primary = images.find((i: any) => i?.is_primary) || images[0];
-  return primary?.image_url;
+  const images = Array.isArray(product?.images) ? product.images : [];
+  const primary = images.find((i: any) => i?.is_primary || i?.primary || i?.isPrimary) || images[0];
+  const raw = primary?.image_url || primary?.url || primary?.thumbnail_url || primary?.image || primary?.path;
+  const abs = toAbsoluteAssetUrl(raw);
+  return abs || undefined;
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
+  const { getApplicablePromotion } = usePromotion();
   const [cart, setCart] = useState<CartSidebarItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -49,11 +56,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const mapped: CartSidebarItem[] = (data.cart_items || []).map((ci) => ({
         id: ci.id,
         productId: ci.product_id,
+        categoryId: typeof ci.product?.category === 'object' && ci.product?.category != null ? (ci.product.category as any).id : (typeof ci.product?.category_id === 'number' ? ci.product.category_id : undefined),
         name: ci.product?.name || 'Product',
         price: Number(ci.unit_price || 0),
         image: pickImage(ci.product),
         quantity: Number(ci.quantity || 0),
-        maxQuantity: typeof ci.product?.stock_quantity === 'number' ? ci.product.stock_quantity : undefined,
+        maxQuantity: typeof ci.product?.available_inventory === 'number' ? ci.product.available_inventory : undefined,
         sku: ci.product?.sku,
         color: (ci as any)?.variant_options?.color,
         size: (ci as any)?.variant_options?.size,
@@ -102,8 +110,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     await refreshCart();
   };
 
+  const validateCart = async () => {
+    return await cartService.validateCart();
+  };
+
   const getTotalPrice = () => {
-    return cart.reduce((sum, item) => sum + (Number(item.price) || 0) * (Number(item.quantity) || 0), 0);
+    return cart.reduce((sum, item) => {
+      const promo = getApplicablePromotion(item.productId, item.categoryId ?? null);
+      const originalPrice = Number(item.price) || 0;
+      const discount = promo?.discount_value ?? 0;
+      const activePrice = discount > 0 ? Math.max(0, originalPrice - (originalPrice * discount / 100)) : originalPrice;
+      return sum + activePrice * (Number(item.quantity) || 0);
+    }, 0);
   };
 
   const value = useMemo<CartContextType>(
@@ -118,6 +136,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       updateQuantity,
       clearCart,
       refreshCart,
+      validateCart,
     }),
     [cart, isCartOpen, isLoading]
   );

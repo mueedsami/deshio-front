@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   Package,
   Store as StoreIcon,
@@ -15,6 +16,7 @@ import {
   TrendingUp,
   Award,
   Box,
+  ChevronDown,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -23,15 +25,18 @@ import orderManagementService, {
   AvailableStoresResponse,
 } from '@/services/orderManagementService';
 import Toast from '@/components/Toast';
+import storeService from '@/services/storeService';
+import inventoryService from '@/services/inventoryService';
 
 export default function StoreAssignmentPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Orders list state
   const [pendingOrders, setPendingOrders] = useState<PendingAssignmentOrder[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Assignment state
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -50,13 +55,13 @@ export default function StoreAssignmentPage() {
   useEffect(() => {
     fetchPendingOrders();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sortOrder]);
 
   useEffect(() => {
     if (selectedOrderId) {
       const order = pendingOrders.find((o) => o.id === selectedOrderId);
       setSelectedOrder(order || null);
-      fetchAvailableStores(selectedOrderId);
+      fetchAvailableStores(selectedOrderId, order || null);
     }
     // include pendingOrders so selection works after refresh
   }, [selectedOrderId, pendingOrders]);
@@ -88,27 +93,411 @@ export default function StoreAssignmentPage() {
     return [];
   };
 
+
+
+  const toNumber = (v: any): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const computeFulfillmentMetrics = (inventoryDetails: any[] = []) => {
+    const totalRequiredQty = inventoryDetails.reduce((sum, d) => sum + toNumber(d?.required_quantity), 0);
+    const fulfillableQty = inventoryDetails.reduce(
+      (sum, d) => sum + Math.min(toNumber(d?.required_quantity), toNumber(d?.available_quantity)),
+      0
+    );
+    const percent = totalRequiredQty > 0 ? Math.round((fulfillableQty / totalRequiredQty) * 100) : 0;
+    const canFulfillEntireOrder = inventoryDetails.every(
+      (d) => toNumber(d?.available_quantity) >= toNumber(d?.required_quantity)
+    );
+
+    return {
+      totalRequiredQty,
+      fulfillableQty,
+      percent,
+      canFulfillEntireOrder,
+    };
+  };
+
+  const normalizeAvailableStoresPayload = (
+    data: any,
+    orderCtx: PendingAssignmentOrder | null = null
+  ) => {
+    const deepCandidates = [
+      data,
+      data?.data,
+      data?.data?.data,
+      data?.payload,
+      data?.result,
+    ];
+
+    const candidateArrays = deepCandidates
+      .flatMap((d: any) => [
+        d?.stores,
+        d?.warehouses,
+        d?.available_stores,
+        d?.available_warehouses,
+        d?.outlets,
+        d?.locations,
+      ])
+      .filter(Array.isArray);
+
+    const mergedRaw = candidateArrays.flat();
+
+    const orderItems = Array.isArray(orderCtx?.items) ? orderCtx.items : [];
+    const orderReqByProduct = new Map<number, { req: number; name: string; sku: string }>();
+
+    for (const oi of orderItems) {
+      const pid = toNumber((oi as any)?.product_id);
+      if (!pid) continue;
+      const prev = orderReqByProduct.get(pid);
+      const qty = toNumber((oi as any)?.quantity);
+      orderReqByProduct.set(pid, {
+        req: toNumber(prev?.req) + qty,
+        name: (oi as any)?.product_name ?? prev?.name ?? 'Unknown Product',
+        sku: (oi as any)?.product_sku ?? prev?.sku ?? '',
+      });
+    }
+
+    const normalizedStores = mergedRaw.map((store: any) => {
+      const rawDetails = Array.isArray(store?.inventory_details) ? store.inventory_details : [];
+
+      const inventoryDetails = rawDetails.map((d: any) => {
+        const requiredQty = toNumber(d?.required_quantity);
+        const productId = toNumber(d?.product_id);
+        const physicalQty = toNumber(d?.physical_quantity ?? d?.quantity ?? d?.stock ?? 0);
+        const assignedQty = toNumber(d?.assigned_quantity ?? 0);
+        const availableQty = toNumber(d?.available_quantity ?? (physicalQty - assignedQty));
+        const globalAvailable = toNumber(d?.global_available ?? 0);
+
+        return {
+          ...d,
+          product_id: productId,
+          product_name: d?.product_name ?? d?.name ?? 'Unknown Product',
+          product_sku: d?.product_sku ?? d?.sku ?? '',
+          required_quantity: requiredQty,
+          physical_quantity: physicalQty,
+          assigned_quantity: assignedQty,
+          available_quantity: availableQty,
+          global_available: globalAvailable,
+          can_fulfill: availableQty >= requiredQty,
+        };
+      });
+
+      // IMPORTANT:
+      // Some APIs return partial inventory_details (missing one or more order items),
+      // which can incorrectly show 100% fulfillment.
+      // Fill missing required order items with available_quantity = 0 for accurate %.
+      if (orderReqByProduct.size) {
+        const byPid = new Map<number, any>();
+        for (const d of inventoryDetails) {
+          const pid = toNumber(d?.product_id);
+          if (pid) byPid.set(pid, d);
+        }
+
+        for (const [pid, reqMeta] of orderReqByProduct.entries()) {
+          const found = byPid.get(pid);
+          if (found) {
+            const correctedReq = Math.max(toNumber(found?.required_quantity), toNumber(reqMeta.req));
+            found.required_quantity = correctedReq;
+            found.can_fulfill = toNumber(found.available_quantity) >= correctedReq;
+          } else {
+            inventoryDetails.push({
+              product_id: pid,
+              product_name: reqMeta.name,
+              product_sku: reqMeta.sku,
+              required_quantity: toNumber(reqMeta.req),
+              available_quantity: 0,
+              can_fulfill: false,
+              batches: [],
+            });
+          }
+        }
+      }
+
+      const metrics = computeFulfillmentMetrics(inventoryDetails);
+
+      const storeId = toNumber(store?.store_id ?? store?.id);
+      const resolvedType = String(
+        store?.store_type ??
+          store?.type ??
+          (store?.is_warehouse === true ? 'warehouse' : 'store')
+      ).toLowerCase();
+
+      const safePercent = inventoryDetails.length
+        ? metrics.percent
+        : Math.min(100, Math.max(0, toNumber(store?.fulfillment_percentage)));
+
+      const requiredCount = orderReqByProduct.size || inventoryDetails.length;
+
+      return {
+        ...store,
+        store_id: storeId,
+        store_name: store?.store_name ?? store?.name ?? `Location #${storeId}`,
+        store_address: store?.store_address ?? store?.address ?? '—',
+        store_type: resolvedType === 'warehouse' ? 'warehouse' : 'store',
+        inventory_details: inventoryDetails,
+        fulfillment_percentage: safePercent,
+        can_fulfill_entire_order: inventoryDetails.length
+          ? metrics.canFulfillEntireOrder
+          : !!store?.can_fulfill_entire_order,
+        total_items_available: inventoryDetails.filter((d: any) => toNumber(d?.available_quantity) > 0).length,
+        total_items_required:
+          store?.total_items_required ?? requiredCount,
+      };
+    });
+
+    // de-duplicate by store_id keeping richer entry (higher inventory detail count)
+    const dedupMap = new Map<number, any>();
+    for (const s of normalizedStores) {
+      const sid = toNumber(s?.store_id);
+      if (!sid) continue;
+      const prev = dedupMap.get(sid);
+      if (!prev) {
+        dedupMap.set(sid, s);
+        continue;
+      }
+
+      const prevLen = Array.isArray(prev?.inventory_details) ? prev.inventory_details.length : 0;
+      const currLen = Array.isArray(s?.inventory_details) ? s.inventory_details.length : 0;
+
+      if (currLen > prevLen) {
+        dedupMap.set(sid, s);
+      } else if (currLen === prevLen) {
+        const prevPct = toNumber(prev?.fulfillment_percentage);
+        const currPct = toNumber(s?.fulfillment_percentage);
+        dedupMap.set(sid, currPct >= prevPct ? s : prev);
+      } else {
+        dedupMap.set(sid, prev);
+      }
+    }
+
+    return {
+      ...data,
+      stores: Array.from(dedupMap.values()),
+    };
+  };
+
+  const extractWarehouseList = (raw: any): any[] => {
+    const candidates = [
+      raw?.data?.data,
+      raw?.data,
+      raw?.warehouses,
+      raw?.stores,
+      raw,
+    ];
+
+    for (const c of candidates) {
+      if (Array.isArray(c)) {
+        return c.filter((x: any) => {
+          const t = String(x?.store_type ?? x?.type ?? '').toLowerCase();
+          return x?.is_warehouse === true || t === 'warehouse';
+        });
+      }
+    }
+
+    return [];
+  };
+
+  const buildWarehouseRowsFromInventory = async (order: PendingAssignmentOrder | null) => {
+    if (!order?.items?.length) return [] as any[];
+
+    // 1) Warehouse master list
+    let warehouseMasters: any[] = [];
+    try {
+      const warehousesResp = await storeService.getWarehouses();
+      warehouseMasters = extractWarehouseList(warehousesResp);
+    } catch (e) {
+      console.warn('Could not load warehouse master list:', e);
+    }
+
+    const warehouseMeta = new Map<number, any>();
+    warehouseMasters.forEach((w: any) => {
+      const id = toNumber(w?.id ?? w?.store_id);
+      if (!id) return;
+      warehouseMeta.set(id, {
+        id,
+        name: w?.name ?? w?.store_name ?? `Warehouse #${id}`,
+        address: w?.address ?? w?.store_address ?? '—',
+      });
+    });
+
+    // 2) Global inventory snapshot (includes store-wise quantities)
+    let inventoryItems: any[] = [];
+    try {
+      const inventoryResp: any = await inventoryService.getGlobalInventory();
+      const cands = [inventoryResp?.data, inventoryResp?.data?.data, inventoryResp];
+      for (const c of cands) {
+        if (Array.isArray(c)) {
+          inventoryItems = c;
+          break;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not load global inventory for warehouses:', e);
+    }
+
+    type WarehouseAgg = {
+      store_id: number;
+      store_name: string;
+      store_address: string;
+      byProduct: Map<number, number>;
+    };
+
+    const warehouseAgg = new Map<number, WarehouseAgg>();
+
+    const ensureAgg = (id: number, fallbackName?: string, fallbackAddress?: string) => {
+      if (!warehouseAgg.has(id)) {
+        const meta = warehouseMeta.get(id);
+        warehouseAgg.set(id, {
+          store_id: id,
+          store_name: meta?.name ?? fallbackName ?? `Warehouse #${id}`,
+          store_address: meta?.address ?? fallbackAddress ?? '—',
+          byProduct: new Map<number, number>(),
+        });
+      }
+      return warehouseAgg.get(id)!;
+    };
+
+    // seed from warehouse master so 0-stock warehouses are still visible
+    for (const [id, meta] of warehouseMeta.entries()) {
+      ensureAgg(id, meta?.name, meta?.address);
+    }
+
+    for (const item of inventoryItems) {
+      const productId = toNumber(item?.product_id);
+      const sku = String(item?.sku || '').trim().toLowerCase();
+      const stores = Array.isArray(item?.stores) ? item.stores : [];
+
+      for (const s of stores) {
+        const sid = toNumber(s?.store_id ?? s?.id);
+        if (!sid) continue;
+
+        const sType = String(s?.store_type ?? s?.type ?? '').toLowerCase();
+        const isWarehouse = s?.is_warehouse === true || sType === 'warehouse' || warehouseMeta.has(sid);
+        if (!isWarehouse) continue;
+
+        const agg = ensureAgg(sid, s?.store_name ?? s?.name, s?.store_address ?? s?.address);
+        const qty = toNumber(s?.quantity);
+
+        if (productId) {
+          agg.byProduct.set(productId, toNumber(agg.byProduct.get(productId)) + qty);
+        }
+      }
+    }
+
+    const rows = Array.from(warehouseAgg.values()).map((w) => {
+      const inventory_details = order.items.map((oi: any) => {
+        const req = toNumber(oi?.quantity);
+        const pid = toNumber(oi?.product_id);
+        const sku = String(oi?.product_sku || '').trim().toLowerCase();
+
+        const byPid = pid ? toNumber(w.byProduct.get(pid)) : 0;
+        const available = byPid;
+
+        return {
+          product_id: pid,
+          product_name: oi?.product_name ?? 'Unknown Product',
+          product_sku: oi?.product_sku ?? '',
+          required_quantity: req,
+          available_quantity: available,
+          can_fulfill: available >= req,
+          batches: [],
+        };
+      });
+
+      const metrics = computeFulfillmentMetrics(inventory_details);
+
+      return {
+        store_id: w.store_id,
+        store_name: w.store_name,
+        store_address: w.store_address,
+        store_type: 'warehouse',
+        inventory_details,
+        total_items_available: inventory_details.filter((d: any) => toNumber(d.available_quantity) > 0).length,
+        total_items_required: inventory_details.length,
+        can_fulfill_entire_order: metrics.canFulfillEntireOrder,
+        fulfillment_percentage: metrics.percent,
+      };
+    });
+
+    return rows;
+  };
+
+  const isOrderUnassigned = (order: any): boolean => {
+    const candidateIds = [
+      order?.store_id,
+      order?.assigned_store_id,
+      order?.store?.id,
+      order?.store?.store_id,
+      order?.assigned_store?.id,
+      order?.assigned_store?.store_id,
+      order?.outlet_id,
+      order?.branch_id,
+    ]
+      .map((v) => toNumber(v))
+      .filter((v) => v > 0);
+
+    return candidateIds.length === 0;
+  };
+
   const fetchPendingOrders = async () => {
     setIsLoadingOrders(true);
     try {
-      // Force status filter (fallback to kebab-case if backend uses that)
-      const primary = await orderManagementService.getPendingAssignment({
-        per_page: 100,
-        status: 'pending_assignment',
-      } as any);
+      const statusCandidates = ['pending_assignment', 'pending-assignment', 'pending'];
+      const combined: PendingAssignmentOrder[] = [];
 
-      let orders = extractOrders(primary);
+      for (const status of statusCandidates) {
+        try {
+          const resp = await orderManagementService.getPendingAssignment({
+            per_page: 100,
+            status,
+            sort_order: sortOrder,
+          } as any);
 
-      if (!orders.length) {
-        const fallback = await orderManagementService.getPendingAssignment({
-          per_page: 100,
-          status: 'pending-assignment',
-        } as any);
-        orders = extractOrders(fallback);
+          let orders = extractOrders(resp);
+
+          // If backend stores e-commerce unassigned orders as plain "pending",
+          // keep only truly unassigned ones.
+          if (status === 'pending') {
+            orders = orders.filter((o: any) => isOrderUnassigned(o));
+          }
+
+          if (orders.length) combined.push(...(orders as PendingAssignmentOrder[]));
+        } catch (e) {
+          // continue trying other status variants
+          console.warn(`Could not fetch status=${status}`, e);
+        }
       }
 
+      // final fallback: no status filter
+      if (!combined.length) {
+        const fallback = await orderManagementService.getPendingAssignment({
+          per_page: 100,
+        } as any);
+        const fallbackOrders = extractOrders(fallback).filter((o: any) => isOrderUnassigned(o));
+        combined.push(...(fallbackOrders as PendingAssignmentOrder[]));
+      }
+
+      // de-dupe by order id
+      const byId = new Map<number, PendingAssignmentOrder>();
+      for (const o of combined) {
+        const oid = toNumber((o as any)?.id);
+        if (!oid) continue;
+        if (!byId.has(oid)) byId.set(oid, o);
+      }
+
+      let orders = Array.from(byId.values());
+      
+      // Global sort after merging
+      orders = orders.sort((a, b) => {
+        const timeA = new Date(a.created_at).getTime();
+        const timeB = new Date(b.created_at).getTime();
+        return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
+      });
+
       setPendingOrders(orders);
-      console.log('📦 Loaded pending assignment orders:', orders.length);
+      console.log('📦 Loaded pending/unassigned orders:', orders.length);
     } catch (error: any) {
       console.error('Error fetching orders:', error);
       displayToast('Error loading orders: ' + (error?.message || 'Unknown error'), 'error');
@@ -117,18 +506,55 @@ export default function StoreAssignmentPage() {
     }
   };
 
-  const fetchAvailableStores = async (orderId: number) => {
+  const fetchAvailableStores = async (orderId: number, orderCtx: PendingAssignmentOrder | null = null) => {
     setIsLoadingStores(true);
     try {
       const data = await orderManagementService.getAvailableStores(orderId);
-      setAvailableStoresData(data);
+      const normalized = normalizeAvailableStoresPayload(data, orderCtx || selectedOrder || null);
 
-      // Auto-select recommended store if available
-      if (data?.recommendation?.store_id) {
-        setSelectedStoreId(data.recommendation.store_id);
+      let mergedStores = Array.isArray(normalized?.stores) ? [...normalized.stores] : [];
+      const hasWarehouseAlready = mergedStores.some(
+        (s: any) => String(s?.store_type ?? s?.type ?? '').toLowerCase() === 'warehouse'
+      );
+
+      // Fallback: if API doesn't return warehouses, derive them from warehouse master + global inventory.
+      if (!hasWarehouseAlready) {
+        const fallbackWarehouses = await buildWarehouseRowsFromInventory(orderCtx || selectedOrder || null);
+        const existingIds = new Set(mergedStores.map((s: any) => toNumber(s?.store_id ?? s?.id)).filter(Boolean));
+        for (const w of fallbackWarehouses) {
+          const sid = toNumber(w?.store_id);
+          if (!sid || existingIds.has(sid)) continue;
+          mergedStores.push(w);
+        }
       }
 
-      console.log('🏪 Available stores loaded:', data?.stores?.length || 0);
+      const mergedPayload: any = {
+        ...normalized,
+        stores: mergedStores,
+      };
+
+      // Recompute recommendation if backend recommendation is missing from merged list
+      if (mergedStores.length && mergedPayload?.recommendation?.store_id) {
+        const recId = toNumber(mergedPayload.recommendation.store_id);
+        const hasRec = mergedStores.some((s: any) => toNumber(s?.store_id) === recId);
+        if (!hasRec) {
+          mergedPayload.recommendation = null;
+        }
+      }
+
+      setAvailableStoresData(mergedPayload);
+
+      // Auto-select recommended store if available, else best fulfillment candidate
+      if (mergedPayload?.recommendation?.store_id) {
+        setSelectedStoreId(toNumber(mergedPayload.recommendation.store_id));
+      } else if (mergedStores.length) {
+        const sorted = [...mergedStores].sort(
+          (a: any, b: any) => toNumber(b?.fulfillment_percentage) - toNumber(a?.fulfillment_percentage)
+        );
+        setSelectedStoreId(toNumber(sorted[0]?.store_id));
+      }
+
+      console.log('🏪 Available locations loaded:', mergedStores.length);
     } catch (error: any) {
       console.error('Error fetching stores:', error);
       displayToast('Error loading stores: ' + (error?.message || 'Unknown error'), 'error');
@@ -162,7 +588,7 @@ export default function StoreAssignmentPage() {
       }, 800);
     } catch (error: any) {
       console.error('Error assigning order:', error);
-      displayToast(error?.message || 'Failed to assign order', 'error');
+      displayToast(error?.response?.data?.message || error?.message || 'Failed to assign order', 'error');
     } finally {
       setIsAssigning(false);
     }
@@ -202,14 +628,27 @@ export default function StoreAssignmentPage() {
                       Assign pending e-commerce orders to stores based on inventory availability
                     </p>
                   </div>
-                  <button
-                    onClick={fetchPendingOrders}
-                    disabled={isLoadingOrders}
-                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${isLoadingOrders ? 'animate-spin' : ''}`} />
-                    Refresh
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <div className="relative">
+                      <select
+                        value={sortOrder}
+                        onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+                        className="appearance-none pl-3 pr-10 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-transparent cursor-pointer shadow-sm"
+                      >
+                        <option value="asc">Oldest First</option>
+                        <option value="desc">Newest First</option>
+                      </select>
+                      <ChevronDown className="absolute right-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
+                    </div>
+                    <button
+                      onClick={fetchPendingOrders}
+                      disabled={isLoadingOrders}
+                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 shadow-sm"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${isLoadingOrders ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </button>
+                  </div>
                 </div>
 
                 {/* Stats Cards */}
@@ -320,17 +759,20 @@ export default function StoreAssignmentPage() {
                             <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
                               👤 {order.customer?.name} • 📱 {order.customer?.phone}
                             </p>
-                            <div className="mt-3 max-h-24 overflow-y-auto pr-1">
-                              <div className="flex flex-wrap gap-2">
-                                {order.items_summary?.map((item, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
-                                  >
-                                    {item.product_name} (×{item.quantity})
-                                  </span>
-                                ))}
-                              </div>
+                            <div className="flex flex-wrap gap-2 mt-3">
+                              {order.items_summary?.slice(0, 3).map((item, idx) => (
+                                <span
+                                  key={idx}
+                                  className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                >
+                                  {item.product_name} (×{item.quantity})
+                                </span>
+                              ))}
+                              {(order.items_summary?.length || 0) > 3 && (
+                                <span className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                  +{(order.items_summary?.length || 0) - 3} more
+                                </span>
+                              )}
                             </div>
                           </div>
                           <div className="text-right ml-4">
@@ -426,9 +868,14 @@ export default function StoreAssignmentPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Left Column - Available Stores */}
                 <div>
-                  <h2 className="text-lg font-semibold mb-4 text-gray-900 dark:text-white">
-                    Available Stores
-                  </h2>
+                  <div className="mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Available Stores & Warehouses
+                    </h2>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      Assignment creates an inventory reservation. Physical stock is deducted only during scanning/fulfillment.
+                    </p>
+                  </div>
 
                   {isLoadingStores ? (
                     <div className="text-center py-12">
@@ -459,6 +906,9 @@ export default function StoreAssignmentPage() {
                                   <h3 className="font-semibold text-gray-900 dark:text-white">
                                     {store.store_name}
                                   </h3>
+                                  <span className={`text-[10px] px-2 py-0.5 rounded-full border ${String((store as any).store_type ?? (store as any).type ?? '').toLowerCase()==='warehouse' ? 'border-indigo-300 text-indigo-700 dark:border-indigo-700 dark:text-indigo-300' : 'border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-300'}`}>
+                                    {String((store as any).store_type ?? (store as any).type ?? '').toLowerCase() === 'warehouse' ? 'Warehouse' : 'Store'}
+                                  </span>
                                   {isRecommended && <Award className="h-4 w-4 text-yellow-500" />}
                                 </div>
                                 <p className="text-xs text-gray-600 dark:text-gray-400 flex items-start gap-1">
@@ -487,7 +937,7 @@ export default function StoreAssignmentPage() {
 
                             <div className="mb-3">
                               <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
-                                <span>Fulfillment Capacity</span>
+                                <span>Reservation Capacity</span>
                                 <span className="font-semibold">{store.fulfillment_percentage}%</span>
                               </div>
                               <div className="w-full h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
@@ -553,9 +1003,19 @@ export default function StoreAssignmentPage() {
                                 )}
                               </div>
                               <div className="flex items-center justify-between text-xs">
-                                <span className="text-gray-600 dark:text-gray-400">
-                                  Required: {detail.required_quantity} | Available: {detail.available_quantity}
-                                </span>
+                                <div className="flex flex-col gap-1">
+                                  <span className="text-gray-600 dark:text-gray-400">
+                                    Required: <span className="font-bold text-gray-900 dark:text-white">{detail.required_quantity}</span>
+                                  </span>
+                                  <div className="flex flex-wrap gap-2 text-[10px]">
+                                    <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-700">Physical: {detail.physical_quantity}</span>
+                                    <span className="bg-white/50 dark:bg-black/20 px-1.5 py-0.5 rounded border border-gray-100 dark:border-gray-700 text-amber-600 dark:text-amber-400">Promise: {detail.assigned_quantity}</span>
+                                    <span className="bg-blue-100/50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded border border-blue-200 dark:border-blue-800 font-bold text-blue-700 dark:text-blue-300">Available: {detail.available_quantity}</span>
+                                    {detail.global_available !== undefined && (
+                                      <span className="bg-teal-100/50 dark:bg-teal-900/30 px-1.5 py-0.5 rounded border border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300">Global Avail: {detail.global_available}</span>
+                                    )}
+                                  </div>
+                                </div>
                                 <span
                                   className={`font-semibold ${
                                     detail.can_fulfill
@@ -627,7 +1087,7 @@ export default function StoreAssignmentPage() {
                     <div className="text-center py-12 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800">
                       <StoreIcon className="mx-auto h-12 w-12 mb-4 text-gray-400" />
                       <p className="text-gray-600 dark:text-gray-400">
-                        Select a store to view inventory details
+                        Select a store/warehouse to view inventory details
                       </p>
                     </div>
                   )}

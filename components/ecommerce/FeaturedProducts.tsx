@@ -1,56 +1,155 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import catalogService, { SimpleProduct } from '@/services/catalogService';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, Heart, Eye, Star } from 'lucide-react';
-import { getBaseProductName } from '@/lib/productNameUtils';
 
-export default function FeaturedProducts() {
+import { useCart } from '@/app/e-commerce/CartContext';
+import catalogService, { SimpleProduct } from '@/services/catalogService';
+import { getCardNewestSortKey } from '@/lib/ecommerceCardUtils';
+import { getBaseProductName } from '@/lib/productNameUtils';
+import PremiumProductCard from '@/components/ecommerce/ui/PremiumProductCard';
+import SectionHeader from '@/components/ecommerce/ui/SectionHeader';
+import { fireToast } from '@/lib/globalToast';
+
+interface FeaturedProductsProps {
+  categoryId?: number;
+  limit?: number;
+}
+
+
+const pickSharedImages = (items: SimpleProduct[]): SimpleProduct['images'] => {
+  for (const p of items) {
+    const imgs = (p as any)?.images;
+    if (Array.isArray(imgs) && imgs.length > 0) return imgs;
+  }
+  return [];
+};
+
+const applySharedImages = (main: SimpleProduct, variants: SimpleProduct[]): { main: SimpleProduct; variants: SimpleProduct[] } => {
+  const shared = pickSharedImages([main, ...variants]);
+  if (shared.length === 0) return { main, variants };
+
+  const fixedMain = (!Array.isArray(main.images) || main.images.length === 0) ? { ...main, images: shared } : main;
+  const fixedVariants = variants.map(v => (Array.isArray(v.images) && v.images.length > 0) ? v : { ...v, images: shared });
+  return { main: fixedMain, variants: fixedVariants };
+};
+
+const pickMainVariant = (variants: SimpleProduct[]): SimpleProduct => {
+  const sorted = [...variants].sort((a, b) => {
+    const aStock = Number(a.stock_quantity || 0) > 0 ? 1 : 0;
+    const bStock = Number(b.stock_quantity || 0) > 0 ? 1 : 0;
+    if (bStock !== aStock) return bStock - aStock;
+    const aPrice = Number(a.selling_price || 0);
+    const bPrice = Number(b.selling_price || 0);
+    if (aPrice !== bPrice) return aPrice - bPrice;
+    return a.id - b.id;
+  });
+  return sorted[0];
+};
+
+const groupFeaturedVariants = (items: SimpleProduct[]): SimpleProduct[] => {
+  const buckets = new Map<string, SimpleProduct[]>();
+  items.forEach((product) => {
+    const baseName = (product.base_name || getBaseProductName(product.name) || product.name || '').trim();
+    const categoryKey = typeof product.category === 'object' && product.category ? product.category.id || product.category.name : String(product.category || '');
+    const key = `${baseName.toLowerCase()}|${String(categoryKey).toLowerCase()}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push({ ...product, base_name: baseName });
+  });
+
+  const cards: SimpleProduct[] = [];
+  buckets.forEach((variants) => {
+    if (!variants.length) return;
+    const mainRaw = pickMainVariant(variants);
+    const { main, variants: fixedVariants } = applySharedImages(mainRaw, variants);
+    cards.push({
+      ...main,
+      display_name: main.base_name || main.display_name || main.name,
+      has_variants: variants.length > 1,
+      total_variants: variants.length,
+      variants: fixedVariants,
+    });
+  });
+  return cards;
+};
+
+const FeaturedProducts: React.FC<FeaturedProductsProps> = ({ categoryId, limit = 8 }) => {
   const router = useRouter();
   const [products, setProducts] = useState<SimpleProduct[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
+  const { addToCart } = useCart();
 
   useEffect(() => {
-    const fetchFeaturedProducts = async () => {
-      try {
-        setLoading(true);
-        const data = await catalogService.getFeaturedProducts(8);
-        console.log('Featured Products Response:', data);
-        console.log('First Product:', data.featured_products[0]);
-        console.log('First Product Images:', data.featured_products[0]?.images);
-        setProducts(data.featured_products);
-      } catch (err: any) {
-        console.error('Error fetching featured products:', err);
-        setError(err.message || 'Failed to load featured products');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchFeaturedProducts();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryId, limit]);
 
-  const handleProductClick = (productId: number) => {
-    router.push(`/e-commerce/product/${productId}`);
+  const fetchFeaturedProducts = async () => {
+    setIsLoading(true);
+    try {
+      const featuredRawUnsorted = await catalogService.getFeaturedProducts(Math.max(limit * 5, 30));
+      const featuredRaw = [...featuredRawUnsorted].sort((a, b) => Number(b?.id || 0) - Number(a?.id || 0));
+
+      const filteredByCategory = categoryId
+        ? featuredRaw.filter((p) => (typeof p.category === 'object' && p.category ? Number(p.category.id) === Number(categoryId) : false))
+        : featuredRaw;
+
+      const groupedCardsRaw = groupFeaturedVariants(filteredByCategory);
+      const groupedCards = [...groupedCardsRaw].sort((a, b) => getCardNewestSortKey(b) - getCardNewestSortKey(a));
+      setProducts(groupedCards.slice(0, limit));
+    } catch (error) {
+      console.error('Error fetching featured products:', error);
+      setProducts([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  if (loading) {
+  const handleImageError = (productId: number) => {
+    setImageErrors((prev) => {
+      if (prev.has(productId)) return prev;
+      const next = new Set(prev);
+      next.add(productId);
+      return next;
+    });
+  };
+
+  const handleProductClick = (product: SimpleProduct) => {
+    router.push(`/e-commerce/product/${product.id}`);
+  };
+
+  const handleAddToCart = async (product: SimpleProduct, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (product.has_variants) {
+      router.push(`/e-commerce/product/${product.id}`);
+      return;
+    }
+    try {
+      await addToCart(product.id, 1);
+      fireToast(`Added to cart: ${product?.name || 'Item'}`, 'success');
+      router.push('/e-commerce/checkout');
+    } catch (error: any) {
+      console.error('Error adding to cart:', error);
+      fireToast(error?.message || 'Failed to add to cart', 'error');
+    }
+  };
+
+  if (isLoading) {
     return (
-      <section className="py-12 px-4 bg-gray-50">
-        <div className="max-w-7xl mx-auto">
-          <div className="mb-8">
-            <div className="h-8 w-64 bg-gray-200 rounded-lg mb-2 animate-pulse"></div>
-            <div className="h-4 w-96 bg-gray-200 rounded-lg animate-pulse"></div>
+      <section style={{ background: '#f8f8f8', padding: '48px 0', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+        <div className="ec-container">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '32px' }}>
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
+            <div style={{ height: '24px', width: '180px', background: '#f0f0f0', borderRadius: '4px' }} />
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-              <div key={i} className="bg-white rounded-lg shadow-md p-4 animate-pulse">
-                <div className="aspect-square bg-gray-200 rounded-lg mb-4"></div>
-                <div className="h-4 bg-gray-200 rounded mb-2"></div>
-                <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i}>
+                <div style={{ aspectRatio: '2/3', background: '#f0f0f0', borderRadius: '4px', marginBottom: '8px' }} />
+                <div style={{ height: '14px', background: '#f0f0f0', borderRadius: '4px', width: '75%', marginBottom: '6px' }} />
+                <div style={{ height: '14px', background: '#f0f0f0', borderRadius: '4px', width: '40%' }} />
               </div>
             ))}
           </div>
@@ -59,132 +158,64 @@ export default function FeaturedProducts() {
     );
   }
 
-  if (error || products.length === 0) {
-    return null;
-  }
+  if (products.length === 0) return null;
 
   return (
-    <section className="py-12 px-4 bg-gray-50">
-      <div className="max-w-7xl mx-auto">
-        {/* Section Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-2">
-            <Star className="h-6 w-6 text-red-800 fill-red-800" />
-            <h2 className="text-3xl font-bold text-gray-900">
-              Featured Products
+    <section style={{ background: '#f8f8f8', padding: '48px 0', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+      <div className="ec-container">
+        {/* Section header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ height: '1px', flex: 1, maxWidth: '40px', background: '#111111' }} />
+            <h2 style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '18px',
+              fontWeight: 800,
+              textTransform: 'uppercase',
+              letterSpacing: '0.15em',
+              color: '#111111',
+              margin: 0,
+            }}>
+              Featured Selection
             </h2>
+            <div style={{ height: '1px', flex: 1, maxWidth: '40px', background: '#111111' }} />
           </div>
-          <p className="text-gray-600">
-            Handpicked favorites loved by our customers
-          </p>
+          <button
+            onClick={() => router.push('/e-commerce/products')}
+            style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '12px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: '#111111',
+              background: 'none',
+              border: '1.5px solid #111111',
+              borderRadius: '4px',
+              padding: '8px 16px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            View All
+          </button>
         </div>
 
-        {/* Products Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {products.map((product) => {
-            // Better image handling
-            const imagesArray = Array.isArray(product.images) ? product.images : [];
-            const primaryImage = imagesArray.find(img => img.is_primary) || imagesArray[0];
-            const imageUrl = primaryImage?.url || '/placeholder-product.png';
-            
-            const categoryName = typeof product.category === 'string' 
-              ? product.category 
-              : product.category?.name;
-            
-            return (
-              <div
-                key={product.id}
-                className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer group"
-                onClick={() => handleProductClick(product.id)}
-              >
-                {/* Product Image */}
-                <div className="relative aspect-square overflow-hidden bg-gray-100">
-                  <img
-                    src={imageUrl}
-                    alt={getBaseProductName(product.name)}
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.src = '/placeholder-product.png';
-                    }}
-                  />
-
-                  {/* Featured Badge */}
-                  <div className="absolute top-2 left-2 bg-red-800 text-white px-2 py-1 rounded-md text-xs font-semibold flex items-center gap-1">
-                    <Star className="h-3 w-3 fill-white" />
-                    Featured
-                  </div>
-
-                  {/* Quick Actions */}
-                  <div className="absolute bottom-2 right-2 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Add to wishlist logic
-                      }}
-                      className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                    >
-                      <Heart className="h-4 w-4 text-gray-700" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleProductClick(product.id);
-                      }}
-                      className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                    >
-                      <Eye className="h-4 w-4 text-gray-700" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Product Info */}
-                <div className="p-4">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                    {getBaseProductName(product.name)}
-                  </h3>
-
-                  {/* Category */}
-                  {categoryName && (
-                    <p className="text-xs text-gray-500 mb-2">
-                      {categoryName}
-                    </p>
-                  )}
-
-                  {/* Price */}
-                  <div className="flex items-center space-x-2 mb-3">
-                    <span className="text-lg font-bold text-gray-900">
-                      ৳{Number(product.selling_price).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Stock Status and Cart Button */}
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs font-medium ${product.in_stock ? 'text-red-800' : 'text-red-600'}`}>
-                      {product.in_stock ? 'In Stock' : 'Out of Stock'}
-                    </span>
-                    
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Add to cart logic
-                      }}
-                      disabled={!product.in_stock}
-                      className={`p-2 rounded-full ${
-                        product.in_stock
-                          ? 'bg-red-800 text-white hover:bg-red-900'
-                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                      } transition-colors`}
-                    >
-                      <ShoppingCart className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
+          {products.map((product) => (
+            <PremiumProductCard
+              key={product.id}
+              product={product}
+              imageErrored={imageErrors.has(product.id)}
+              onImageError={handleImageError}
+              onOpen={handleProductClick}
+              onAddToCart={handleAddToCart}
+            />
+          ))}
         </div>
       </div>
     </section>
   );
-}
+};
+
+export default FeaturedProducts;

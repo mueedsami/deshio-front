@@ -2,222 +2,164 @@
 
 import React from 'react';
 import Navigation from '@/components/ecommerce/Navigation';
-import Footer from '@/components/ecommerce/Footer';
 import Link from 'next/link';
-import { CheckCircle2, ShieldCheck, Truck, Gem, Sparkles, HeartHandshake } from 'lucide-react';
+import { CheckCircle2, Truck, Gem, HeartHandshake, MapPin, Phone } from 'lucide-react';
+
+const STORES = [
+  { name: 'Mirpur 12',       address: 'Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12', phone: '01942565664' },
+  { name: 'Jamuna Future Park', address: '3C-17A, Level 3, Jamuna Future Park',              phone: '01307130535' },
+  { name: 'Bashundhara City',   address: '38, 39, 40, Block D, Level 5, Bashundhara City',  phone: '01336041064' },
+];
+
+const VALUES = [
+  { icon: Gem,           title: 'Premium Quality',    desc: 'Every product is hand-selected for craftsmanship, material quality, and lasting durability.' },
+  { icon: CheckCircle2,  title: 'Authentic Sourcing', desc: 'We source directly from verified suppliers — no counterfeits, ever.' },
+  { icon: Truck,         title: 'Fast Nationwide Delivery', desc: 'Reliable delivery across all of Bangladesh, with real-time order tracking.' },
+  { icon: HeartHandshake,title: 'Customer First',     desc: 'Responsive support before, during, and after every purchase.' },
+];
 
 export default function AboutPage() {
   return (
-    <div className="bg-white min-h-screen">
+    <div className="ec-root min-h-screen bg-[var(--bg-root)]">
       <Navigation />
 
-      {/* Hero */}
-      <section className="relative overflow-hidden">
-        <div className="absolute inset-0">
-          <div className="absolute -top-24 -left-24 h-96 w-96 rounded-full bg-rose-100/60 blur-3xl" />
-          <div className="absolute -bottom-28 -right-24 h-[28rem] w-[28rem] rounded-full bg-red-100/50 blur-3xl" />
-          <div
-            className="absolute inset-0 opacity-[0.05]"
-            style={{
-              backgroundImage: 'radial-gradient(circle at 1px 1px, #000 1px, transparent 0)',
-              backgroundSize: '24px 24px',
-            }}
-          />
+      {/* ── Hero ── */}
+      <section className="relative overflow-hidden ec-page-section border-b border-[var(--border-default)]">
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -left-32 top-0 h-96 w-96 rounded-full opacity-10" style={{ background: 'radial-gradient(circle, var(--gold) 0%, transparent 70%)' }} />
+          <div className="absolute -right-20 bottom-0 h-64 w-64 rounded-full opacity-10" style={{ background: 'radial-gradient(circle, var(--cyan) 0%, transparent 70%)' }} />
         </div>
 
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-12 md:pt-20 md:pb-16">
-          <div className="max-w-3xl">
-            <div className="inline-flex items-center gap-2 rounded-full border border-red-100 bg-red-50 px-3.5 py-1.5">
-              <Sparkles className="h-4 w-4 text-red-700" />
-              <span className="text-xs font-semibold tracking-wide text-red-800">ERRUM</span>
+        <div className="ec-container relative py-12">
+          <div className="ec-dark-tag mb-6">About Errum</div>
+          <h1 className="text-[var(--text-primary)]"
+              style={{
+                fontFamily: "'Poppins', sans-serif",
+                fontSize: 'clamp(44px, 8vw, 96px)',
+                fontWeight: 300,
+                lineHeight: 0.9,
+                letterSpacing: '-0.02em'
+              }}>
+            More Than<br />
+            <span className="italic" style={{ fontWeight: 600, color: 'var(--gold)' }}>a Brand</span>
+          </h1>
+          <p className="mt-8 max-w-xl text-[var(--text-secondary)] text-[16px] leading-relaxed">
+            Errum is Bangladesh&apos;s premium lifestyle destination — fashion, footwear, accessories, and fragrances, curated for those who refuse to compromise on style or quality.
+          </p>
+          <div className="mt-10 flex gap-4 flex-wrap">
+            <Link href="/e-commerce/products" className="ec-btn ec-btn-gold">Shop Collection</Link>
+            <Link href="/e-commerce/contact"  className="ec-btn ec-btn-ghost">Find a Store</Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Values ── */}
+      <section className="ec-page-section border-b border-[var(--border-default)]">
+        <div className="ec-container">
+          <p className="ec-eyebrow mb-6 text-[var(--cyan)]">Our Promise</p>
+          <h2 className="mb-12 text-[var(--text-primary)]"
+              style={{
+                fontFamily: "'Poppins', sans-serif",
+                fontSize: 'clamp(32px, 5vw, 56px)',
+                fontWeight: 500,
+                letterSpacing: '-0.01em',
+                lineHeight: 1
+              }}>
+            What We Stand For
+          </h2>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {VALUES.map(({ icon: Icon, title, desc }) => (
+              <div key={title} className="ec-surface p-8 group hover:border-[var(--cyan-border)] hover:bg-[var(--bg-surface-2)] transition-all duration-500">
+                <div className="mb-6 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--cyan-pale)] border border-[var(--cyan-border)] group-hover:bg-[var(--cyan)] transition-colors duration-500">
+                  <Icon className="h-6 w-6 text-[var(--cyan)] group-hover:text-white transition-colors" />
+                </div>
+                <h3 className="mb-3 text-lg font-medium text-[var(--text-primary)]" style={{ fontFamily: "'Poppins', sans-serif" }}>{title}</h3>
+                <p className="text-sm leading-relaxed text-[var(--text-secondary)]">{desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Story ── */}
+      <section className="ec-page-section border-b border-[var(--border-default)] bg-[var(--bg-depth)]/30">
+        <div className="ec-container">
+          <div className="grid gap-16 lg:grid-cols-2 items-center">
+            <div className="ec-anim-fade-up">
+              <p className="ec-eyebrow mb-6">Our Story</p>
+              <h2 className="mb-8 text-[var(--text-primary)]"
+                  style={{
+                    fontFamily: "'Poppins', sans-serif",
+                    fontSize: 'clamp(32px, 5vw, 64px)',
+                    fontWeight: 500,
+                    letterSpacing: '-0.01em',
+                    lineHeight: 0.95
+                  }}>
+                Born in Dhaka,<br />
+                <span className="italic" style={{ color: 'var(--gold)' }}>Built for You</span>
+              </h2>
+              <div className="space-y-6 text-[15px] leading-relaxed text-[var(--text-secondary)]">
+                <p>Errum was founded with a simple belief: everyone deserves access to premium fashion without the premium price tag. We started small — a single store in Mirpur — and grew into a brand trusted by thousands across Bangladesh.</p>
+                <p>Today, with three physical locations and a growing online presence, we continue to handpick every product in our catalogue, ensuring authenticity, quality, and style that stands the test of time.</p>
+              </div>
             </div>
-
-            <h1 className="mt-5 text-4xl sm:text-5xl font-bold leading-[1.05] text-gray-900">
-              A complete lifestyle brand — built for everyday confidence.
-            </h1>
-
-            <p className="mt-5 text-base sm:text-lg text-gray-600">
-              Errum brings together <span className="font-semibold text-gray-800">shoes, clothing, watches, and bags</span> under
-              one roof — with a focus on comfort, quality materials, and a clean premium look.
-            </p>
-
-            <div className="mt-7 flex flex-wrap gap-3">
-              <Link
-                href="/e-commerce/products"
-                className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-black/10 hover:bg-black transition"
-              >
-                Explore Collection
-              </Link>
-              <Link
-                href="/e-commerce/contact"
-                className="inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-3 text-sm font-semibold text-gray-900 hover:bg-gray-50 transition"
-              >
-                Contact Us
-              </Link>
-            </div>
-
-            <div className="mt-8 flex flex-wrap gap-x-6 gap-y-2 text-sm text-gray-500">
-              <span className="inline-flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-red-700" />
-                Comfort-first design
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-red-700" />
-                Premium finishing
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-red-700" />
-                Nationwide delivery
-              </span>
+            <div className="grid grid-cols-2 gap-4">
+              {[
+                ['2020', 'Founded'],
+                ['3', 'Stores'],
+                ['500+', 'Products'],
+                ['10k+', 'Customers']
+              ].map(([val, lbl], i) => (
+                <div key={lbl}
+                     className="ec-surface p-8 text-center bg-[var(--bg-root)] ec-anim-fade-up"
+                     style={{ animationDelay: `${0.2 + i * 0.1}s` }}>
+                  <div className="text-5xl font-bold mb-2 text-[var(--gold)]"
+                       style={{ fontFamily: "'Poppins', sans-serif" }}>
+                    {val}
+                  </div>
+                  <div className="text-[10px] uppercase font-bold tracking-[0.2em] text-[var(--text-muted)]"
+                       style={{ fontFamily: "'Poppins', sans-serif" }}>
+                    {lbl}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
       </section>
 
-      {/* What we stand for */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-16">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <Gem className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Quality that lasts</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              We focus on materials, stitching, finishing, and durability — so your everyday essentials feel premium and stay reliable.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Comfort-first fit</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              Style shouldn’t hurt. Our products are curated with comfort and wearability in mind — from daily shoes to everyday outfits.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <HeartHandshake className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Support you can trust</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              Whether you shop online or in-store, our team is here to help with sizing, recommendations, and order support.
-            </p>
+      {/* ── Stores ── */}
+      <section className="ec-page-section">
+        <div className="ec-container">
+          <p className="ec-eyebrow mb-6">Visit Us</p>
+          <h2 className="mb-10 text-[var(--text-primary)]"
+              style={{
+                fontFamily: "'Poppins', sans-serif",
+                fontSize: 'clamp(32px, 5vw, 56px)',
+                fontWeight: 500,
+                letterSpacing: '-0.01em'
+              }}>
+            Our Stores
+          </h2>
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+            {STORES.map(store => (
+              <div key={store.name} className="ec-surface p-8 group hover:border-[var(--border-strong)] transition-all">
+                <h3 className="text-xl font-medium text-[var(--text-primary)] mb-6" style={{ fontFamily: "'Poppins', sans-serif" }}>{store.name}</h3>
+                <div className="space-y-4">
+                  <div className="flex items-start gap-4 text-[14px] text-[var(--text-secondary)]">
+                    <MapPin className="h-5 w-5 flex-shrink-0 mt-0.5 text-[var(--gold)]" />
+                    <span className="leading-relaxed">{store.address}</span>
+                  </div>
+                  <div className="flex items-center gap-4 text-[14px] text-[var(--text-secondary)]">
+                    <Phone className="h-5 w-5 flex-shrink-0 text-[var(--gold)]" />
+                    <span>{store.phone}</span>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
-
-      {/* Story + Mission */}
-      <section className="bg-gray-50 border-y border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-16">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
-            <div>
-              <h2 className="text-2xl font-bold text-gray-900">Our story</h2>
-              <p className="mt-4 text-gray-600 leading-relaxed">
-                Errum started with a simple idea: lifestyle essentials should be easy to shop, easy to wear, and easy to love.
-                Instead of forcing you to jump between brands for footwear, outfits, watches, and bags — we curate a complete
-                lifestyle experience in one place.
-              </p>
-              <p className="mt-4 text-gray-600 leading-relaxed">
-                Today, Errum continues to grow with one goal: help people feel confident with clean design, reliable quality,
-                and comfortable fits — every day.
-              </p>
-            </div>
-
-            <div className="rounded-2xl border border-gray-200 bg-white p-6">
-              <h3 className="text-lg font-semibold text-gray-900">What we focus on</h3>
-
-              <ul className="mt-4 space-y-3 text-sm text-gray-700">
-                <li className="flex gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-red-700 mt-0.5" />
-                  <span>
-                    <span className="font-semibold">Everyday essentials:</span> shoes, clothing, watches, and bags curated for daily use.
-                  </span>
-                </li>
-                <li className="flex gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-red-700 mt-0.5" />
-                  <span>
-                    <span className="font-semibold">Premium look, practical feel:</span> clean styles that match work, casual, and outings.
-                  </span>
-                </li>
-                <li className="flex gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-red-700 mt-0.5" />
-                  <span>
-                    <span className="font-semibold">Consistency:</span> sizing guidance, product details, and smooth customer experience.
-                  </span>
-                </li>
-                <li className="flex gap-3">
-                  <CheckCircle2 className="h-5 w-5 text-red-700 mt-0.5" />
-                  <span>
-                    <span className="font-semibold">Value:</span> strong quality-to-price balance without compromising on style.
-                  </span>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Shopping promise */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-16">
-        <h2 className="text-2xl font-bold text-gray-900">Our promise</h2>
-        <p className="mt-3 text-gray-600 max-w-2xl">
-          We want your Errum experience to be smooth — from browsing to delivery and after-sales support.
-        </p>
-
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <Truck className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Fast, careful delivery</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              We pack products carefully and ship across Bangladesh with reliable delivery partners.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Authenticity & QC</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              We prioritize product authenticity and basic quality checks so you receive what you expect.
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-gray-200 p-6 bg-white">
-            <div className="flex items-center gap-3">
-              <HeartHandshake className="h-5 w-5 text-red-700" />
-              <h3 className="font-semibold text-gray-900">Helpful support</h3>
-            </div>
-            <p className="mt-3 text-sm text-gray-600">
-              Need sizing help or order updates? Our team responds quickly with practical guidance.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-10 rounded-2xl bg-gray-900 text-white p-8 flex flex-col md:flex-row md:items-center md:justify-between gap-6">
-          <div>
-            <h3 className="text-xl font-semibold">Ready to upgrade your everyday style?</h3>
-            <p className="mt-2 text-sm text-gray-300">
-              Explore shoes, clothing, watches, and bags — curated for the lifestyle you live.
-            </p>
-          </div>
-
-          <Link
-            href="/e-commerce/products"
-            className="inline-flex items-center justify-center rounded-xl bg-white px-6 py-3 text-sm font-semibold text-gray-900 hover:bg-gray-100 transition"
-          >
-            Shop Now →
-          </Link>
-        </div>
-      </section>
-
-      {/* Footer (optional in your Home it was commented out, but About can keep it) */}
-      <Footer />
     </div>
   );
 }

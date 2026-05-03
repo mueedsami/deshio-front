@@ -4,6 +4,8 @@ import { Eye, EyeOff, ArrowLeft, AlertCircle, CheckCircle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCustomerAuth } from '@/contexts/CustomerAuthContext';
 import cartService from '@/services/cartService';
+import Link from 'next/link';
+import Navigation from '@/components/ecommerce/Navigation';
 
 export default function LoginRegisterPage() {
   const router = useRouter();
@@ -12,517 +14,163 @@ export default function LoginRegisterPage() {
   const [activeTab, setActiveTab] = useState('login');
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(false);
-  
-  // Login state
-  const [loginEmail, setLoginEmail] = useState('');
+
+  const [loginEmail,    setLoginEmail]    = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  
-  // Register state
-  const [registerName, setRegisterName] = useState('');
-  const [registerEmail, setRegisterEmail] = useState('');
-  const [registerPhone, setRegisterPhone] = useState('');
-  const [registerPassword, setRegisterPassword] = useState('');
+
+  const [registerName,            setRegisterName]            = useState('');
+  const [registerEmail,           setRegisterEmail]           = useState('');
+  const [registerPhone,           setRegisterPhone]           = useState('');
+  const [registerPassword,        setRegisterPassword]        = useState('');
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
-  
-  // Alert state
-  const [alert, setAlert] = useState({ show: false, type: '', message: '' });
+
+  const [alert,     setAlert]     = useState({ show: false, type: '', message: '' });
   const [isLoading, setIsLoading] = useState(false);
 
-  // Check if redirected from add to cart
-  const [redirectMessage, setRedirectMessage] = useState('');
-  const [pendingCartItem, setPendingCartItem] = useState<any>(null);
-
-  // Redirect if already authenticated
-  useEffect(() => {
-    if (isAuthenticated) {
-      handlePostLoginRedirect();
-    }
-  }, [isAuthenticated, router]);
-
-  useEffect(() => {
-    const checkRedirect = () => {
-      const cartRedirect = localStorage.getItem('cart-redirect');
-      const pendingItem = localStorage.getItem('pending-cart-item');
-      
-      if (cartRedirect === 'true') {
-        if (pendingItem) {
-          setPendingCartItem(JSON.parse(pendingItem));
-          setRedirectMessage('Please login to add this item to your cart and continue shopping.');
-        } else {
-          setRedirectMessage('Please login to view your cart and complete your purchase.');
-        }
-      }
-    };
-    checkRedirect();
-  }, []);
-
-  const handlePostLoginRedirect = async () => {
-    const cartRedirect = localStorage.getItem('cart-redirect');
-    const pendingItem = localStorage.getItem('pending-cart-item');
-    
-    // Clean up flags
-    localStorage.removeItem('cart-redirect');
-    localStorage.removeItem('pending-cart-item');
-    
-    // If there's a pending cart item, add it first
-    if (pendingItem) {
-      try {
-        const item = JSON.parse(pendingItem);
-        console.log('Adding pending cart item:', item);
-        
-        await cartService.addToCart({
-          product_id: item.product_id,
-          quantity: item.quantity
-        });
-        
-        console.log('Pending item added successfully');
-        
-        // Show success message
-        showAlert('success', 'Item added to cart!');
-        
-        // Dispatch cart update event
-        window.dispatchEvent(new Event('cart-updated'));
-        
-        // Redirect to cart after a short delay
-        setTimeout(() => {
-          router.push('/e-commerce/cart');
-        }, 1000);
-        
-      } catch (error: any) {
-        console.error('Error adding pending cart item:', error);
-        showAlert('error', 'Failed to add item to cart. Please try again.');
-        
-        // Still redirect to cart
-        setTimeout(() => {
-          router.push('/e-commerce/cart');
-        }, 1500);
-      }
-    } else if (cartRedirect === 'true') {
-      // No pending item, just redirect to cart
-      router.push('/e-commerce/cart');
-    } else {
-      // Normal login, go to account
-      router.push('/e-commerce/my-account');
-    }
-  };
+  useEffect(() => { if (isAuthenticated) router.replace('/e-commerce/my-account'); }, [isAuthenticated, router]);
 
   const showAlert = (type: string, message: string) => {
     setAlert({ show: true, type, message });
     setTimeout(() => setAlert({ show: false, type: '', message: '' }), 5000);
   };
 
-  const handleLogin = async () => {
-    if (!loginEmail || !loginPassword) {
-      showAlert('error', 'Please fill in all fields');
-      return;
-    }
-
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginEmail || !loginPassword) return showAlert('error', 'Please fill in all fields.');
     setIsLoading(true);
     try {
-      // Use customerAuthService via context
-      await login(loginEmail, loginPassword, rememberMe);
-      
-      showAlert('success', 'Login successful! Redirecting...');
-      
-      // The redirect logic is handled in the useEffect above
-      // which triggers when isAuthenticated becomes true
-      
-    } catch (error: any) {
-      showAlert('error', error.message);
-    } finally {
-      setIsLoading(false);
-    }
+      await login(loginEmail, loginPassword);
+      try {
+        const guestCart = await cartService.getCart();
+        if (guestCart?.items?.length) await cartService.mergeGuestCart();
+      } catch {}
+      showAlert('success', 'Welcome back!');
+      setTimeout(() => router.push('/e-commerce'), 800);
+    } catch (err: any) {
+      showAlert('error', err?.message || 'Login failed. Please check your credentials.');
+    } finally { setIsLoading(false); }
   };
 
-  const handleRegister = async () => {
-    // Validation
-    if (!registerName || !registerEmail || !registerPhone || !registerPassword || !registerConfirmPassword) {
-      showAlert('error', 'Please fill in all fields');
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(registerEmail)) {
-      showAlert('error', 'Please enter a valid email address');
-      return;
-    }
-
-    const phoneRegex = /^(\+88)?01[3-9]\d{8}$/;
-    if (!phoneRegex.test(registerPhone)) {
-      showAlert('error', 'Please enter a valid Bangladesh phone number');
-      return;
-    }
-
-    if (registerName.length < 2) {
-      showAlert('error', 'Name must be at least 2 characters long');
-      return;
-    }
-
-    if (registerPassword.length < 8) {
-      showAlert('error', 'Password must be at least 8 characters long');
-      return;
-    }
-
-    if (registerPassword !== registerConfirmPassword) {
-      showAlert('error', 'Passwords do not match');
-      return;
-    }
-
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!registerName || !registerEmail || !registerPhone || !registerPassword) return showAlert('error', 'Please fill in all fields.');
+    if (registerPassword !== registerConfirmPassword) return showAlert('error', 'Passwords do not match.');
+    if (registerPassword.length < 8) return showAlert('error', 'Password must be at least 8 characters.');
     setIsLoading(true);
-    
     try {
-      // Use customerAuthService via context
-      await register({
-        name: registerName,
-        email: registerEmail,
-        phone: registerPhone,
-        password: registerPassword,
-        password_confirmation: registerConfirmPassword,
-        country: 'Bangladesh'
-      });
-
-      showAlert('success', 'Registration successful! Please login to continue.');
-      
-      // Clear form
-      setRegisterName('');
-      setRegisterEmail('');
-      setRegisterPhone('');
-      setRegisterPassword('');
-      setRegisterConfirmPassword('');
-      
-      // Switch to login tab after 1.5 seconds
-      setTimeout(() => {
-        setActiveTab('login');
-        setLoginEmail(registerEmail); // Pre-fill email
-      }, 1500);
-    } catch (error: any) {
-      showAlert('error', error.message);
-    } finally {
-      setIsLoading(false);
-    }
+      await register(registerName, registerEmail, registerPhone, registerPassword, registerConfirmPassword);
+      showAlert('success', 'Account created! Welcome to Errum.');
+      setTimeout(() => router.push('/e-commerce'), 800);
+    } catch (err: any) {
+      showAlert('error', err?.message || 'Registration failed. Please try again.');
+    } finally { setIsLoading(false); }
   };
+
+  const inputClass = "ec-dark-input";
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <button 
-              onClick={() => router.push('/e-commerce')}
-              className="flex items-center text-gray-700 hover:text-red-700 transition-colors"
-            >
-              <ArrowLeft size={20} className="mr-2" />
-              <span>Back to Shop</span>
-            </button>
-            <h1 className="text-2xl font-bold text-gray-900">Deshio</h1>
-            <div className="w-24"></div>
-          </div>
-        </div>
-      </header>
+    <div className="ec-root min-h-screen">
+      <Navigation />
 
-      {/* Breadcrumb */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <div className="text-sm text-gray-600">
-          <button onClick={() => router.push('/e-commerce')} className="text-red-700 hover:underline">
-            Home
-          </button>
-          <span className="mx-2">&gt;</span>
-          <span>My account</span>
-        </div>
-      </div>
+      <div className="ec-container flex min-h-[calc(100vh-68px)] items-center justify-center py-12">
+        <div className="w-full max-w-md">
 
-      {/* Cart Redirect Notice */}
-      {redirectMessage && (
-        <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 mb-4">
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
-            <AlertCircle className="text-blue-600 flex-shrink-0 mt-0.5" size={20} />
-            <div>
-              <h3 className="font-medium text-blue-900">Login Required</h3>
-              <p className="text-sm text-blue-700 mt-1">{redirectMessage}</p>
-              {pendingCartItem && (
-                <div className="mt-2 flex items-center gap-2 text-sm text-blue-800">
-                  <img 
-                    src={pendingCartItem.image} 
-                    alt={pendingCartItem.name}
-                    className="w-10 h-10 object-cover rounded"
-                  />
-                  <span className="font-medium">{pendingCartItem.name}</span>
-                  <span>×{pendingCartItem.quantity}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Toast Notification */}
-      {alert.show && (
-        <div className="fixed top-4 right-4 z-50 animate-slide-in">
-          <div className={`flex items-center gap-3 p-4 rounded-lg shadow-lg min-w-[320px] max-w-md ${
-            alert.type === 'success' 
-              ? 'bg-green-600 text-white' 
-              : 'bg-red-600 text-white'
-          }`}>
-            <div className="flex-shrink-0">
-              {alert.type === 'success' ? (
-                <CheckCircle size={24} className="text-white" />
-              ) : (
-                <AlertCircle size={24} className="text-white" />
-              )}
-            </div>
-            <span className="flex-1 font-medium">{alert.message}</span>
-            <button
-              onClick={() => setAlert({ show: false, type: '', message: '' })}
-              className="flex-shrink-0 text-white hover:text-gray-200 transition-colors"
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M15 5L5 15M5 5L15 15" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-              </svg>
-            </button>
-          </div>
-        </div>
-      )}
-      
-      <style jsx>{`
-        @keyframes slide-in {
-          from {
-            transform: translateX(100%);
-            opacity: 0;
-          }
-          to {
-            transform: translateX(0);
-            opacity: 1;
-          }
-        }
-        .animate-slide-in {
-          animation: slide-in 0.3s ease-out;
-        }
-      `}</style>
-
-      {/* Main Content */}
-      <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8">
-          {/* Tabs */}
-          <div className="flex border-b border-gray-200 mb-8">
-            <button
-              onClick={() => setActiveTab('login')}
-              className={`flex-1 pb-4 text-lg font-medium transition-colors relative ${
-                activeTab === 'login'
-                  ? 'text-red-700 border-b-2 border-red-700'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              Login
-            </button>
-            <button
-              onClick={() => setActiveTab('register')}
-              className={`flex-1 pb-4 text-lg font-medium transition-colors relative ${
-                activeTab === 'register'
-                  ? 'text-red-700 border-b-2 border-red-700'
-                  : 'text-gray-400 hover:text-gray-600'
-              }`}
-            >
-              Register
-            </button>
+          {/* Header */}
+          <div className="mb-8 text-center">
+            <h1 style={{ fontFamily: "'Poppins', sans-serif", fontSize: '48px', fontWeight: 500, color: 'white', letterSpacing: '-0.02em', lineHeight: 1 }}>
+              {activeTab === 'login' ? 'Welcome Back' : 'Join Errum'}
+            </h1>
+            <p className="mt-2 text-[14px]" style={{ color: 'rgba(255,255,255,0.4)' }}>
+              {activeTab === 'login' ? 'Sign in to your account' : 'Create your account today'}
+            </p>
           </div>
 
-          {/* Login Form */}
-          {activeTab === 'login' && (
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email address <span className="text-red-700">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                  placeholder="Enter your email"
-                  onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-                  disabled={isLoading}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Password <span className="text-red-700">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                    placeholder="Enter your password"
-                    onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
-                    disabled={isLoading}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                    disabled={isLoading}
-                  >
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between">
-                <label className="flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="w-4 h-4 text-red-700 border-gray-300 rounded focus:ring-red-700"
-                    disabled={isLoading}
-                  />
-                  <span className="ml-2 text-sm text-gray-700">Remember me</span>
-                </label>
-              </div>
-
-              <button
-                onClick={handleLogin}
-                disabled={isLoading}
-                className="w-full bg-red-700 text-white py-3 rounded-md font-medium hover:bg-red-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
-              >
-                {isLoading ? 'Logging in...' : 'Log In'}
-              </button>
-
-              <div className="text-center">
-                <a href="#" className="text-red-700 hover:underline text-sm">
-                  Lost your password?
-                </a>
-              </div>
+          {/* Alert */}
+          {alert.show && (
+            <div className="mb-5 flex items-start gap-3 rounded-2xl p-4" style={{ background: alert.type === 'error' ? 'rgba(239,68,68,0.1)' : 'rgba(34,197,94,0.1)', border: `1px solid ${alert.type === 'error' ? 'rgba(239,68,68,0.25)' : 'rgba(34,197,94,0.25)'}` }}>
+              {alert.type === 'error' ? <AlertCircle className="h-5 w-5 text-red-400 flex-shrink-0 mt-0.5" /> : <CheckCircle className="h-5 w-5 text-green-400 flex-shrink-0 mt-0.5" />}
+              <p className="text-[13px]" style={{ color: alert.type === 'error' ? '#f87171' : '#4ade80' }}>{alert.message}</p>
             </div>
           )}
 
-          {/* Register Form */}
-          {activeTab === 'register' && (
-            <div className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Full Name <span className="text-red-700">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={registerName}
-                  onChange={(e) => setRegisterName(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                  placeholder="Enter your full name"
-                  disabled={isLoading}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Email address <span className="text-red-700">*</span>
-                </label>
-                <input
-                  type="email"
-                  value={registerEmail}
-                  onChange={(e) => setRegisterEmail(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                  placeholder="Enter your email"
-                  disabled={isLoading}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Phone Number <span className="text-red-700">*</span>
-                </label>
-                <input
-                  type="tel"
-                  value={registerPhone}
-                  onChange={(e) => setRegisterPhone(e.target.value)}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                  placeholder="01XXXXXXXXX"
-                  disabled={isLoading}
-                />
-                <p className="text-xs text-gray-500 mt-1">Bangladesh phone number (e.g., 01712345678)</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Password <span className="text-red-700">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={registerPassword}
-                    onChange={(e) => setRegisterPassword(e.target.value)}
-                    className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                    placeholder="Create a password"
-                    disabled={isLoading}
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                    disabled={isLoading}
-                    tabIndex={-1}
-                  >
-                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                  </button>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">Minimum 8 characters</p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Confirm Password <span className="text-red-700">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type={showConfirmPassword ? 'text' : 'password'}
-                    value={registerConfirmPassword}
-                    onChange={(e) => setRegisterConfirmPassword(e.target.value)}
-                    className="w-full px-4 py-3 pr-12 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-red-700 focus:border-transparent transition-all"
-                    placeholder="Confirm your password"
-                    disabled={isLoading}
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700"
-                    disabled={isLoading}
-                    tabIndex={-1}
-                  >
-                    {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                  </button>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  {registerConfirmPassword && registerPassword !== registerConfirmPassword && (
-                    <span className="text-red-700">Passwords do not match</span>
-                  )}
-                  {registerConfirmPassword && registerPassword === registerConfirmPassword && (
-                    <span className="text-green-700">Passwords match ✓</span>
-                  )}
-                </p>
-              </div>
-
-              <div className="bg-gray-50 p-4 rounded-md">
-                <p className="text-sm text-gray-600">
-                  Your personal data will be used to support your experience throughout this website, to manage access to your account, and for other purposes described in our privacy policy.
-                </p>
-              </div>
-
-              <button
-                onClick={handleRegister}
-                disabled={isLoading}
-                type="button"
-                className="w-full bg-red-700 text-white py-3 rounded-md font-medium hover:bg-red-800 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+          {/* Tab switcher */}
+          <div className="flex mb-6 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.09)' }}>
+            {['login', 'register'].map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                className="flex-1 rounded-lg py-2.5 text-[12px] font-semibold transition-all capitalize"
+                style={{
+                  background:    activeTab === tab ? 'rgba(255,255,255,0.1)' : 'transparent',
+                  color:         activeTab === tab ? 'white' : 'rgba(255,255,255,0.4)',
+                  letterSpacing: '0.06em',
+                  fontFamily:    "'Poppins', sans-serif",
+                }}
               >
-                {isLoading ? 'Registering...' : 'Register'}
+                {tab === 'login' ? 'Sign In' : 'Register'}
               </button>
-            </div>
-          )}
+            ))}
+          </div>
+
+          {/* Forms */}
+          <div className="ec-dark-card p-6 sm:p-8">
+            {activeTab === 'login' ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>EMAIL</label>
+                  <input type="email" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="you@example.com" className={inputClass} />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>PASSWORD</label>
+                  <div className="relative">
+                    <input type={showPassword ? 'text' : 'password'} value={loginPassword} onChange={e => setLoginPassword(e.target.value)} placeholder="••••••••" className={inputClass + ' pr-11'} />
+                    <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                </div>
+                <button type="submit" disabled={isLoading} className="ec-btn ec-btn-gold w-full justify-center mt-2">
+                  {isLoading ? 'Signing in…' : 'Sign In'}
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4">
+                {[
+                  { label: 'FULL NAME',    val: registerName,    set: setRegisterName,    type: 'text',     ph: 'Your full name' },
+                  { label: 'EMAIL',        val: registerEmail,   set: setRegisterEmail,   type: 'email',    ph: 'you@example.com' },
+                  { label: 'PHONE',        val: registerPhone,   set: setRegisterPhone,   type: 'tel',      ph: '01XXXXXXXXX' },
+                ].map(({ label, val, set, type, ph }) => (
+                  <div key={label}>
+                    <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>{label}</label>
+                    <input type={type} value={val} onChange={e => set(e.target.value)} placeholder={ph} className={inputClass} />
+                  </div>
+                ))}
+                {[
+                  { label: 'PASSWORD',         val: registerPassword,        set: setRegisterPassword,        show: showPassword,        toggle: () => setShowPassword(v=>!v) },
+                  { label: 'CONFIRM PASSWORD', val: registerConfirmPassword, set: setRegisterConfirmPassword, show: showConfirmPassword, toggle: () => setShowConfirmPassword(v=>!v) },
+                ].map(({ label, val, set, show, toggle }) => (
+                  <div key={label}>
+                    <label className="mb-1.5 block text-[11px] font-medium" style={{ color: 'rgba(255,255,255,0.45)', letterSpacing: '0.1em', fontFamily: "'Poppins', sans-serif" }}>{label}</label>
+                    <div className="relative">
+                      <input type={show ? 'text' : 'password'} value={val} onChange={e => set(e.target.value)} placeholder="••••••••" className={inputClass + ' pr-11'} />
+                      <button type="button" onClick={toggle} className="absolute right-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                <button type="submit" disabled={isLoading} className="ec-btn ec-btn-gold w-full justify-center mt-2">
+                  {isLoading ? 'Creating account…' : 'Create Account'}
+                </button>
+              </form>
+            )}
+          </div>
+
+          <div className="mt-5 text-center">
+            <Link href="/e-commerce" className="inline-flex items-center gap-1.5 text-[12px] transition-colors" style={{ color: 'rgba(255,255,255,0.35)' }}
+                  onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
+                  onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.35)')}>
+              <ArrowLeft className="h-3.5 w-3.5" /> Back to store
+            </Link>
+          </div>
         </div>
       </div>
     </div>

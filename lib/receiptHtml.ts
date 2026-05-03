@@ -37,7 +37,7 @@ function receiptBody(r: ReceiptOrder) {
   const createdAt = r.dateTime || new Date().toLocaleString();
 
   return `
-    <h1>${escapeHtml((r.storeName || 'ERRUM').toUpperCase())}</h1>
+    <h1>${escapeHtml((r.storeName || 'DESHIO').toUpperCase())}</h1>
     <div class="meta">
       <div><b>Order:</b> ${escapeHtml(String(orderNo))}</div>
       <div><b>Date:</b> ${escapeHtml(createdAt)}</div>
@@ -138,28 +138,4 @@ export function receiptBulkHtml(orders: any[], opts?: { embed?: boolean }): stri
     return `<div class="page" data-title="${escapeHtml(title)}">${receiptBody(r)}</div>`;
   }).join('');
   return wrapHtml('Bulk Receipts', pages || '<p>No orders selected</p>', opts);
-}
-
-export function openReceiptPreview(order: any): void {
-  if (typeof window === 'undefined') return;
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=420,height=800');
-  if (!w) {
-    alert('Popup blocked. Please allow popups to preview receipt.');
-    return;
-  }
-  w.document.open();
-  w.document.write(receiptHtml(order));
-  w.document.close();
-}
-
-export function openBulkReceiptPreview(orders: any[]): void {
-  if (typeof window === 'undefined') return;
-  const w = window.open('', '_blank', 'noopener,noreferrer,width=520,height=900');
-  if (!w) {
-    alert('Popup blocked. Please allow popups to preview receipts.');
-    return;
-  }
-  w.document.open();
-  w.document.write(receiptBulkHtml(orders));
-  w.document.close();
 }

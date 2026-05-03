@@ -1142,14 +1142,14 @@ if (!matchingItem) {
                         <AlertTriangle className="h-4 w-4 text-yellow-600" />
                         <span className="text-xs font-medium text-yellow-700 dark:text-yellow-400">Warning</span>
                       </div>
-                      <p className="text-xl font-bold text-yellow-700 dark:text-yellow-400">{scanHistory.filter((s) => s.status === 'warning').length}</p>
+                      <p className="text-xl font-bold text-yellow-700 dark:text-green-400">{scanHistory.filter((s) => s.status === 'warning').length}</p>
                     </div>
                     <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
                       <div className="flex items-center gap-2 mb-1">
                         <XCircle className="h-4 w-4 text-red-600" />
                         <span className="text-xs font-medium text-red-700 dark:text-red-400">Error</span>
                       </div>
-                      <p className="text-xl font-bold text-red-700 dark:text-red-400">{scanHistory.filter((s) => s.status === 'error').length}</p>
+                      <p className="text-xl font-bold text-red-700 dark:text-green-400">{scanHistory.filter((s) => s.status === 'error').length}</p>
                     </div>
                   </div>
                 </div>

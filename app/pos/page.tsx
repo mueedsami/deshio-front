@@ -12,9 +12,12 @@ import {
   Download,
   X,
   Loader2,
+  Search,
 } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from "@/contexts/ThemeContext";
 
 // Services
 import orderService from '@/services/orderService';
@@ -37,7 +40,7 @@ import CustomerFormModal from '@/components/pos/CustomerFormModal';
 
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
-import { withPrintableServiceFallback } from '@/lib/receipt';
+import DailyCashReportModal from '@/components/pos/DailyCashReportModal';
 
 interface Store {
   id: number;
@@ -79,8 +82,9 @@ export interface ExtendedCartItem extends CartItem {
 }
 
 export default function POSPage() {
+  const { user, role, scopedStoreId, canSelectStore, canAccessDailyCashReport } = useAuth();
   // UI State
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -88,7 +92,6 @@ export default function POSPage() {
   // Printing
   const [autoPrintReceipt, setAutoPrintReceipt] = useState(true);
   const [lastCompletedOrderId, setLastCompletedOrderId] = useState<number | null>(null);
-  const [lastCompletedOrderServices, setLastCompletedOrderServices] = useState<any[]>([]);
 
   useEffect(() => {
     try {
@@ -116,7 +119,7 @@ export default function POSPage() {
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [selectedEmployee, setSelectedEmployee] = useState('');
-  const [employeeSearch, setEmployeeSearch] = useState('');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
 
   // User Info
@@ -144,9 +147,21 @@ export default function POSPage() {
   // Products (for manual entry)
   const [products, setProducts] = useState<Product[]>([]);
   const [product, setProduct] = useState('');
+  const [manualSearchQuery, setManualSearchQuery] = useState('');
   const [minPriceFilter, setMinPriceFilter] = useState('');
   const [maxPriceFilter, setMaxPriceFilter] = useState('');
   const [selectedBatch, setSelectedBatch] = useState<Batch | null>(null);
+
+  const employeeDropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (employeeDropdownRef.current && !employeeDropdownRef.current.contains(event.target as Node)) {
+        setShowEmployeeDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
   const [sellingPrice, setSellingPrice] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [discountPercent, setDiscountPercent] = useState(0);
@@ -157,6 +172,7 @@ export default function POSPage() {
   const [customerName, setCustomerName] = useState('');
   const [mobileNo, setMobileNo] = useState('');
   const [address, setAddress] = useState('');
+  const [orderNotes, setOrderNotes] = useState('');
 
   // ✅ Customer lookup (existing customer by phone + last purchase)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
@@ -260,6 +276,9 @@ export default function POSPage() {
     costPrice?: number;
     originalPrice?: number;
   } | null>(null);
+
+  // ✅ Reports
+  const [showDailyReportModal, setShowDailyReportModal] = useState(false);
 
   // ============ TOAST HELPER ============
   const showToast = (message: string, type: 'success' | 'error') => {
@@ -473,6 +492,7 @@ export default function POSPage() {
               ...item,
               qty: newQty,
               amount: baseAmount - discountValue,
+              discount: discountValue,
             };
           }
         }
@@ -552,26 +572,13 @@ export default function POSPage() {
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
   const total = subtotal + transportCost;
 
-  // Installment / EMI (flexible pay-now amount in POS)
-  // We still compute a *suggested* installment amount for reference, but staff can collect any amount now.
-  const suggestedInstallmentAmount = useMemo(() => {
+  // Installment amount (ceil to 2 decimals so collected amount is not less than required per installment)
+  const installmentAmount = useMemo(() => {
     if (!isInstallment) return 0;
     const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
     if (total <= 0) return 0;
     return Math.ceil((total / n) * 100) / 100;
   }, [isInstallment, installmentCount, total]);
-
-  const [installmentPayNow, setInstallmentPayNow] = useState<number>(0);
-
-  useEffect(() => {
-    // Default the "pay now" to the suggested amount when switching to installment / when totals change.
-    // If user already typed something positive, keep it.
-    if (!isInstallment) {
-      setInstallmentPayNow(0);
-      return;
-    }
-    setInstallmentPayNow((prev) => (prev > 0 ? prev : suggestedInstallmentAmount));
-  }, [isInstallment, suggestedInstallmentAmount]);
 
   const installmentPaymentMethodId = useMemo(() => {
     if (!isInstallment) return null;
@@ -580,7 +587,7 @@ export default function POSPage() {
     return paymentMethods.cash || 1;
   }, [isInstallment, installmentPaymentMode, paymentMethods]);
 
-  const totalPaid = isInstallment ? installmentPayNow : cashPaid + cardPaid + bkashPaid + nagadPaid;
+  const totalPaid = isInstallment ? installmentAmount : cashPaid + cardPaid + bkashPaid + nagadPaid;
 
   // ✅ FIXED: Calculate due and change correctly
   const due = total - totalPaid;
@@ -622,7 +629,7 @@ export default function POSPage() {
     // ✅ Confirmation
     if (isInstallment) {
       const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-      const msg = `Installment/EMI: ${n} × ৳${suggestedInstallmentAmount.toFixed(2)} (suggested). Collecting now: ৳${installmentPayNow.toFixed(2)}. Continue?`;
+      const msg = `Installment/EMI: ${n} × ৳${installmentAmount.toFixed(2)}. First installment will be collected now. Continue?`;
       if (!confirm(msg)) return;
     } else {
       // Due sales are blocked; optional confirmation only when change needs to be returned.
@@ -647,7 +654,7 @@ export default function POSPage() {
       for (const item of cart) {
         // ✅ Skip validation for service items
         if (item.isService) continue;
-        
+
         if (!item.productId) {
           throw new Error(`Missing product_id for ${item.productName}`);
         }
@@ -674,60 +681,60 @@ export default function POSPage() {
         // ✅ Only add customer if data is provided
         ...(customerName || mobileNo
           ? {
-              customer: {
-                name: customerName || 'Walk-in Customer',
-                phone: mobileNo || '01XXXXXXXXX',
-                ...(address ? { address } : {}),
-              },
-            }
+            customer: {
+              name: customerName || 'Walk-in Customer',
+              phone: mobileNo || '01XXXXXXXXX',
+              ...(address ? { address } : {}),
+            },
+          }
           : {}),
 
         // ✅ Map cart items (VAT inclusive — send tax_amount = 0)
         items: itemsWithTax
           .filter(({ item }) => !item.isService) // ✅ Filter out service items
           .map(({ item, taxAmount }) => {
-          const productId = parseInt(String(item.productId));
-          const batchId = parseInt(String(item.batchId));
-          const quantity = parseInt(String(item.qty));
-          const unitPrice = parseFloat(String(item.price));
-          const discountAmount = parseFloat(String(item.discount || 0));
+            const productId = parseInt(String(item.productId));
+            const batchId = parseInt(String(item.batchId));
+            const quantity = parseInt(String(item.qty));
+            const unitPrice = parseFloat(String(item.price));
+            const discountAmount = parseFloat(String(item.discount || 0));
 
-          // Validate after conversion
-          if (isNaN(productId)) {
-            throw new Error(`Invalid product_id for ${item.productName}`);
-          }
-          if (isNaN(batchId)) {
-            throw new Error(`Invalid batch_id for ${item.productName}`);
-          }
-          if (isNaN(quantity) || quantity <= 0) {
-            throw new Error(`Invalid quantity for ${item.productName}`);
-          }
-          if (isNaN(unitPrice) || unitPrice < 0) {
-            throw new Error(`Invalid unit_price for ${item.productName}`);
-          }
+            // Validate after conversion
+            if (isNaN(productId)) {
+              throw new Error(`Invalid product_id for ${item.productName}`);
+            }
+            if (isNaN(batchId)) {
+              throw new Error(`Invalid batch_id for ${item.productName}`);
+            }
+            if (isNaN(quantity) || quantity <= 0) {
+              throw new Error(`Invalid quantity for ${item.productName}`);
+            }
+            if (isNaN(unitPrice) || unitPrice < 0) {
+              throw new Error(`Invalid unit_price for ${item.productName}`);
+            }
 
-          const itemPayload: any = {
-            product_id: productId,
-            batch_id: batchId,
-            quantity: quantity,
-            unit_price: unitPrice,
-            discount_amount: discountAmount,
-            tax_amount: taxAmount, // VAT inclusive — no extra tax
-          };
+            const itemPayload: any = {
+              product_id: productId,
+              batch_id: batchId,
+              quantity: quantity,
+              unit_price: unitPrice,
+              discount_amount: discountAmount,
+              tax_amount: taxAmount, // VAT inclusive — no extra tax
+            };
 
-          // ✅ CRITICAL: Only include barcode for NON-defective items
-          if (!item.isDefective && item.barcode) {
-            itemPayload.barcode = item.barcode;
-          }
+            // ✅ CRITICAL: Only include barcode for NON-defective items
+            if (!item.isDefective && item.barcode) {
+              itemPayload.barcode = item.barcode;
+            }
 
-          console.log(`Item ${item.productName}:`, {
-            ...itemPayload,
-            isDefective: item.isDefective,
-            hasBarcode: !!item.barcode,
-          });
+            console.log(`Item ${item.productName}:`, {
+              ...itemPayload,
+              isDefective: item.isDefective,
+              hasBarcode: !!item.barcode,
+            });
 
-          return itemPayload;
-        }),
+            return itemPayload;
+          }),
 
         // ✅ NEW: Add services as separate array
         services: itemsWithTax
@@ -742,27 +749,23 @@ export default function POSPage() {
             category: item.serviceCategory,
           })),
 
-        // ✅ FIXED: Add totals correctly
-        discount_amount: totalDiscount,
+        // ✅ FIXED: Global discount_amount should be 0 because item discounts are already sent in the items array.
+        // If a global discount field is added to the UI later, it should be sent here.
+        discount_amount: 0,
         shipping_amount: transportCost,
 
         // ✅ FIXED: start_date should be undefined instead of null
         ...(isInstallment
           ? {
-              installment_plan: {
-                total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
-                installment_amount: suggestedInstallmentAmount,
-                start_date: undefined, // ✅ Changed from null to undefined
-              },
-            }
+            installment_plan: {
+              total_installments: Math.max(2, Math.min(24, Number(installmentCount) || 2)),
+              installment_amount: installmentAmount,
+              start_date: undefined, // ✅ Changed from null to undefined
+            },
+          }
           : {}),
 
-        // ✅ Add notes if any
-        ...(address || change > 0
-          ? {
-              notes: `${address ? `Address: ${address}` : ''}${address && change > 0 ? ', ' : ''}${change > 0 ? `Change Given: ৳${change.toFixed(2)}` : ''}`.trim(),
-            }
-          : {}),
+        notes: orderNotes.trim(),
       };
 
       console.log('═══════════════════════════════════');
@@ -821,13 +824,13 @@ export default function POSPage() {
           throw new Error('Installment payment method is missing');
         }
 
-        if (installmentPayNow > 0) {
+        if (installmentAmount > 0) {
           console.log('💳 Processing installment/EMI first payment...');
 
           // ✅ FIXED: Remove payment_type field
           await paymentService.addInstallmentPayment(order.id, {
             payment_method_id: installmentPaymentMethodId,
-            amount: installmentPayNow,
+            amount: installmentAmount,
             auto_complete: true,
             notes: `POS installment/EMI - 1st installment of ${Math.max(2, Math.min(24, Number(installmentCount) || 2))}`,
             payment_data: installmentTransactionReference
@@ -837,10 +840,10 @@ export default function POSPage() {
           console.log('✅ Installment payment processed');
 
           // Receipt breakdown for installment first payment
-          if (installmentPaymentMode === 'cash') receiptPaymentBreakdown.cash = installmentPayNow;
-          if (installmentPaymentMode === 'card') receiptPaymentBreakdown.card = installmentPayNow;
-          if (installmentPaymentMode === 'bkash') receiptPaymentBreakdown.bkash = installmentPayNow;
-          if (installmentPaymentMode === 'nagad') receiptPaymentBreakdown.nagad = installmentPayNow;
+          if (installmentPaymentMode === 'cash') receiptPaymentBreakdown.cash = installmentAmount;
+          if (installmentPaymentMode === 'card') receiptPaymentBreakdown.card = installmentAmount;
+          if (installmentPaymentMode === 'bkash') receiptPaymentBreakdown.bkash = installmentAmount;
+          if (installmentPaymentMode === 'nagad') receiptPaymentBreakdown.nagad = installmentAmount;
         }
       } else {
         // ✅ FIXED: Process payments - only charge the order total, not overpayment
@@ -856,19 +859,41 @@ export default function POSPage() {
 
           const paymentSplits: any[] = [];
 
-          // ✅ FIXED: If there's overpayment, reduce it from cash first
+          // ✅ SEQUENTIAL NORMALIZATION: subtract "change" from all payment methods until change is 0
+          // Priority for reduction: Cash -> Nagad -> Bkash -> Card
+          let remainingChange = change;
+          
           let adjustedCashPaid = cashPaid;
-          let adjustedCardPaid = cardPaid;
-          let adjustedBkashPaid = bkashPaid;
           let adjustedNagadPaid = nagadPaid;
+          let adjustedBkashPaid = bkashPaid;
+          let adjustedCardPaid = cardPaid;
 
-          if (change > 0) {
-            // Customer overpaid - reduce cash payment by the change amount
-            adjustedCashPaid = Math.max(0, cashPaid - change);
-            console.log(
-              `⚠️ Overpayment detected. Reducing cash from ৳${cashPaid} to ৳${adjustedCashPaid}`
-            );
+          if (remainingChange > 0 && adjustedCashPaid > 0) {
+            const reduction = Math.min(adjustedCashPaid, remainingChange);
+            adjustedCashPaid -= reduction;
+            remainingChange -= reduction;
           }
+          if (remainingChange > 0 && adjustedNagadPaid > 0) {
+            const reduction = Math.min(adjustedNagadPaid, remainingChange);
+            adjustedNagadPaid -= reduction;
+            remainingChange -= reduction;
+          }
+          if (remainingChange > 0 && adjustedBkashPaid > 0) {
+            const reduction = Math.min(adjustedBkashPaid, remainingChange);
+            adjustedBkashPaid -= reduction;
+            remainingChange -= reduction;
+          }
+          if (remainingChange > 0 && adjustedCardPaid > 0) {
+            const reduction = Math.min(adjustedCardPaid, remainingChange);
+            adjustedCardPaid -= reduction;
+            remainingChange -= reduction;
+          }
+
+          console.log(`💰 Payment normalization:`, {
+            original: { cashPaid, cardPaid, bkashPaid, nagadPaid, totalPaid },
+            adjusted: { adjustedCashPaid, adjustedCardPaid, adjustedBkashPaid, adjustedNagadPaid, totalToCharge: amountToCharge },
+            changeReturned: change
+          });
 
           // Save exact split for receipt printing
           receiptPaymentBreakdown = {
@@ -939,20 +964,6 @@ export default function POSPage() {
 
       // Remember last order for manual reprint
       setLastCompletedOrderId(order.id);
-      setLastCompletedOrderServices(
-        cart
-          .filter((c: any) => c?.isService || c?.type === 'service')
-          .map((c: any) => ({
-            id: c.id,
-            service_id: c.serviceId,
-            service_name: c.productName,
-            quantity: c.qty ?? c.quantity ?? 1,
-            unit_price: c.price,
-            discount_amount: c.discount ?? 0,
-            total_amount: c.amount,
-            category: c.serviceCategory ?? c.category,
-          }))
-      );
 
       // Auto print receipt (non-blocking)
       if (autoPrintReceipt) {
@@ -972,10 +983,10 @@ export default function POSPage() {
                 (fullOrder as any).items.some((it: any) =>
                   Boolean(
                     it?.service_id ||
-                      it?.serviceId ||
-                      it?.is_service ||
-                      it?.isService ||
-                      String(it?.item_type || it?.type || '').toLowerCase() === 'service'
+                    it?.serviceId ||
+                    it?.is_service ||
+                    it?.isService ||
+                    String(it?.item_type || it?.type || '').toLowerCase() === 'service'
                   )
                 ));
 
@@ -992,24 +1003,24 @@ export default function POSPage() {
                 category: c.serviceCategory ?? c.category,
               }));
 
-            const printableOrder = withPrintableServiceFallback(
-              {
-                ...(fullOrder as any),
-                payment_breakdown: receiptPaymentBreakdown,
-                change_amount: change,
-                cashPaid: receiptPaymentBreakdown.cash,
-                cardPaid: receiptPaymentBreakdown.card,
-                bkashPaid: receiptPaymentBreakdown.bkash,
-                nagadPaid: receiptPaymentBreakdown.nagad,
-              },
-              !hasServiceInServerOrder && serviceFallbackFromCart.length > 0 ? serviceFallbackFromCart : []
-            );
+            const printableOrder = {
+              ...(fullOrder as any),
+              payment_breakdown: receiptPaymentBreakdown,
+              change_amount: change,
+              cashPaid: receiptPaymentBreakdown.cash,
+              cardPaid: receiptPaymentBreakdown.card,
+              bkashPaid: receiptPaymentBreakdown.bkash,
+              nagadPaid: receiptPaymentBreakdown.nagad,
+              ...(!hasServiceInServerOrder && serviceFallbackFromCart.length > 0
+                ? { services: serviceFallbackFromCart }
+                : {}),
+            };
 
-            await printReceipt(printableOrder, undefined, { template: 'pos_receipt' });
-            showToast('✅ Receipt printed', 'success');
+            await printReceipt(printableOrder, undefined, { template: 'social_invoice' });
+            showToast('✅ Invoice printed', 'success');
           } catch (e: any) {
-            console.error('❌ Receipt auto-print failed:', e);
-            showToast(`Receipt print failed: ${e?.message || 'Unknown error'}`, 'error');
+            console.error('❌ Invoice auto-print failed:', e);
+            showToast(`Invoice print failed: ${e?.message || 'Unknown error'}`, 'error');
           }
         })();
       }
@@ -1056,9 +1067,8 @@ export default function POSPage() {
         const errorMessages = Object.entries(errors)
           .map(([field, messages]: [string, any]) => {
             const fieldName = field.replace(/_/g, ' ').replace(/\./g, ' ');
-            return `${fieldName}: ${
-              Array.isArray(messages) ? messages.join(', ') : messages
-            }`;
+            return `${fieldName}: ${Array.isArray(messages) ? messages.join(', ') : messages
+              }`;
           })
           .join('\n');
 
@@ -1089,9 +1099,8 @@ export default function POSPage() {
         showToast('QZ Tray offline - opening receipt preview (Print → Save as PDF)', 'error');
       }
       const fullOrder = await orderService.getById(lastCompletedOrderId);
-      const printableOrder = withPrintableServiceFallback(fullOrder, lastCompletedOrderServices);
-      await printReceipt(printableOrder, undefined, { template: 'pos_receipt' });
-      showToast('✅ Receipt printed', 'success');
+      await printReceipt(fullOrder, undefined, { template: 'social_invoice' });
+      showToast('✅ Invoice printed', 'success');
     } catch (e: any) {
       console.error('❌ Receipt print failed:', e);
       showToast(`Receipt print failed: ${e?.message || 'Unknown error'}`, 'error');
@@ -1111,6 +1120,7 @@ export default function POSPage() {
     setNagadPaid(0);
     setTransportCost(0);
     setAutoCustomerId(null);
+    setOrderNotes('');
 
     // ✅ Clear lookup input + last order UI as well
     (customerLookup as any)?.clear?.();
@@ -1150,11 +1160,7 @@ export default function POSPage() {
 
   const fetchEmployees = async () => {
     try {
-      const response: any = await employeeService.getAll({
-        is_active: true,
-        per_page: 100,
-        page: 1,
-      });
+      const response: any = await employeeService.getAll({ is_active: true });
 
       let employeesList: any[] = [];
 
@@ -1195,7 +1201,7 @@ export default function POSPage() {
       }
 
       let stores: any[] = [];
-      
+
       // ✅ Type guard to safely access data property
       if (Array.isArray(response)) {
         stores = response;
@@ -1232,77 +1238,15 @@ export default function POSPage() {
 
     try {
       console.log('🔄 Fetching products and batches for store:', selectedOutlet);
+      setIsFetchingBatches(true);
 
-      let allBatches: Batch[] = [];
+      // ✅ Use the robust getBatchesAll which handles pagination automatically (up to 2000 items)
+      const allBatches = await batchService.getBatchesAll({
+        store_id: parseInt(selectedOutlet),
+        status: 'available',
+      }, { max_items: 5000 });
 
-      // ✅ ROBUST: Try multiple batch fetching methods with fallbacks (like social commerce)
-      
-      // Method 1: Try getAvailableBatches
-      try {
-        const batchesData = await batchService.getAvailableBatches(parseInt(selectedOutlet));
-        console.log('✅ Raw batches from getAvailableBatches:', batchesData);
-
-        if (batchesData && batchesData.length > 0) {
-          allBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-          console.log('✅ Fetched', allBatches.length, 'batches (method: getAvailableBatches)');
-        }
-      } catch (err) {
-        console.warn('⚠️ getAvailableBatches failed, trying getBatchesArray...', err);
-      }
-
-      // Method 2: Try getBatchesArray if Method 1 failed
-      if (allBatches.length === 0) {
-        try {
-          const batchesData = await batchService.getBatchesArray({
-            store_id: parseInt(selectedOutlet),
-            status: 'available',
-          });
-          console.log('✅ Raw batches from getBatchesArray:', batchesData);
-
-          if (batchesData && batchesData.length > 0) {
-            allBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-            console.log('✅ Fetched', allBatches.length, 'batches (method: getBatchesArray)');
-          }
-        } catch (err) {
-          console.warn('⚠️ getBatchesArray failed, trying getBatchesByStore...', err);
-        }
-      }
-
-      // Method 3: Try getBatchesByStore if Method 2 failed
-      if (allBatches.length === 0) {
-        try {
-          const batchesData = await batchService.getBatchesByStore(parseInt(selectedOutlet));
-          console.log('✅ Raw batches from getBatchesByStore:', batchesData);
-
-          if (batchesData && batchesData.length > 0) {
-            allBatches = batchesData.filter((batch: any) => batch.quantity > 0);
-            console.log('✅ Fetched', allBatches.length, 'batches (method: getBatchesByStore)');
-          }
-        } catch (err) {
-          console.warn('⚠️ getBatchesByStore failed, trying getBatches...', err);
-        }
-      }
-
-      // Method 4: Fall back to getBatches (standard method) if all else failed
-      if (allBatches.length === 0) {
-        try {
-          const batchResponse = await batchService.getBatches({
-            store_id: parseInt(selectedOutlet),
-            status: 'available',
-            per_page: 5000,
-          });
-
-          allBatches = batchResponse.success && batchResponse.data?.data
-            ? batchResponse.data.data.filter((batch: Batch) => batch.quantity > 0)
-            : [];
-          
-          console.log('✅ Fetched', allBatches.length, 'batches (method: getBatches)');
-        } catch (err) {
-          console.error('❌ All batch fetch methods failed:', err);
-          showToast('Failed to load product batches', 'error');
-          return;
-        }
-      }
+      console.log('✅ Fetched', allBatches.length, 'total available batches');
 
       if (allBatches.length === 0) {
         console.log('⚠️ No batches found for store:', selectedOutlet);
@@ -1314,7 +1258,7 @@ export default function POSPage() {
       // ✅ Group batches by product_id
       const batchesByProduct = new Map<number, Batch[]>();
       allBatches.forEach((batch: any) => {
-        const productId = batch.product?.id || batch.product_id;
+        const productId = Number(batch.product?.id || batch.product_id);
         if (productId) {
           if (!batchesByProduct.has(productId)) {
             batchesByProduct.set(productId, []);
@@ -1326,10 +1270,21 @@ export default function POSPage() {
       console.log('✅ Batches grouped for', batchesByProduct.size, 'products');
 
       // ✅ Fetch all products (page through backend caps)
-      const productsList: Product[] = await productService.getAllAll(
-        { is_archived: false },
-        { max_items: 200000 }
-      );
+      const productResponse: any = await productService.getAll({
+        is_archived: false,
+        per_page: 50000,
+      });
+
+      let productsList: Product[] = [];
+      if (Array.isArray(productResponse)) {
+        productsList = productResponse;
+      } else if (Array.isArray(productResponse?.data)) {
+        productsList = productResponse.data;
+      } else if (Array.isArray(productResponse?.data?.data)) {
+        productsList = productResponse.data.data;
+      } else if (Array.isArray(productResponse?.items)) {
+        productsList = productResponse.items;
+      }
 
 
       console.log('✅ Fetched', productsList.length, 'products');
@@ -1351,6 +1306,8 @@ export default function POSPage() {
     } catch (error) {
       console.error('❌ Error fetching products:', error);
       showToast('Failed to load products', 'error');
+    } finally {
+      setIsFetchingBatches(false);
     }
   };
 
@@ -1411,25 +1368,14 @@ export default function POSPage() {
     }
   }, [selectedOutlet]); // ✅ Only depend on selectedOutlet
 
+  // ✅ Auto-assign pos-salesman
+  useEffect(() => {
+    if (role === 'pos-salesman' && user?.id) {
+      setSelectedEmployee(String(user.id));
+    }
+  }, [role, user]);
+
   // ============ RENDER ============
-
-
-  const filteredEmployees = useMemo(() => {
-    const search = employeeSearch.trim().toLowerCase();
-
-    if (!search) return employees;
-
-    return employees.filter((emp) =>
-      [emp.name, emp.role, emp.phone, emp.email]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(search))
-    );
-  }, [employees, employeeSearch]);
-
-  const selectedEmployeeData = useMemo(
-    () => employees.find((emp) => emp.id === selectedEmployee),
-    [employees, selectedEmployee]
-  );
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -1449,11 +1395,10 @@ export default function POSPage() {
               {toasts.map((toast) => (
                 <div
                   key={toast.id}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border ${
-                    toast.type === 'success'
+                  className={`flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border ${toast.type === 'success'
                       ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'
                       : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
-                  }`}
+                    }`}
                 >
                   {toast.type === 'success' ? (
                     <CheckCircle2 className="w-5 h-5 text-green-600 dark:text-green-400" />
@@ -1461,11 +1406,10 @@ export default function POSPage() {
                     <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
                   )}
                   <p
-                    className={`text-sm font-medium ${
-                      toast.type === 'success'
+                    className={`text-sm font-medium ${toast.type === 'success'
                         ? 'text-green-900 dark:text-green-300'
                         : 'text-red-900 dark:text-red-300'
-                    }`}
+                      }`}
                   >
                     {toast.message}
                   </p>
@@ -1490,15 +1434,28 @@ export default function POSPage() {
                   Point of Sale
                 </h1>
 
-                {/* ✅ Defect Item Indicator */}
-                {defectItem && (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
-                    <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
-                    <span className="text-sm font-medium text-orange-900 dark:text-orange-300">
-                      Defective Item Ready: {defectItem.productName}
-                    </span>
-                  </div>
-                )}
+                <div className="flex items-center gap-3">
+                  {/* ✅ Defect Item Indicator */}
+                  {defectItem && (
+                    <div className="flex items-center gap-2 px-4 py-2 bg-orange-100 dark:bg-orange-900/30 border border-orange-300 dark:border-orange-700 rounded-lg">
+                      <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                      <span className="text-sm font-medium text-orange-900 dark:text-orange-300">
+                        Defective Item Ready: {defectItem.productName}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* ✅ Daily Cash Report Button */}
+                  {canAccessDailyCashReport && (
+                    <button
+                      onClick={() => setShowDailyReportModal(true)}
+                      className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-all text-sm font-medium shadow-sm hover:shadow-md h-10"
+                    >
+                      <Download className="w-4 h-4" />
+                      Daily Cash Report
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Input Mode Selector */}
@@ -1522,73 +1479,88 @@ export default function POSPage() {
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Employee <span className="text-red-500">*</span>
                   </label>
-                  <div className="relative">
-                    <input
-                      type="text"
-                      value={
-                        showEmployeeDropdown
-                          ? employeeSearch
-                          : selectedEmployeeData
-                            ? `${selectedEmployeeData.name} - ${selectedEmployeeData.role}`
-                            : employeeSearch
-                      }
-                      onFocus={() => {
-                        setShowEmployeeDropdown(true);
-                        setEmployeeSearch('');
-                      }}
-                      onChange={(e) => {
-                        setEmployeeSearch(e.target.value);
-                        setShowEmployeeDropdown(true);
-                        setSelectedEmployee('');
-                      }}
-                      onBlur={() => {
-                        setTimeout(() => setShowEmployeeDropdown(false), 150);
-                      }}
-                      placeholder="Search employee by name, role, phone, or email"
-                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                    />
+                  <div className="relative" ref={employeeDropdownRef}>
+                    <div
+                      className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white flex items-center justify-between cursor-pointer ${
+                        role === 'pos-salesman' ? 'opacity-75 bg-gray-200 dark:bg-gray-800 cursor-not-allowed' : ''
+                      }`}
+                      onClick={() => role !== 'pos-salesman' && setShowEmployeeDropdown(!showEmployeeDropdown)}
+                    >
+                      <span className="truncate">
+                        {selectedEmployee 
+                          ? employees.find(e => e.id === selectedEmployee)?.name || 'Select Employee'
+                          : 'Select Employee'}
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    </div>
 
                     {showEmployeeDropdown && (
-                      <div className="absolute z-50 mt-1 w-full max-h-64 overflow-y-auto rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 shadow-lg">
-                        {filteredEmployees.length > 0 ? (
-                          filteredEmployees.map((emp) => (
-                            <button
-                              key={emp.id}
-                              type="button"
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => {
-                                setSelectedEmployee(emp.id);
-                                setEmployeeSearch(`${emp.name} - ${emp.role}`);
-                                setShowEmployeeDropdown(false);
-                              }}
-                              className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-900 dark:text-white"
-                            >
-                              <div className="font-medium">{emp.name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-400">
-                                {emp.role}
-                                {emp.phone ? ` • ${emp.phone}` : ''}
-                              </div>
-                            </button>
-                          ))
-                        ) : (
-                          <div className="px-3 py-2 text-sm text-gray-500 dark:text-gray-400">
-                            No employee found
+                      <div className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg">
+                        <div className="p-2 border-b border-gray-200 dark:border-gray-700">
+                          <input
+                            type="text"
+                            placeholder="Search employee..."
+                            autoFocus
+                            className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={employeeSearchQuery}
+                            onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                        <div className="max-h-60 overflow-y-auto">
+                          <div
+                            className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                            onClick={() => {
+                              setSelectedEmployee('');
+                              setShowEmployeeDropdown(false);
+                              setEmployeeSearchQuery('');
+                            }}
+                          >
+                            Select Employee
                           </div>
-                        )}
-
-                        <button
-                          type="button"
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => {
-                            setShowAddEmployeeModal(true);
-                            setSelectedEmployee('');
-                            setEmployeeSearch('');
-                            setShowEmployeeDropdown(false);
-                          }}
-                          className="w-full text-left px-3 py-2 border-t border-gray-200 dark:border-gray-700 text-blue-600 hover:bg-blue-50 dark:hover:bg-gray-700"
-                        >
-                          + Add New Employee
-                        </button>
+                          {employees
+                            .filter(emp => 
+                              emp.name.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+                              emp.role.toLowerCase().includes(employeeSearchQuery.toLowerCase())
+                            )
+                            .map((emp) => (
+                              <div
+                                key={emp.id}
+                                className={`px-4 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+                                  selectedEmployee === emp.id ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'text-gray-900 dark:text-white'
+                                }`}
+                                onClick={() => {
+                                  setSelectedEmployee(emp.id);
+                                  setShowEmployeeDropdown(false);
+                                  setEmployeeSearchQuery('');
+                                }}
+                              >
+                                <div className="font-medium">{emp.name}</div>
+                                <div className="text-[11px] text-gray-500 dark:text-gray-400">{emp.role}</div>
+                              </div>
+                            ))}
+                          {role !== 'pos-salesman' && (
+                            <div
+                              className="px-4 py-2 text-sm text-blue-600 dark:text-blue-400 font-medium border-t border-gray-100 dark:border-gray-700/50 cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20"
+                              onClick={() => {
+                                setShowAddEmployeeModal(true);
+                                setSelectedEmployee('');
+                                setShowEmployeeDropdown(false);
+                                setEmployeeSearchQuery('');
+                              }}
+                            >
+                              + Add New Employee
+                            </div>
+                          )}
+                          {employees.filter(emp => 
+                            emp.name.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+                            emp.role.toLowerCase().includes(employeeSearchQuery.toLowerCase())
+                          ).length === 0 && (
+                            <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center italic">
+                              No employees found
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1601,6 +1573,7 @@ export default function POSPage() {
                   <select
                     value={selectedOutlet}
                     onChange={(e) => setSelectedOutlet(e.target.value)}
+                    disabled={!canSelectStore || role === 'branch-manager'}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   >
                     <option value="">Choose an Outlet</option>
@@ -1672,43 +1645,91 @@ export default function POSPage() {
                             />
                           </div>
 
-                          <select
-                            value={product}
-                            onChange={(e) => handleProductSelect(e.target.value)}
-                            disabled={!selectedOutlet}
-                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
-                          >
-                            <option value="">Select Product</option>
-                            {products
-                               .filter((p) => {
-                                if (!p.batches || p.batches.length === 0) return false;
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              placeholder="Search by SKU, Product Name or ID..."
+                              value={manualSearchQuery}
+                              onChange={(e) => setManualSearchQuery(e.target.value)}
+                              disabled={!selectedOutlet}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50 focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                            
+                            <select
+                              value={product}
+                              onChange={(e) => handleProductSelect(e.target.value)}
+                              disabled={!selectedOutlet}
+                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                            >
+                              <option value="">
+                                {manualSearchQuery ? 'Matching Products' : 'Select Product'}
+                              </option>
+                              {products
+                                .filter((p) => {
+                                  if (!p.batches || p.batches.length === 0) return false;
 
-                                const min =
-                                  minPriceFilter.trim() !== '' && Number.isFinite(Number(minPriceFilter))
-                                    ? Number(minPriceFilter)
-                                    : null;
-                                const max =
-                                  maxPriceFilter.trim() !== '' && Number.isFinite(Number(maxPriceFilter))
-                                    ? Number(maxPriceFilter)
-                                    : null;
+                                  const query = manualSearchQuery.toLowerCase().trim();
+                                  const min =
+                                    minPriceFilter.trim() !== '' && Number.isFinite(Number(minPriceFilter))
+                                      ? Number(minPriceFilter)
+                                      : null;
+                                  const max =
+                                    maxPriceFilter.trim() !== '' && Number.isFinite(Number(maxPriceFilter))
+                                      ? Number(maxPriceFilter)
+                                      : null;
 
-                                if (min === null && max === null) return p.batches.length > 0;
+                                  // Apply manual search query filter
+                                  if (query) {
+                                    const skuMatch = p.sku?.toLowerCase().includes(query);
+                                    const nameMatch = p.name.toLowerCase().includes(query);
+                                    const idMatch = String(p.id) === query;
+                                    if (!skuMatch && !nameMatch && !idMatch) return false;
+                                  }
 
-                                return p.batches.some((b) => {
-                                  if (Number(b.quantity) <= 0) return false;
+                                  if (min === null && max === null) return true;
 
-                                  const price = Number(String(b.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
-                                  if (min !== null && price < min) return false;
-                                  if (max !== null && price > max) return false;
-                                  return true;
-                                });
-                              })
-                              .map((prod) => (
-                                <option key={prod.id} value={prod.name}>
-                                  {prod.name} ({prod.batches?.length || 0} batches)
-                                </option>
-                              ))}
-                          </select>
+                                  return p.batches.some((b) => {
+                                    if (Number(b.quantity) <= 0) return false;
+                                    const price = Number(String(b.sell_price ?? '0').replace(/[^0-9.-]/g, ''));
+                                    if (min !== null && price < min) return false;
+                                    if (max !== null && price > max) return false;
+                                    return true;
+                                  });
+                                })
+                                .sort((a, b) => {
+                                  if (!manualSearchQuery) return 0;
+                                  const query = manualSearchQuery.toLowerCase().trim();
+                                  
+                                  // 1. Exact SKU/ID match
+                                  const aExact = a.sku?.toLowerCase() === query || String(a.id) === query;
+                                  const bExact = b.sku?.toLowerCase() === query || String(b.id) === query;
+                                  if (aExact && !bExact) return -1;
+                                  if (!aExact && bExact) return 1;
+
+                                  // 2. Starts with name/sku
+                                  const aStarts = a.name.toLowerCase().startsWith(query) || a.sku?.toLowerCase().startsWith(query);
+                                  const bStarts = b.name.toLowerCase().startsWith(query) || b.sku?.toLowerCase().startsWith(query);
+                                  if (aStarts && !bStarts) return -1;
+                                  if (!aStarts && bStarts) return 1;
+
+                                  return 0;
+                                })
+                                .slice(0, manualSearchQuery ? 100 : 50) // Limit results for performance
+                                .map((prod) => (
+                                  <option key={prod.id} value={prod.name}>
+                                    {prod.name} {prod.sku ? `(${prod.sku})` : ''} — {prod.batches?.length || 0} batches
+                                  </option>
+                                ))}
+                            </select>
+                            {manualSearchQuery && products.filter(p => {
+                              const q = manualSearchQuery.toLowerCase().trim();
+                              return p.sku?.toLowerCase().includes(q) || 
+                                     p.name.toLowerCase().includes(q) || 
+                                     String(p.id) === q;
+                            }).length === 0 && (
+                              <p className="text-[11px] text-red-500 italic">No products found matching your search.</p>
+                            )}
+                          </div>
                         </div>
 
                         <div>
@@ -1717,8 +1738,9 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={sellingPrice}
-                            onChange={(e) => setSellingPrice(Number(e.target.value))}
+                            value={sellingPrice === 0 ? '' : sellingPrice}
+                            placeholder="0"
+                            onChange={(e) => setSellingPrice(e.target.value === '' ? 0 : Number(e.target.value))}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                           />
                         </div>
@@ -1730,8 +1752,9 @@ export default function POSPage() {
                           <input
                             type="number"
                             min="1"
-                            value={quantity}
-                            onChange={(e) => setQuantity(Number(e.target.value))}
+                            value={quantity === 0 ? '' : quantity}
+                            placeholder="0"
+                            onChange={(e) => setQuantity(e.target.value === '' ? 0 : Number(e.target.value))}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                           />
                         </div>
@@ -1742,9 +1765,10 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={discountPercent}
+                            value={discountPercent === 0 ? '' : discountPercent}
+                            placeholder="0"
                             onChange={(e) => {
-                              setDiscountPercent(Number(e.target.value));
+                              setDiscountPercent(e.target.value === '' ? 0 : Number(e.target.value));
                               setDiscountAmount(0);
                             }}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -1757,9 +1781,10 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={discountAmount}
+                            value={discountAmount === 0 ? '' : discountAmount}
+                            placeholder="0"
                             onChange={(e) => {
-                              setDiscountAmount(Number(e.target.value));
+                              setDiscountAmount(e.target.value === '' ? 0 : Number(e.target.value));
                               setDiscountPercent(0);
                             }}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
@@ -1777,6 +1802,15 @@ export default function POSPage() {
                       </div>
                     </div>
                   )}
+
+                  {/* Service Selector */}
+                  <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                    <ServiceSelector 
+                      onAddService={addServiceToCart}
+                      darkMode={darkMode}
+                      allowManualPrice={true}
+                    />
+                  </div>
 
                   {/* Customer Details */}
                   <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
@@ -1808,95 +1842,102 @@ export default function POSPage() {
                         onChange={(e) => setAddress(e.target.value)}
                         className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                       />
+                      <textarea
+                        placeholder="Order Notes (e.g. special instructions, gift wrapping)..."
+                        value={orderNotes}
+                        onChange={(e) => setOrderNotes(e.target.value)}
+                        className="col-span-3 mt-2 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        rows={2}
+                      />
                     </div>
 
                     {/* ✅ Existing customer + last purchase UI */}
                     {(customerLookup.loading ||
                       customerLookup.error ||
                       customerLookup.customer) && (
-                      <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-                        {customerLookup.loading && (
-                          <div className="text-xs text-gray-600 dark:text-gray-300">
-                            Checking customer…
-                          </div>
-                        )}
-
-                        {customerLookup.error && (
-                          <div className="text-xs text-red-600 dark:text-red-400">
-                            {customerLookup.error}
-                          </div>
-                        )}
-
-                        {customerLookup.customer && (
-                          <div className="space-y-1">
-                            <div className="text-sm font-semibold text-gray-900 dark:text-white">
-                              Existing Customer:{' '}
-                              {(customerLookup.customer as any)?.name || '—'}
-                            </div>
-
+                        <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                          {customerLookup.loading && (
                             <div className="text-xs text-gray-600 dark:text-gray-300">
-                              Phone:{' '}
-                              {(customerLookup.customer as any)?.phone ||
-                                customerLookup.phone}
+                              Checking customer…
                             </div>
+                          )}
 
-                            {Array.isArray((customerLookup.customer as any)?.tags) &&
-                              (customerLookup.customer as any).tags.length > 0 && (
-                                <div className="flex flex-wrap gap-1 pt-1">
-                                  {(customerLookup.customer as any).tags.map((tag: string) => (
-                                    <span
-                                      key={tag}
-                                      className="px-2 py-0.5 rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-[10px] font-medium text-gray-700 dark:text-gray-200"
-                                    >
-                                      {tag}
-                                    </span>
-                                  ))}
+                          {customerLookup.error && (
+                            <div className="text-xs text-red-600 dark:text-red-400">
+                              {customerLookup.error}
+                            </div>
+                          )}
+
+                          {customerLookup.customer && (
+                            <div className="space-y-1">
+                              <div className="text-sm font-semibold text-gray-900 dark:text-white">
+                                Existing Customer:{' '}
+                                {(customerLookup.customer as any)?.name || '—'}
+                              </div>
+
+                              <div className="text-xs text-gray-600 dark:text-gray-300">
+                                Phone:{' '}
+                                {(customerLookup.customer as any)?.phone ||
+                                  customerLookup.phone}
+                              </div>
+
+                              {Array.isArray((customerLookup.customer as any)?.tags) &&
+                                (customerLookup.customer as any).tags.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 pt-1">
+                                    {(customerLookup.customer as any).tags.map((tag: string) => (
+                                      <span
+                                        key={tag}
+                                        className="px-2 py-0.5 rounded-full border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-[10px] font-medium text-gray-700 dark:text-gray-200"
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+
+                              {customerLookup.lastOrder && (
+                                <div className="text-xs text-gray-600 dark:text-gray-300 pt-1">
+                                  <div>
+                                    Last purchase:{' '}
+                                    {(customerLookup.lastOrder as any)?.last_order_date ||
+                                      '—'}
+                                  </div>
+                                  <div>
+                                    Total: ৳
+                                    {Number(
+                                      (customerLookup.lastOrder as any)?.last_order_total ??
+                                      0
+                                    ).toFixed(2)}
+                                    {' • '}
+                                    Items:{' '}
+                                    {(customerLookup.lastOrder as any)
+                                      ?.last_order_items_count ?? '—'}
+                                  </div>
                                 </div>
                               )}
 
-                            {customerLookup.lastOrder && (
-                              <div className="text-xs text-gray-600 dark:text-gray-300 pt-1">
-                                <div>
-                                  Last purchase:{' '}
-                                  {(customerLookup.lastOrder as any)?.last_order_date ||
-                                    '—'}
-                                </div>
-                                <div>
-                                  Total: ৳
-                                  {Number(
-                                    (customerLookup.lastOrder as any)?.last_order_total ??
-                                      0
-                                  ).toFixed(2)}
-                                  {' • '}
-                                  Items:{' '}
-                                  {(customerLookup.lastOrder as any)
-                                    ?.last_order_items_count ?? '—'}
-                                </div>
+                              {/* ✅ Actions */}
+                              <div className="pt-2 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={openEditCustomer}
+                                  className="px-3 py-2 text-xs rounded-md bg-gray-900 text-white hover:bg-gray-800"
+                                >
+                                  Edit Info
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={openEditCustomer}
+                                  className="px-3 py-2 text-xs rounded-md border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200"
+                                  title="Complete missing fields"
+                                >
+                                  Add Info
+                                </button>
                               </div>
-                            )}
-
-                            {/* ✅ Actions */}
-                            <div className="pt-2 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={openEditCustomer}
-                                className="px-3 py-2 text-xs rounded-md bg-gray-900 text-white hover:bg-gray-800"
-                              >
-                                Edit Info
-                              </button>
-                              <button
-                                type="button"
-                                onClick={openEditCustomer}
-                                className="px-3 py-2 text-xs rounded-md border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-800 dark:text-gray-200"
-                                title="Complete missing fields"
-                              >
-                                Add Info
-                              </button>
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
+                          )}
+                        </div>
+                      )}
 
                     {/* ✅ Register button when no customer found */}
                     {!customerLookup.customer && (
@@ -1916,12 +1957,7 @@ export default function POSPage() {
                   </div>
 
                   {/* ✅ NEW: Service Selector */}
-                  <ServiceSelector 
-                    onAddService={addServiceToCart}
-                    darkMode={darkMode}
-                    allowManualPrice={true}
-                  />
-
+                  {/* Service selector hidden in frontend as requested */}
                   {/* Cart Table */}
                   <CartTable
                     items={cart}
@@ -1963,8 +1999,9 @@ export default function POSPage() {
                       </label>
                       <input
                         type="number"
-                        value={transportCost}
-                        onChange={(e) => setTransportCost(Number(e.target.value))}
+                        value={transportCost === 0 ? '' : transportCost}
+                        placeholder="0"
+                        onChange={(e) => setTransportCost(e.target.value === '' ? 0 : Number(e.target.value))}
                         className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                       />
                     </div>
@@ -2002,15 +2039,16 @@ export default function POSPage() {
                                 type="number"
                                 min={2}
                                 max={24}
-                                value={installmentCount}
-                                onChange={(e) => setInstallmentCount(Number(e.target.value))}
+                                value={installmentCount === 0 ? '' : installmentCount}
+                                placeholder="0"
+                                onChange={(e) => setInstallmentCount(e.target.value === '' ? 0 : Number(e.target.value))}
                                 className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                               />
                             </div>
                             <div>
                               <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Paying now</label>
                               <div className="w-full px-2 py-1.5 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm font-semibold text-gray-900 dark:text-white">
-                                ৳{suggestedInstallmentAmount.toFixed(2)}
+                                ৳{installmentAmount.toFixed(2)}
                               </div>
                             </div>
                           </div>
@@ -2040,30 +2078,9 @@ export default function POSPage() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-2 mt-2">
-                            <div>
-                              <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">
-                                Paying now (flexible)
-                              </label>
-                              <input
-                                type="number"
-                                min={0}
-                                value={installmentPayNow}
-                                onChange={(e) => setInstallmentPayNow(Number(e.target.value))}
-                                disabled={isProcessing}
-                                className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                              />
-                              <p className="text-[10px] text-amber-700 dark:text-amber-300 mt-1">
-                                Suggested per installment: ৳{suggestedInstallmentAmount.toFixed(2)}
-                              </p>
-                            </div>
-                            <div className="flex items-end">
-                              <p className="text-[11px] text-gray-600 dark:text-gray-300">
-                                Remaining after today:{' '}
-                                <span className="font-semibold">৳{Math.max(0, total - installmentPayNow).toFixed(2)}</span>
-                              </p>
-                            </div>
-                          </div>
+                          <p className="text-[11px] text-gray-600 dark:text-gray-300">
+                            Remaining after today: <span className="font-semibold">৳{Math.max(0, total - installmentAmount).toFixed(2)}</span>
+                          </p>
                         </div>
                       )}
 
@@ -2074,8 +2091,9 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={cashPaid}
-                            onChange={(e) => setCashPaid(Number(e.target.value))}
+                            value={cashPaid === 0 ? '' : cashPaid}
+                            placeholder="0"
+                            onChange={(e) => setCashPaid(e.target.value === '' ? 0 : Number(e.target.value))}
                             disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
@@ -2086,8 +2104,9 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={cardPaid}
-                            onChange={(e) => setCardPaid(Number(e.target.value))}
+                            value={cardPaid === 0 ? '' : cardPaid}
+                            placeholder="0"
+                            onChange={(e) => setCardPaid(e.target.value === '' ? 0 : Number(e.target.value))}
                             disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
@@ -2098,8 +2117,9 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={bkashPaid}
-                            onChange={(e) => setBkashPaid(Number(e.target.value))}
+                            value={bkashPaid === 0 ? '' : bkashPaid}
+                            placeholder="0"
+                            onChange={(e) => setBkashPaid(e.target.value === '' ? 0 : Number(e.target.value))}
                             disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
@@ -2110,8 +2130,9 @@ export default function POSPage() {
                           </label>
                           <input
                             type="number"
-                            value={nagadPaid}
-                            onChange={(e) => setNagadPaid(Number(e.target.value))}
+                            value={nagadPaid === 0 ? '' : nagadPaid}
+                            placeholder="0"
+                            onChange={(e) => setNagadPaid(e.target.value === '' ? 0 : Number(e.target.value))}
                             disabled={isProcessing || isInstallment}
                             className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                           />
@@ -2146,11 +2167,10 @@ export default function POSPage() {
                           Due
                         </span>
                         <span
-                          className={`font-bold ${
-                            due > 0
+                          className={`font-bold ${due > 0
                               ? 'text-red-600 dark:text-red-400'
                               : 'text-green-600 dark:text-green-400'
-                          }`}
+                            }`}
                         >
                           ৳{Math.max(0, due).toFixed(2)}
                         </span>
@@ -2333,6 +2353,13 @@ export default function POSPage() {
           }}
         />
       )}
+      <DailyCashReportModal
+        isOpen={showDailyReportModal}
+        onClose={() => setShowDailyReportModal(false)}
+        storeId={selectedOutlet}
+        storeName={outlets.find(o => String(o.id) === selectedOutlet)?.name || ''}
+        darkMode={darkMode}
+      />
     </div>
   );
 }

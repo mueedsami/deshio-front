@@ -134,7 +134,7 @@ const normalizeAccount = (acc: any): Account => {
   return normalized;
 };
 
-const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end_date?: string; store_id?: number }) => {
+const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end_date?: string; store_id?: number | string }) => {
   // Shape A (transactions/trial-balance): { success, data: { summary, accounts, date_range } }
   // Shape B (accounting/trial-balance): { success, data: { accounts: [...], totals: {...}, as_of_date } }
   const data = payload?.data ?? payload;
@@ -233,7 +233,7 @@ const normalizeTrialBalance = (payload: any, params?: { start_date?: string; end
   } as TrialBalanceData;
 };
 
-const normalizeLedger = (payload: any, accountId: number, params?: { date_from?: string; date_to?: string; store_id?: number }): LedgerData => {
+const normalizeLedger = (payload: any, accountId: number, params?: { date_from?: string; date_to?: string; store_id?: number | string }): LedgerData => {
   // Shape A (transactions/ledger/{id}): { success, data: { account, opening_balance, closing_balance, transactions, date_range } }
   // Shape B (accounting/t-account/{id}): { success, data: { account, opening_balance, debit_side, credit_side, totals, period } }
   const data = payload?.data ?? payload;
@@ -339,8 +339,9 @@ export interface Transaction {
   reference_type?: string;
   reference_id?: number;
   description?: string;
-  store_id?: number;
+  store_id?: number | string;
   created_by?: number;
+  group_id?: string;
   metadata?: any;
   status: 'pending' | 'completed' | 'failed' | 'cancelled';
   account?: Account;
@@ -374,7 +375,7 @@ export interface TrialBalanceData {
     start_date: string;
     end_date: string;
   };
-  store_id?: number;
+  store_id?: number | string;
 }
 
 export interface LedgerEntry {
@@ -406,7 +407,7 @@ export interface AccountBalance {
   balance: number;
   children_balance: number;
   total_balance: number;
-  store_id?: number;
+  store_id?: number | string;
   end_date?: string;
 }
 
@@ -443,6 +444,7 @@ export interface TransactionStatistics {
 }
 
 export interface JournalEntryLine {
+  id?: number;
   account: Account;
   debit: number;
   credit: number;
@@ -451,6 +453,7 @@ export interface JournalEntryLine {
 
 export interface JournalEntry {
   id: string;
+  group_id?: string;
   date: string;
   reference_type: string;
   reference_id: number;
@@ -483,12 +486,16 @@ export interface CreateTransactionData {
   amount: number;
   type: 'debit' | 'credit';
   account_id: number;
+  counter_account_id?: number | string;
   description?: string;
-  store_id?: number;
+  store_id?: number | string;
   reference_type?: string;
   reference_id?: number;
   metadata?: any;
   status?: 'pending' | 'completed' | 'failed' | 'cancelled';
+  note?: string;
+  reference_note?: string;
+  receipt_image?: string;
 }
 
 export interface UpdateTransactionData {
@@ -514,6 +521,7 @@ class ChartOfAccountsService {
     sort_by?: string;
     sort_order?: 'asc' | 'desc';
     per_page?: number;
+    leaf_only?: boolean;
   }) {
     const response = await axiosInstance.get('/accounts', { params });
     const result = response.data;
@@ -585,7 +593,7 @@ class ChartOfAccountsService {
    * Get account balance
    */
   async getAccountBalance(id: number, params?: {
-    store_id?: number;
+    store_id?: number | string;
     end_date?: string;
   }): Promise<{ success: boolean; data: AccountBalance }> {
     const response = await axiosInstance.get(`/accounts/${id}/balance`, { params });
@@ -621,7 +629,7 @@ class ChartOfAccountsService {
    * Get chart of accounts with balances
    */
   async getChartOfAccounts(params?: {
-    store_id?: number;
+    store_id?: number | string;
     end_date?: string;
   }) {
     const response = await axiosInstance.get('/accounts/chart-of-accounts', { params });
@@ -649,7 +657,7 @@ class TransactionService {
     account_id?: number;
     type?: 'debit' | 'credit';
     status?: 'pending' | 'completed' | 'failed' | 'cancelled';
-    store_id?: number;
+    store_id?: number | string;
     date_from?: string;
     date_to?: string;
     reference_type?: string;
@@ -753,7 +761,7 @@ class TransactionService {
   async getStatistics(params?: {
     date_from?: string;
     date_to?: string;
-    store_id?: number;
+    store_id?: number | string;
   }): Promise<{ success: boolean; data: TransactionStatistics }> {
     const response = await axiosInstance.get('/transactions/statistics', { params });
     return response.data;
@@ -765,7 +773,7 @@ class TransactionService {
   async getAccountTransactions(accountId: number, params?: {
     date_from?: string;
     date_to?: string;
-    store_id?: number;
+    store_id?: number | string;
     per_page?: number;
     page?: number;
   }) {
@@ -783,7 +791,7 @@ class FinancialReportsService {
    * Get trial balance
    */
   async getTrialBalance(params?: {
-    store_id?: number;
+    store_id?: number | string;
     start_date?: string;
     end_date?: string;
   }): Promise<{ success: boolean; data: TrialBalanceData }> {
@@ -822,7 +830,7 @@ class FinancialReportsService {
   async getAccountLedger(accountId: number, params?: {
     date_from?: string;
     date_to?: string;
-    store_id?: number;
+    store_id?: number | string;
   }): Promise<{ success: boolean; data: LedgerData }> {
     // Two documented variants:
     // - /transactions/ledger/{id}
@@ -850,7 +858,7 @@ class FinancialReportsService {
   async getJournalEntries(params?: {
     date_from?: string;
     date_to?: string;
-    store_id?: number;
+    store_id?: number | string;
     reference_type?: string;
     per_page?: number;
     page?: number;
@@ -920,6 +928,7 @@ class FinancialReportsService {
           date,
           reference_type: refType,
           reference_id: txn.reference_id || 0,
+          group_id: txn.group_id,
           description: txn.description || '',
           lines: [],
           total_debit: 0,
@@ -935,6 +944,7 @@ class FinancialReportsService {
       const creditAmt = txn.type === 'credit' ? toNumber(txn.amount, 0) : 0;
 
       entry.lines.push({
+        id: txn.id,
         account: txn.account || makeAccountPlaceholder(txn.account_id),
         debit: debitAmt,
         credit: creditAmt,

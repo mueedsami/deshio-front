@@ -39,12 +39,17 @@ export default function AccountSidebar() {
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <div className="p-6 border-b border-gray-200">
-        <h2 className="text-xl font-bold text-gray-900">MY ACCOUNT</h2>
+    <div className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-[var(--radius-lg)] overflow-hidden">
+      <div className="p-8 border-b border-[var(--border-default)] flex flex-col items-center text-center">
+        {/* User Avatar Placeholder */}
+        <div className="w-20 h-20 rounded-full mb-4 bg-gradient-to-br from-[var(--cyan-dim)] to-[var(--gold-dim)] border-2 border-[var(--border-default)] flex items-center justify-center text-[var(--text-primary)]">
+          <User size={32} />
+        </div>
+        <h2 className="text-2xl font-medium text-[var(--text-primary)] tracking-tight" style={{ fontFamily: "'Poppins', sans-serif" }}>Member Space</h2>
+        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--cyan)] mt-2" style={{ fontFamily: "'Poppins', sans-serif" }}>Exclusive Access</p>
       </div>
 
-      <nav className="p-2">
+      <nav className="p-3 space-y-1">
         {menuItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.path);
@@ -52,22 +57,27 @@ export default function AccountSidebar() {
             <button
               key={item.id}
               onClick={() => router.push(item.path)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-md transition-colors ${
-                active ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-700 hover:bg-gray-50'
-              }`}
+              className={`w-full flex items-center justify-between px-5 py-4 transition-all duration-300 group ${active
+                  ? 'bg-[var(--cyan-pale)] text-[var(--cyan)] border-l-[3px] border-[var(--cyan)]'
+                  : 'text-[var(--text-secondary)] hover:bg-[var(--bg-surface-2)] hover:text-[var(--text-primary)] border-l-[3px] border-transparent'
+                }`}
             >
-              <Icon size={20} className={active ? 'text-red-700' : 'text-gray-500'} />
-              <span>{item.label}</span>
+              <div className="flex items-center gap-4">
+                <Icon size={18} className={active ? 'text-[var(--cyan)]' : 'text-[var(--text-muted)] group-hover:text-[var(--text-primary)]'} />
+                <span className="text-[14px] font-medium" style={{ fontFamily: "'Poppins', sans-serif" }}>{item.label}</span>
+              </div>
             </button>
           );
         })}
 
+        <div className="h-px bg-[var(--border-default)] mx-5 my-4" />
+
         <button
           onClick={() => logout()}
-          className="w-full flex items-center gap-3 px-4 py-3 rounded-md text-gray-700 hover:bg-gray-50 transition-colors mt-2"
+          className="w-full flex items-center gap-4 px-5 py-4 text-[var(--status-danger)] hover:bg-[var(--status-danger-pale)] transition-all mt-4 border-l-[3px] border-transparent"
         >
-          <LogOut size={20} className="text-gray-500" />
-          <span>Logout</span>
+          <LogOut size={18} />
+          <span className="text-[14px] font-medium" style={{ fontFamily: "'Poppins', sans-serif" }}>Logout</span>
         </button>
       </nav>
     </div>

@@ -67,9 +67,6 @@ export interface OrderPayment {
   payment_type: string;
   status: string;
   processed_by?: string;
-  transaction_reference?: string;
-  collected_by_name?: string;
-  next_collection_date?: string | null;
   created_at: string;
 }
 
@@ -105,7 +102,9 @@ export interface Order {
   };
   subtotal: string;
   tax_amount: string;
+  item_discount?: string;
   discount_amount: string;
+  total_discount?: string;
   shipping_amount: string;
   total_amount: string;
   paid_amount: string;
@@ -124,7 +123,6 @@ export interface Order {
   installment_plan?: {
     total_installments?: number;
     installment_amount?: string | number;
-    next_payment_due?: string | null;
     start_date?: string | null;
   } | null;
 
@@ -145,6 +143,7 @@ export interface AvailableCourier {
 
 export interface OrderFilters {
   order_type?: string;
+  order_types?: string[];
   status?: string;
   payment_status?: string;
   fulfillment_status?: string;
@@ -160,6 +159,7 @@ export interface OrderFilters {
   sort_order?: 'asc' | 'desc';
   per_page?: number;
   page?: number;
+  skipStoreScope?: boolean;
 }
 
 export interface OrderStatistics {
@@ -209,14 +209,18 @@ const orderService = {
   },
 
   /** Get all orders with filters and pagination */
-  async getAll(params?: OrderFilters): Promise<{
+  async getAll(paramsObj?: OrderFilters): Promise<{
     data: Order[];
     total: number;
     current_page: number;
     last_page: number;
   }> {
     try {
-      const response = await axiosInstance.get('/orders', { params });
+      const { skipStoreScope, ...params } = paramsObj || {};
+      const response = await axiosInstance.get('/orders', { 
+        params,
+        skipStoreScope 
+      } as any);
       const result = response.data;
 
       if (result.success) {
@@ -236,9 +240,11 @@ const orderService = {
   },
 
   /** Get single order by ID */
-  async getById(id: number): Promise<Order> {
+  async getById(id: number, skipStoreScope?: boolean): Promise<Order> {
     try {
-      const response = await axiosInstance.get(`/orders/${id}`);
+      const response = await axiosInstance.get(`/orders/${id}`, { 
+        skipStoreScope 
+      } as any);
       const result = response.data;
       
       if (!result.success) {
@@ -441,6 +447,7 @@ const orderService = {
     store_id?: number;
     per_page?: number;
     order_type?: 'social_commerce' | 'ecommerce';
+    order_types?: string[];
   }): Promise<{
     data: Order[];
     total: number;
@@ -595,22 +602,6 @@ const orderService = {
     }
   },
 
-
-
-/** Update customer name/phone/address for an existing order (admin) */
-async updateCustomerInfo(
-  orderId: number,
-  payload: { customer_name: string; customer_phone: string; customer_address?: string }
-): Promise<any> {
-  try {
-    const response = await axiosInstance.patch(`/orders/${orderId}/customer-info`, payload);
-    return response.data;
-  } catch (error: any) {
-    console.error('Update customer info error:', error);
-    throw error;
-  }
-},
-
   /** Validate barcode for fulfillment */
   async validateBarcode(params: {
     barcode: string;
@@ -637,6 +628,19 @@ async updateCustomerInfo(
         valid: false,
         message: error.response?.data?.message || 'Invalid barcode'
       };
+    }
+  },
+
+  /** Bulk export orders as CSV */
+  async bulkExport(order_ids: number[]): Promise<Blob> {
+    try {
+      const response = await axiosInstance.post('/orders/bulk-export', { order_ids }, {
+        responseType: 'blob'
+      });
+      return response.data;
+    } catch (error: any) {
+      console.error('Bulk export error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to export orders');
     }
   }
 };

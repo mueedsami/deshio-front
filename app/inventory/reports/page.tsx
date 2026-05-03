@@ -1,1935 +1,339 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  BarChart3,
-  RefreshCw,
-  TrendingDown,
-  TrendingUp,
-  Tag,
-  Package,
-  CalendarDays,
-  AlertCircle,
-} from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import orderService, { type Order as ApiOrder, type OrderFilters } from '@/services/orderService';
-import inventoryService, { type GlobalInventoryItem } from '@/services/inventoryService';
-import productService, { type Product } from '@/services/productService';
-import categoryService, { type Category } from '@/services/groupInventory';
+import { useTheme } from '@/contexts/ThemeContext';
+import businessAnalyticsService, { type CommandCenterResponse, type ReportingFilters } from '@/services/businessAnalyticsService';
+import storeService, { type Store } from '@/services/storeService';
+import {
+  AlertTriangle,
+  CalendarDays,
+  Download,
+  Layers,
+  Package,
+  RefreshCw,
+  ShoppingBag,
+  Store as StoreIcon,
+  Tag,
+  TrendingUp,
+} from 'lucide-react';
 
-type Metric = 'units' | 'net_sales';
+import SalesTrendCard from './components/SalesTrendCard';
+import BestSellersCard from './components/BestSellersCard';
+import ProductSelectModal from './components/ProductSelectModal';
+import CategoryPerformanceCard from './components/CategoryPerformanceCard';
+import StoreSalesOverviewCard from './components/StoreSalesOverviewCard';
 
-type ProductAgg = {
-  product_id: number;
-  name: string;
-  sku: string;
-  category_id: number;
-  units: number;
-  gross: number;
-  discount: number;
-  tax: number;
-  net: number;
-  discountedNet: number;
-  fullPriceNet: number;
-};
-
-type CategoryAgg = {
-  category_id: number;
-  category_name: string;
-  units: number;
-  net: number;
-  stock_units: number;
-};
-
-type WeeklyRow = {
-  weekStart: string; // YYYY-MM-DD
-  weekEnd: string; // YYYY-MM-DD
-  top: { category: string; units: number }[];
-  slow: { category: string; units: number }[];
-};
-
-function toNumber(val: any): number {
-  if (val === null || val === undefined) return 0;
-  const n = Number(String(val).replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+function currency(value: number) {
+  return new Intl.NumberFormat('en-BD', { maximumFractionDigits: 0 }).format(Number(value || 0));
 }
 
-function yyyyMmDd(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+function todayStr(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return d.toISOString().slice(0, 10);
 }
 
-function addDays(d: Date, days: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + days);
-  return x;
-}
-
-function getWeekStartISO(date: Date): string {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  // Monday as week start
-  const day = d.getDay(); // 0..6 (Sun..Sat)
-  const diff = (day === 0 ? -6 : 1) - day;
-  d.setDate(d.getDate() + diff);
-  return yyyyMmDd(d);
-}
-
-function formatMoney(n: number): string {
-  // Keep it simple (no locale surprises)
-  const fixed = (Math.round(n * 100) / 100).toFixed(2);
-  return fixed;
-}
-
-// Minimal CSV parser (supports quoted fields + commas + newlines)
-function parseCsvText(text: string, maxRows = 60): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inQuotes) {
-      if (ch === '"') {
-        const next = text[i + 1];
-        if (next === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inQuotes = true;
-      continue;
-    }
-
-    if (ch === ',') {
-      row.push(field);
-      field = '';
-      continue;
-    }
-
-    if (ch === '\n') {
-      row.push(field);
-      field = '';
-      rows.push(row);
-      row = [];
-      if (rows.length >= maxRows) break;
-      continue;
-    }
-
-    if (ch === '\r') {
-      continue;
-    }
-
-    field += ch;
-  }
-
-  if (rows.length < maxRows && (field.length > 0 || row.length > 0)) {
-    row.push(field);
-    rows.push(row);
-  }
-
-  return rows;
+function formatDateLabel(dateStr?: string) {
+  if (!dateStr) return '—';
+  const date = new Date(dateStr);
+  return new Intl.DateTimeFormat('en-BD', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
 }
 
 export default function InventoryReportsPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // Filters
-  const today = useMemo(() => new Date(), []);
-  const [dateFrom, setDateFrom] = useState<string>(yyyyMmDd(addDays(today, -30)));
-  const [dateTo, setDateTo] = useState<string>(yyyyMmDd(today));
-  const [metric, setMetric] = useState<Metric>('units');
-  const [topN, setTopN] = useState<number>(10);
-  const [lowThresholdUnits, setLowThresholdUnits] = useState<number>(5);
-  const [weeksToShow, setWeeksToShow] = useState<number>(8);
-  const [types, setTypes] = useState({
-    counter: true,
-    social_commerce: true,
-    ecommerce: true,
-  });
-  const [statuses, setStatuses] = useState({
-    pending_assignment: true,
-    completed: true,
-    pending: false,
-  });
-
-  // CSV Exports (Reporting API)
-  const [csvStoreId, setCsvStoreId] = useState('');
-  const [csvStatus, setCsvStatus] = useState(''); // empty = all statuses
-  const [csvCustomerId, setCsvCustomerId] = useState(''); // Sales/Booking CSV only
-  const [csvCategoryId, setCsvCategoryId] = useState(''); // Stock CSV only
-  const [csvProductId, setCsvProductId] = useState(''); // Stock/Booking CSV only
-  const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
-  const [csvPaymentToday, setCsvPaymentToday] = useState(false); // Payment Breakdown CSV only
-  const [csvPaymentOrderType, setCsvPaymentOrderType] = useState(''); // Payment Breakdown CSV only
-  // Purchase Order CSV
-  const [csvPoId, setCsvPoId] = useState('');
-  const [csvPoBusy, setCsvPoBusy] = useState(false);
-  const [csvPoBarcodeBusy, setCsvPoBarcodeBusy] = useState(false);
-
-  // Dispatch Barcode CSV
-  const [csvDispatchStoreId, setCsvDispatchStoreId] = useState('');
-  const [csvDispatchStatus, setCsvDispatchStatus] = useState('');
-  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState('');
-  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState('');
-  const [csvDispatchBusy, setCsvDispatchBusy] = useState(false);
-
-  // Installment CSV
-  const [csvInstallmentCustomerId, setCsvInstallmentCustomerId] = useState('');
-  const [csvInstallmentStoreId, setCsvInstallmentStoreId] = useState('');
-  const [csvInstallmentPaymentStatus, setCsvInstallmentPaymentStatus] = useState('');
-  const [csvInstallmentBusy, setCsvInstallmentBusy] = useState(false);
-
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean; payment: boolean }>({
-    category: false,
-    sales: false,
-    stock: false,
-    booking: false,
-    payment: false,
-  });
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTitle, setPreviewTitle] = useState('');
-  const [previewHeader, setPreviewHeader] = useState<string[]>([]);
-  const [previewBody, setPreviewBody] = useState<string[][]>([]);
-  const [previewError, setPreviewError] = useState('');
-
-  // Data states
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
-  const [isTruncated, setIsTruncated] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [data, setData] = useState<CommandCenterResponse['data'] | null>(null);
+  const [stores, setStores] = useState<Store[]>([]);
+  const [filters, setFilters] = useState<ReportingFilters>({ from: todayStr(-29), to: todayStr() });
+  const [showProductModal, setShowProductModal] = useState(false);
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [inventory, setInventory] = useState<GlobalInventoryItem[]>([]);
-  const [orders, setOrders] = useState<ApiOrder[]>([]);
+  const loadData = async (silent = false) => loadDataWith(filters, silent);
 
   useEffect(() => {
-    loadAll();
+    loadData();
+    loadStores();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadAll = async () => {
-    setLoading(true);
-    setError('');
-    setIsTruncated(false);
+  const loadStores = async () => {
     try {
-      // Fetch reference data (products/categories/stock)
-      const [catRes, invRes] = await Promise.all([
-        categoryService.getCategories({ per_page: 1000 }),
-        inventoryService.getGlobalInventory(),
-      ]);
+      const response: any = await storeService.getStores({ is_active: true, per_page: 1000 });
+      const nextStores = Array.isArray(response?.data)
+        ? response.data
+        : Array.isArray(response?.data?.data)
+          ? response.data.data
+          : Array.isArray(response)
+            ? response
+            : [];
+      setStores(nextStores);
+    } catch (err) {
+      console.error('Failed to load stores', err);
+    }
+  };
 
-      const categoriesData: Category[] = (catRes as any)?.data?.data || (catRes as any)?.data || [];
-      setCategories(categoriesData);
-
-      const inventoryData: GlobalInventoryItem[] = (invRes as any)?.data || [];
-      setInventory(inventoryData);
-
-      // Products can be paginated; fetch multiple pages up to a sane limit.
-      const allProducts: Product[] = [];
-      let page = 1;
-      const perPage = 500;
-      for (let i = 0; i < 10; i++) {
-        const res = await productService.getAll({ per_page: perPage, page });
-        allProducts.push(...(res.data || []));
-        if (page >= (res.last_page || 1)) break;
-        page += 1;
-      }
-      setProducts(allProducts);
-
-      // Fetch orders based on current filters
-      const fetched = await fetchOrders();
-      setOrders(fetched.orders);
-      setIsTruncated(fetched.isTruncated);
+  const loadDataWith = async (nextFilters: ReportingFilters, silent = false) => {
+    try {
+      silent ? setRefreshing(true) : setLoading(true);
+      setError('');
+      const res = await businessAnalyticsService.getCommandCenter(nextFilters);
+      setData(res.data);
     } catch (e: any) {
-      console.error(e);
-      setError(e?.message || 'Failed to load reports');
+      setError(e?.response?.data?.message || e?.message || 'Failed to load reports');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  const fetchOrders = async (): Promise<{ orders: ApiOrder[]; isTruncated: boolean }> => {
-    const selectedTypes = Object.entries(types)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    const selectedStatuses = Object.entries(statuses)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-
-    const maxPagesPerQuery = 25; // hard limit to protect the browser
-    const perPage = 200;
-    let truncated = false;
-
-    const all: ApiOrder[] = [];
-
-    for (const order_type of selectedTypes) {
-      for (const status of selectedStatuses) {
-        let page = 1;
-        while (true) {
-          const params: OrderFilters = {
-            order_type: order_type as any,
-            status,
-            date_from: dateFrom,
-            date_to: dateTo,
-            sort_by: 'created_at',
-            sort_order: 'desc',
-            per_page: perPage,
-            page,
-          };
-
-          const res = await orderService.getAll(params);
-          all.push(...(res.data || []));
-          if (page >= (res.last_page || 1)) break;
-          page += 1;
-          if (page > maxPagesPerQuery) {
-            truncated = true;
-            break;
-          }
-        }
-      }
-    }
-
-    // De-dup by order id (because we may fetch multiple statuses/types)
-    const uniq = new Map<number, ApiOrder>();
-    for (const o of all) uniq.set(o.id, o);
-    return { orders: Array.from(uniq.values()), isTruncated: truncated };
+  const applyFilters = (patch: Partial<ReportingFilters>) => {
+    const nextFilters = { ...filters, ...patch };
+    setFilters(nextFilters);
+    loadDataWith(nextFilters);
   };
 
-  // --- CSV Exports (Reporting API) helpers ---
-  const buildCategorySalesQuery = () => {
-    const q = new URLSearchParams();
-    if (dateFrom) q.set('date_from', dateFrom);
-    if (dateTo) q.set('date_to', dateTo);
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-    return q;
-  };
-
-  const buildSalesQuery = () => {
-    const q = buildCategorySalesQuery();
-    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
-    return q;
-  };
-
-  const buildStockQuery = () => {
-    const q = new URLSearchParams();
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvCategoryId.trim()) q.set('category_id', csvCategoryId.trim());
-    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
-    if (csvIncludeInactive) q.set('include_inactive', 'true');
-    return q;
-  };
-
-  const buildBookingQuery = () => {
-    const q = new URLSearchParams();
-    if (dateFrom) q.set('date_from', dateFrom);
-    if (dateTo) q.set('date_to', dateTo);
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
-    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
-    return q;
-  };
-
-
-  const buildPaymentBreakdownQuery = () => {
-    const q = new URLSearchParams();
-
-    // today=true overrides date_from/date_to
-    if (csvPaymentToday) {
-      q.set('today', 'true');
-    } else {
-      if (dateFrom) q.set('date_from', dateFrom);
-      if (dateTo) q.set('date_to', dateTo);
-    }
-
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvPaymentOrderType.trim()) q.set('order_type', csvPaymentOrderType.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-
-    return q;
-  };
-  const getAuthHeader = (): HeadersInit => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
-
-  const downloadCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to download report');
-    }
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const m = cd.match(/filename="?([^";]+)"?/i);
-    const filename = m?.[1] || 'report.csv';
-
-    const url = window.URL.createObjectURL(blob);
+  const exportCsv = async () => {
+    const response = await businessAnalyticsService.exportSummary(filters);
+    const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
+    a.download = `inventory-reports-${filters.from || 'from'}-${filters.to || 'to'}.csv`;
     a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
+    URL.revokeObjectURL(url);
   };
 
-  const previewCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to load report');
-    }
-    const text = await res.text();
-    const parsed = parseCsvText(text, 60);
-    const header = parsed[0] || [];
-    const body = parsed.slice(1);
-    return { header, body };
-  };
+  const quickStats = useMemo(() => {
+    if (!data) return [];
 
-  const doDownloadCategory = async () => {
-    setCsvBusy((s) => ({ ...s, category: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/category-sales', buildCategorySalesQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, category: false }));
-    }
-  };
-
-  const doDownloadSales = async () => {
-    setCsvBusy((s) => ({ ...s, sales: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/sales', buildSalesQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, sales: false }));
-    }
-  };
-
-  const doDownloadStock = async () => {
-    setCsvBusy((s) => ({ ...s, stock: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/stock', buildStockQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, stock: false }));
-    }
-  };
-
-  const doDownloadBooking = async () => {
-    setCsvBusy((s) => ({ ...s, booking: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/booking', buildBookingQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, booking: false }));
-    }
-  };
-
-
-  const doDownloadPaymentBreakdown = async () => {
-    setCsvBusy((s) => ({ ...s, payment: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/payment-breakdown', buildPaymentBreakdownQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, payment: false }));
-    }
-  };
-  const getApiBase = () => {
-    const raw = process.env.NEXT_PUBLIC_API_URL || '';
-    return raw.replace(/\/$/, '');
-  };
-
-  const downloadExternalCsv = async (url: string, filename: string) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to download report');
-    }
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const m = cd.match(/filename="?([^";]+)"?/i);
-    const fname = m?.[1] || filename;
-    const objUrl = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(objUrl);
-  };
-
-  /**
-   * Accepts either a plain numeric ID (e.g. "123") or a formatted PO number
-   * like "PO-20260310-000012". Returns the numeric ID string, or null if invalid.
-   */
-  const parsePOId = (input: string): string | null => {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-    // Plain numeric
-    if (/^\d+$/.test(trimmed)) return trimmed;
-    // PO-YYYYMMDD-NNNNNN or similar — grab last numeric segment
-    const parts = trimmed.split('-');
-    const lastNumeric = [...parts].reverse().find((p) => /^\d+$/.test(p));
-    if (lastNumeric) return String(parseInt(lastNumeric, 10)); // strip leading zeros
-    return null;
-  };
-
-  const doDownloadPODetail = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
-    setCsvPoBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/csv`, `PO-${csvPoId.trim()}-detail.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download PO CSV');
-    } finally {
-      setCsvPoBusy(false);
-    }
-  };
-
-  const doDownloadPOBarcodes = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
-    setCsvPoBarcodeBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/barcodes/csv`, `PO-${csvPoId.trim()}-barcodes.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download PO Barcodes CSV');
-    } finally {
-      setCsvPoBarcodeBusy(false);
-    }
-  };
-
-  const doDownloadDispatchBarcodes = async () => {
-    if (!csvDispatchDateFrom || !csvDispatchDateTo) {
-      setPreviewError('Date From and Date To are required for Dispatch Barcodes CSV.');
-      return;
-    }
-    setCsvDispatchBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      const q = new URLSearchParams();
-      q.set('date_from', csvDispatchDateFrom);
-      q.set('date_to', csvDispatchDateTo);
-      if (csvDispatchStoreId.trim()) q.set('store_id', csvDispatchStoreId.trim());
-      if (csvDispatchStatus.trim()) q.set('status', csvDispatchStatus.trim());
-      await downloadExternalCsv(`${api}/dispatches/barcodes/csv?${q.toString()}`, `Dispatch-Barcodes-${csvDispatchDateFrom}-to-${csvDispatchDateTo}.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download Dispatch Barcodes CSV');
-    } finally {
-      setCsvDispatchBusy(false);
-    }
-  };
-
-  const doDownloadInstallments = async () => {
-    setCsvInstallmentBusy(true);
-    setPreviewError('');
-    try {
-      const q = new URLSearchParams();
-      if (dateFrom) q.set('date_from', dateFrom);
-      if (dateTo) q.set('date_to', dateTo);
-      if (csvInstallmentCustomerId.trim()) q.set('customer_id', csvInstallmentCustomerId.trim());
-      if (csvInstallmentStoreId.trim()) q.set('store_id', csvInstallmentStoreId.trim());
-      if (csvInstallmentPaymentStatus.trim()) q.set('payment_status', csvInstallmentPaymentStatus.trim());
-      await downloadCsv('/api/reporting/csv/installments', q);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download Installments CSV');
-    } finally {
-      setCsvInstallmentBusy(false);
-    }
-  };
-
-  const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking' | 'payment') => {
-    setPreviewError('');
-    try {
-      const endpoint =
-        type === 'category'
-          ? '/api/reporting/csv/category-sales'
-          : type === 'sales'
-            ? '/api/reporting/csv/sales'
-            : type === 'stock'
-              ? '/api/reporting/csv/stock'
-              : type === 'booking'
-                ? '/api/reporting/csv/booking'
-                : '/api/reporting/csv/payment-breakdown';
-
-      const q =
-        type === 'category'
-          ? buildCategorySalesQuery()
-          : type === 'sales'
-            ? buildSalesQuery()
-            : type === 'stock'
-              ? buildStockQuery()
-              : type === 'booking'
-                ? buildBookingQuery()
-                : buildPaymentBreakdownQuery();
-
-      const { header, body } = await previewCsv(endpoint, q);
-      setPreviewTitle(
-        type === 'category'
-          ? 'Category Sales CSV'
-          : type === 'sales'
-            ? 'Sales CSV'
-            : type === 'stock'
-              ? 'Stock CSV'
-              : type === 'booking'
-                ? 'Booking CSV'
-                : 'Payment Breakdown CSV'
-      );
-      setPreviewHeader(header);
-      setPreviewBody(body);
-      setPreviewOpen(true);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to preview CSV');
-    }
-  };
-
-  const categoryName = (categoryId: number): string => {
-    if (!categoryId) return 'Uncategorized';
-    const cat = categories.find((c) => c.id === categoryId);
-    if (!cat) return 'Uncategorized';
-    if (cat.parent_id) {
-      const parent = categories.find((p) => p.id === cat.parent_id);
-      return parent ? `${parent.title} / ${cat.title}` : cat.title;
-    }
-    return cat.title;
-  };
-
-  const report = useMemo(() => {
-    // Maps
-    const productById = new Map<number, Product>();
-    products.forEach((p) => productById.set(p.id, p));
-
-    const stockByProductId = new Map<number, number>();
-    inventory.forEach((inv) => stockByProductId.set(inv.product_id, inv.total_quantity || 0));
-
-    const productAgg = new Map<number, ProductAgg>();
-    const categoryAgg = new Map<number, CategoryAgg>();
-    const weekly = new Map<string, Map<number, number>>(); // weekStart -> categoryId -> units
-
-    let discountedSales = 0;
-    let fullPriceSales = 0;
-    let totalUnits = 0;
-    let totalNetSales = 0;
-
-    for (const o of orders) {
-      // Basic guard
-      if (!o || !Array.isArray(o.items)) continue;
-      if (String(o.status || '').toLowerCase() === 'cancelled') continue;
-
-      const orderDate = new Date(o.order_date || o.created_at);
-      const weekStart = getWeekStartISO(orderDate);
-
-      for (const item of o.items || []) {
-        const qty = toNumber(item.quantity);
-        if (qty <= 0) continue;
-
-        const unitPrice = toNumber(item.unit_price);
-        const gross = unitPrice * qty;
-        const discount = toNumber(item.discount_amount);
-        const tax = toNumber(item.tax_amount);
-        const totalAmount = toNumber(item.total_amount);
-        const net = totalAmount > 0 ? totalAmount : gross - discount + tax;
-
-        const discounted = discount > 0.000001;
-
-        totalUnits += qty;
-        totalNetSales += net;
-        if (discounted) discountedSales += net;
-        else fullPriceSales += net;
-
-        const product = productById.get(item.product_id);
-        const productName =
-          product?.name || (item as any).product_name || (item as any).name || 'Unknown Product';
-        const sku =
-          product?.sku || (item as any).product_sku || (item as any).sku || (item as any).productSku || 'NO-SKU';
-        const category_id = product?.category_id || 0;
-
-        // Product agg
-        const existing = productAgg.get(item.product_id);
-        const next: ProductAgg = existing
-          ? { ...existing }
-          : {
-              product_id: item.product_id,
-              name: productName,
-              sku,
-              category_id,
-              units: 0,
-              gross: 0,
-              discount: 0,
-              tax: 0,
-              net: 0,
-              discountedNet: 0,
-              fullPriceNet: 0,
-            };
-        next.units += qty;
-        next.gross += gross;
-        next.discount += discount;
-        next.tax += tax;
-        next.net += net;
-        if (discounted) next.discountedNet += net;
-        else next.fullPriceNet += net;
-        productAgg.set(item.product_id, next);
-
-        // Category agg
-        const catId = category_id || 0;
-        const catExisting = categoryAgg.get(catId);
-        const catNext: CategoryAgg = catExisting
-          ? { ...catExisting }
-          : {
-              category_id: catId,
-              category_name: categoryName(catId),
-              units: 0,
-              net: 0,
-              stock_units: 0,
-            };
-        catNext.units += qty;
-        catNext.net += net;
-        categoryAgg.set(catId, catNext);
-
-        // Weekly
-        if (!weekly.has(weekStart)) weekly.set(weekStart, new Map());
-        const wk = weekly.get(weekStart)!;
-        wk.set(catId, (wk.get(catId) || 0) + qty);
-      }
-    }
-
-    // Attach category stock
-    for (const p of products) {
-      const catId = p.category_id || 0;
-      const stock = stockByProductId.get(p.id) || 0;
-      const cat = categoryAgg.get(catId) || {
-        category_id: catId,
-        category_name: categoryName(catId),
-        units: 0,
-        net: 0,
-        stock_units: 0,
-      };
-      cat.stock_units += stock;
-      categoryAgg.set(catId, cat);
-    }
-
-    // Lists
-    const productsList = Array.from(productAgg.values());
-    const categoriesList = Array.from(categoryAgg.values());
-
-    const sortByMetric = <T extends { units: number; net: number }>(arr: T[], m: Metric): T[] => {
-      const key = m === 'units' ? 'units' : 'net';
-      return [...arr].sort((a, b) => (b[key] || 0) - (a[key] || 0));
-    };
-
-    const topProducts = sortByMetric(productsList, metric).slice(0, topN);
-    const topCategories = sortByMetric(categoriesList, metric).slice(0, topN);
-
-    const zeroSellingProducts = products
-      .filter((p) => (stockByProductId.get(p.id) || 0) > 0)
-      .filter((p) => !productAgg.has(p.id))
-      .map((p) => ({
-        product_id: p.id,
-        name: p.name,
-        sku: p.sku,
-        category: categoryName(p.category_id || 0),
-        stock: stockByProductId.get(p.id) || 0,
-      }))
-      .slice(0, 200);
-
-    const lowSellingProducts = productsList
-      .filter((p) => (stockByProductId.get(p.product_id) || 0) > 0)
-      .filter((p) => p.units > 0 && p.units <= lowThresholdUnits)
-      .sort((a, b) => a.units - b.units)
-      .slice(0, 200)
-      .map((p) => ({
-        ...p,
-        stock: stockByProductId.get(p.product_id) || 0,
-        category: categoryName(p.category_id || 0),
-      }));
-
-    const zeroSellingCategories = categoriesList
-      .filter((c) => c.stock_units > 0)
-      .filter((c) => c.units === 0)
-      .sort((a, b) => b.stock_units - a.stock_units)
-      .slice(0, 100);
-
-    const lowSellingCategories = categoriesList
-      .filter((c) => c.stock_units > 0)
-      .filter((c) => c.units > 0 && c.units <= lowThresholdUnits)
-      .sort((a, b) => a.units - b.units)
-      .slice(0, 100);
-
-    // Category sell-through (sold / (sold + stock))
-    const categorySellThrough = categoriesList
-      .filter((c) => c.stock_units > 0 || c.units > 0)
-      .map((c) => {
-        const denom = c.units + c.stock_units;
-        const sellThrough = denom > 0 ? (c.units / denom) * 100 : 0;
-        const soldVsStock = c.stock_units > 0 ? (c.units / c.stock_units) * 100 : 0;
-        return { ...c, sellThrough, soldVsStock };
-      })
-      .sort((a, b) => b.sellThrough - a.sellThrough);
-
-    // Weekly top/slow categories
-    const weekKeys = Array.from(weekly.keys()).sort((a, b) => (a < b ? 1 : -1));
-    const weeks = weekKeys.slice(0, weeksToShow).map((wk) => {
-      const map = weekly.get(wk) || new Map();
-      const rows = Array.from(map.entries()).map(([catId, units]) => ({
-        catId,
-        category: categoryName(catId),
-        units,
-      }));
-      rows.sort((a, b) => b.units - a.units);
-
-      const top = rows.slice(0, 5).map((r) => ({ category: r.category, units: r.units }));
-      const slow = [...rows]
-        .sort((a, b) => a.units - b.units)
-        .slice(0, 5)
-        .map((r) => ({ category: r.category, units: r.units }));
-
-      const start = new Date(wk);
-      const end = addDays(start, 6);
-      return {
-        weekStart: wk,
-        weekEnd: yyyyMmDd(end),
-        top,
-        slow,
-      } as WeeklyRow;
-    });
-
-    const discountedPct = totalNetSales > 0 ? (discountedSales / totalNetSales) * 100 : 0;
-    const fullPct = totalNetSales > 0 ? (fullPriceSales / totalNetSales) * 100 : 0;
-
-    return {
-      totals: {
-        orders: orders.length,
-        units: totalUnits,
-        netSales: totalNetSales,
-        discountedSales,
-        fullPriceSales,
-        discountedPct,
-        fullPct,
-      },
-      topProducts,
-      topCategories,
-      zeroSellingProducts,
-      lowSellingProducts,
-      zeroSellingCategories,
-      lowSellingCategories,
-      categorySellThrough,
-      weeks,
-    };
-  }, [orders, products, categories, inventory, metric, topN, lowThresholdUnits, weeksToShow]);
-
-  const handleRefresh = async () => {
-    setLoading(true);
-    setError('');
-    setIsTruncated(false);
-    try {
-      const fetched = await fetchOrders();
-      setOrders(fetched.orders);
-      setIsTruncated(fetched.isTruncated);
-    } catch (e: any) {
-      console.error(e);
-      setError(e?.message || 'Failed to refresh orders');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
-    <button
-      type="button"
-      onClick={onChange}
-      className={`px-3 py-2 rounded-lg text-sm border transition-colors
-        ${checked
-          ? 'bg-blue-600 text-white border-blue-600'
-          : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'}
-      `}
-    >
-      {label}
-    </button>
-  );
-
-  if (loading) {
-    return (
-      <div className={darkMode ? 'dark' : ''}>
-        <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
-          <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
-            <main className="flex-1 overflow-auto p-6 flex items-center justify-center">
-              <div className="text-center">
-                <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 dark:border-white mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">Loading inventory reports...</p>
-              </div>
-            </main>
-          </div>
-        </div>
-      </div>
+    const diffDays = Math.max(
+      1,
+      Math.round(
+        (new Date(data.period.to).getTime() - new Date(data.period.from).getTime()) / (1000 * 60 * 60 * 24)
+      ) + 1
     );
-  }
+
+    const avgDailySales = data.kpis.net_sales / diffDays;
+    const monthlyRunRate = avgDailySales * 30;
+    const bestCategory = [...(data.category_performance || [])].sort((a, b) => b.value - a.value)[0];
+    const bestProduct = [...(data.top_products || [])].sort((a, b) => b.revenue - a.revenue)[0];
+
+    return [
+      {
+        label: 'Total Sales',
+        value: currency(data.kpis.net_sales),
+        sub: `${data.kpis.total_orders} orders in selected period`,
+        icon: ShoppingBag,
+        accent: 'from-indigo-500 to-cyan-400',
+      },
+      {
+        label: 'Daily Average Sales',
+        value: currency(avgDailySales),
+        sub: `${diffDays} day reporting range`,
+        icon: CalendarDays,
+        accent: 'from-emerald-500 to-teal-400',
+      },
+      {
+        label: 'Monthly Sales Run Rate',
+        value: currency(monthlyRunRate),
+        sub: 'Projected from current daily average',
+        icon: TrendingUp,
+        accent: 'from-fuchsia-500 to-pink-400',
+      },
+      {
+        label: 'Best Category',
+        value: bestCategory?.label || '—',
+        sub: bestCategory ? `Sales ${currency(bestCategory.value)}` : 'No category data',
+        icon: Tag,
+        accent: 'from-amber-500 to-orange-400',
+      },
+      {
+        label: 'Best Seller',
+        value: bestProduct?.name || '—',
+        sub: bestProduct ? `Revenue ${currency(bestProduct.revenue)}` : 'No product data',
+        icon: Package,
+        accent: 'from-violet-500 to-indigo-400',
+      },
+      {
+        label: 'Top Store',
+        value: [...(data.branch_performance || [])].sort((a, b) => b.net_sales - a.net_sales)[0]?.store_name || '—',
+        sub: (() => {
+          const topStore = [...(data.branch_performance || [])].sort((a, b) => b.net_sales - a.net_sales)[0];
+          return topStore ? `Sales ${currency(topStore.net_sales)}` : 'No store data';
+        })(),
+        icon: StoreIcon,
+        accent: 'from-sky-500 to-blue-400',
+      },
+    ];
+  }, [data]);
+
+  const selectedStoreName = useMemo(() => {
+    if (!filters.store_id) return 'All stores';
+    return stores.find((store) => String(store.id) === String(filters.store_id))?.name || `Store ${filters.store_id}`;
+  }, [filters.store_id, stores]);
 
   return (
     <div className={darkMode ? 'dark' : ''}>
-      <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="flex min-h-screen bg-gray-50 dark:bg-gray-950">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
-
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
-
-          <main className="flex-1 overflow-auto p-6">
-            {/* Header */}
-            <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  <BarChart3 className="w-6 h-6" />
-                  Inventory Sales Reports
-                </h1>
-                <p className="text-gray-600 dark:text-gray-400 mt-1">
-                  High/low selling, discount share, sell-through, and weekly movement.
-                </p>
-                {isTruncated && (
-                  <div className="mt-2 inline-flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 rounded-lg">
-                    <AlertCircle className="w-4 h-4" />
-                    Data was truncated (too many pages). Narrow your date range for full accuracy.
-                  </div>
-                )}
-                {error && (
-                  <div className="mt-2 inline-flex items-center gap-2 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 rounded-lg">
-                    <AlertCircle className="w-4 h-4" />
-                    {error}
-                  </div>
-                )}
-              </div>
-
-              <button
-                onClick={handleRefresh}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:opacity-90 transition"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </button>
-            </div>
-
-            {/* Filters */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4" /> Date from
-                  </label>
-                  <input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4" /> Date to
-                  </label>
-                  <input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Sort metric</label>
-                  <select
-                    value={metric}
-                    onChange={(e) => setMetric(e.target.value as Metric)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="units">Units sold</option>
-                    <option value="net_sales">Net sales (BDT)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2 items-center">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Order types:</span>
-                <Toggle
-                  checked={types.counter}
-                  onChange={() => setTypes((p) => ({ ...p, counter: !p.counter }))}
-                  label="Counter"
-                />
-                <Toggle
-                  checked={types.social_commerce}
-                  onChange={() => setTypes((p) => ({ ...p, social_commerce: !p.social_commerce }))}
-                  label="Social Commerce"
-                />
-                <Toggle
-                  checked={types.ecommerce}
-                  onChange={() => setTypes((p) => ({ ...p, ecommerce: !p.ecommerce }))}
-                  label="E-commerce"
-                />
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-2 items-center">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Order status:</span>
-                <Toggle
-                  checked={statuses.pending_assignment}
-                  onChange={() => setStatuses((p) => ({ ...p, pending_assignment: !p.pending_assignment }))}
-                  label="Pending Assignment"
-                />
-                <Toggle
-                  checked={statuses.completed}
-                  onChange={() => setStatuses((p) => ({ ...p, completed: !p.completed }))}
-                  label="Completed"
-                />
-                <Toggle
-                  checked={statuses.pending}
-                  onChange={() => setStatuses((p) => ({ ...p, pending: !p.pending }))}
-                  label="Pending"
-                />
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Top N</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={topN}
-                    onChange={(e) => setTopN(Math.max(1, Math.min(50, toNumber(e.target.value))))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Low-selling threshold (units)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={lowThresholdUnits}
-                    onChange={(e) => setLowThresholdUnits(Math.max(1, toNumber(e.target.value)))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Weekly rows to show</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={26}
-                    value={weeksToShow}
-                    onChange={(e) => setWeeksToShow(Math.max(1, Math.min(26, toNumber(e.target.value))))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-                After changing filters, hit <span className="font-semibold">Refresh</span>.
-              </div>
-            </div>
-
-            {/* Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Orders (in range)</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{report.totals.orders}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Units sold</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{report.totals.units}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Net sales</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{formatMoney(report.totals.netSales)}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Discounted vs Full</p>
-                <div className="mt-2">
-                  <div className="flex items-center justify-between text-sm text-gray-700 dark:text-gray-200">
-                    <span className="inline-flex items-center gap-1"><Tag className="w-4 h-4" /> Discounted</span>
-                    <span className="font-semibold">{report.totals.discountedPct.toFixed(1)}%</span>
-                  </div>
-                  <div className="w-full h-2 rounded bg-gray-200 dark:bg-gray-700 mt-2 overflow-hidden">
-                    <div className="h-full bg-blue-600" style={{ width: `${Math.min(100, Math.max(0, report.totals.discountedPct))}%` }} />
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mt-2">
-                    <span>Disc: {formatMoney(report.totals.discountedSales)}</span>
-                    <span>Full: {formatMoney(report.totals.fullPriceSales)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* High selling */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5" /> High selling products
-                  </h2>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Top {topN}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 dark:bg-gray-900/40">
-                      <tr>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">SKU</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Units</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Net</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.topProducts.map((p) => (
-                        <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                          <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium truncate max-w-[220px]">{p.name}</td>
-                          <td className="py-2 px-3 text-sm text-gray-600 dark:text-gray-400 font-mono">{p.sku}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.units}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{formatMoney(p.net)}</td>
-                        </tr>
-                      ))}
-                      {report.topProducts.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                            No sales data for this range.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5" /> High selling categories
-                  </h2>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Top {topN}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 dark:bg-gray-900/40">
-                      <tr>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Units</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Net</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.topCategories.map((c) => (
-                        <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                          <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">{c.category_name}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{formatMoney(c.net)}</td>
-                        </tr>
-                      ))}
-                      {report.topCategories.length === 0 && (
-                        <tr>
-                          <td colSpan={3} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                            No sales data for this range.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            {/* Low / Zero selling */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingDown className="w-5 h-5" /> Zero & low selling products
-                  </h2>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Only considers products that currently have stock.
-                  </p>
-                </div>
-                <div className="p-4">
-                  <div className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Zero selling (in-stock)</div>
-                  <div className="max-h-52 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.zeroSellingProducts.map((p) => (
-                          <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white truncate max-w-[260px]">
-                              {p.name}
-                              <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">{p.sku}</div>
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.stock}</td>
-                          </tr>
-                        ))}
-                        {report.zeroSellingProducts.length === 0 && (
-                          <tr>
-                            <td colSpan={2} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None 🎉
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                    Low selling (≤ {lowThresholdUnits} units)
-                  </div>
-                  <div className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.lowSellingProducts.map((p) => (
-                          <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white truncate max-w-[260px]">
-                              {p.name}
-                              <div className="text-xs text-gray-500 dark:text-gray-400">{p.category}</div>
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.units}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.stock}</td>
-                          </tr>
-                        ))}
-                        {report.lowSellingProducts.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None for this threshold.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingDown className="w-5 h-5" /> Zero & low selling categories
-                  </h2>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Uses current stock + sales in the selected date range.
-                  </p>
-                </div>
-                <div className="p-4">
-                  <div className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Zero selling (in-stock)</div>
-                  <div className="max-h-52 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.zeroSellingCategories.map((c) => (
-                          <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white">{c.category_name}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                          </tr>
-                        ))}
-                        {report.zeroSellingCategories.length === 0 && (
-                          <tr>
-                            <td colSpan={2} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None 🎉
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                    Low selling (≤ {lowThresholdUnits} units)
-                  </div>
-                  <div className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.lowSellingCategories.map((c) => (
-                          <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white">{c.category_name}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                          </tr>
-                        ))}
-                        {report.lowSellingCategories.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None for this threshold.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Category-wise sales % on stock */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-                <Package className="w-5 h-5" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Category sell-through (sales % on stock)</h2>
-              </div>
-              <div className="p-4 text-sm text-gray-600 dark:text-gray-400">
-                Sell-through = <span className="font-semibold">sold / (sold + current stock)</span>. (Also shown: sold vs current stock)
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-gray-900/40">
-                    <tr>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sell-through</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold/Stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.categorySellThrough.slice(0, 50).map((c) => (
-                      <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                        <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">{c.category_name}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.sellThrough.toFixed(1)}%</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.soldVsStock.toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                    {report.categorySellThrough.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                          No data.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* CSV Exports */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">CSV Exports</h2>
-              </div>
-              <div className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <Header toggleSidebar={() => setSidebarOpen(true)} darkMode={darkMode} setDarkMode={setDarkMode} />
+          <main className="flex-1 overflow-y-auto">
+            <div className="p-4 md:p-6 xl:p-8">
+              <div className="mb-8 rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-gray-900 md:p-6">
+                <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                    <input
-                      value={csvStoreId}
-                      onChange={(e) => setCsvStoreId(e.target.value)}
-                      placeholder="e.g. 1"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
+                    <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.2em] text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300">
+                      Inventory Reports
+                    </div>
+                    <h1 className="text-3xl font-black tracking-tight text-gray-900 dark:text-white md:text-4xl">Simple Sales Overview</h1>
+                    <p className="mt-2 max-w-3xl text-sm text-gray-500 dark:text-gray-400">
+                      Clear view of store-wise sales, best selling categories, best sellers, and daily or monthly sales without the clutter.
+                    </p>
+                    {data ? (
+                      <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-gray-400 dark:text-gray-500">
+                        Viewing {selectedStoreName} • {formatDateLabel(data.period.from)} to {formatDateLabel(data.period.to)}
+                      </p>
+                    ) : null}
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
-                    <select
-                      value={csvStatus}
-                      onChange={(e) => setCsvStatus(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    >
-                      <option value="">All statuses</option>
-                      <option value="completed">completed</option>
-                      <option value="pending_assignment">pending_assignment</option>
-                      <option value="pending">pending</option>
-                      <option value="cancelled">cancelled</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (Sales CSV only)</label>
-                    <input
-                      value={csvCustomerId}
-                      onChange={(e) => setCsvCustomerId(e.target.value)}
-                      placeholder="e.g. 25"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <button
-                      onClick={() => loadAll()}
-                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Refresh data
-                    </button>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Category ID (Stock CSV only)</label>
-                    <input
-                      value={csvCategoryId}
-                      onChange={(e) => setCsvCategoryId(e.target.value)}
-                      placeholder="e.g. 12"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Product ID (Stock/Booking CSV)</label>
-                    <input
-                      value={csvProductId}
-                      onChange={(e) => setCsvProductId(e.target.value)}
-                      placeholder="e.g. 105"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                  <div className="flex flex-col gap-3 xl:items-end">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                       <input
-                        type="checkbox"
-                        checked={csvIncludeInactive}
-                        onChange={(e) => setCsvIncludeInactive(e.target.checked)}
-                        className="w-4 h-4"
+                        type="date"
+                        value={filters.from || ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, from: e.target.value }))}
+                        className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 outline-none transition focus:border-indigo-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
                       />
-                      Include inactive batches (Stock)
-                    </label>
-                  </div>
-                  <div className="flex items-end">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      Date range applies to: <span className="font-semibold">Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>, <span className="font-semibold">Payment Breakdown</span>
-                    </div>
-                  </div>
-                </div>
-
-                {previewError && (
-                  <div className="mt-3 p-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-sm text-red-700 dark:text-red-300">
-                    {previewError}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Category Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Grouped by product category. Columns: Sold Qty, SUB Total, Discount, Exchange, Return, Net Sales (ex-VAT), VAT Amount (actual tax from orders), Net Amount. Default: completed + pending_assignment orders.</p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('category')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
+                      <input
+                        type="date"
+                        value={filters.to || ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, to: e.target.value }))}
+                        className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 outline-none transition focus:border-indigo-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
+                      />
+                      <select
+                        value={filters.store_id ? String(filters.store_id) : ''}
+                        onChange={(e) => setFilters((prev) => ({ ...prev, store_id: e.target.value || undefined }))}
+                        className="rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-medium text-gray-700 outline-none transition focus:border-indigo-400 dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200"
                       >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.category}
-                        onClick={doDownloadCategory}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.category ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order-level export (customer, products, delivery, payment, status).</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Columns: Creation Date, Invoice Number, Customer Name, Customer Phone, Customer Address, Product Name And QTY, Product Specification,
-                      Product Attribute, Sub Total Price, Discount, Price After Discount, Delivery Charge, Total Price, Paid Amount, Vat Amount,
-                      Total Without Vat, Due Amount, Delivery Partner, Delivery Area, Payment Method, Order Status.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('sales')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.sales}
-                        onClick={doDownloadSales}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.sales ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Stock CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Batch-wise stock with sold quantity + remaining stock value. Filters: store/category/product, include inactive.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('stock')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.stock}
-                        onClick={doDownloadStock}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.stock ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Booking CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Order-items export with barcode, batch pricing, and payable/paid/due. Filters: date/store/status/customer/product.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('booking')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.booking}
-                        onClick={doDownloadBooking}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.booking ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-semibold text-gray-900 dark:text-white">Payment Breakdown CSV</h3>
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                          Payment method-wise breakdown (Cash / Mobile Banking / Bank). Supports Today-only, order type, store, status, and date range.
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">Completed payments only</div>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                        <option value="">All stores</option>
+                        {stores.map((store) => (
+                          <option key={store.id} value={store.id}>{store.name}</option>
+                        ))}
+                      </select>
+                      <div className="flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-3 py-2 dark:border-gray-700 dark:bg-gray-950">
                         <input
-                          type="checkbox"
-                          checked={csvPaymentToday}
-                          onChange={(e) => setCsvPaymentToday(e.target.checked)}
-                          className="w-4 h-4"
+                          type="text"
+                          placeholder="SKU filter"
+                          value={filters.sku || ''}
+                          onChange={(e) => setFilters((prev) => ({ ...prev, sku: e.target.value }))}
+                          onKeyDown={(e) => e.key === 'Enter' && loadData()}
+                          className="w-full bg-transparent text-sm font-medium text-gray-700 outline-none placeholder:text-gray-400 dark:text-gray-200"
                         />
-                        Today only
-                      </label>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Order Type (optional)</label>
-                        <select
-                          value={csvPaymentOrderType}
-                          onChange={(e) => setCsvPaymentOrderType(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                        >
-                          <option value="">All types</option>
-                          <option value="counter">counter (POS)</option>
-                          <option value="ecommerce">ecommerce</option>
-                          <option value="social_commerce">social_commerce</option>
-                          <option value="service">service</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('payment')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.payment}
-                        onClick={doDownloadPaymentBreakdown}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.payment ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Payment Breakdown columns</h4>
-                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                      Date, Invoice Number, Store/Branch, Customer Name, Customer Phone, Customer Address, Product Name, Quantity, Cash Paid,
-                      Bkash/Mobile Banking Paid, Bank Paid, Due, System (Online/POS), Order Status.
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Tip: If <span className="font-semibold">Today only</span> is enabled, date_from/date_to are ignored.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-                  Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span>. Applies to:
-                  <span className="font-semibold"> Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>,
-                  <span className="font-semibold"> Payment Breakdown</span> (unless Today only is enabled).
-                </div>
-
-                {/* ── Purchase Order CSVs ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Purchase Order Exports</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Purchase Order ID <span className="text-red-500">*</span></label>
-                      <input
-                        value={csvPoId}
-                        onChange={(e) => setCsvPoId(e.target.value)}
-                        placeholder="e.g. 123 or PO-20260310-000012"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Detail CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Full breakdown of a single PO: vendor, store, employee tracking, item-by-item pricing (50+ columns).
-                      </p>
-                      <div className="mt-3">
                         <button
-                          disabled={csvPoBusy}
-                          onClick={doDownloadPODetail}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                          onClick={() => setShowProductModal(true)}
+                          className="rounded-xl p-2 text-indigo-600 transition hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950/50"
+                          title="Pick product"
                         >
-                          {csvPoBusy ? 'Preparing…' : 'Download CSV'}
+                          <Layers className="h-4 w-4" />
                         </button>
                       </div>
                     </div>
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Barcodes CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Atomic barcode list for a PO — one row per physical unit. Includes batch info, active/defective flags, current location.
-                      </p>
-                      <div className="mt-3">
-                        <button
-                          disabled={csvPoBarcodeBusy}
-                          onClick={doDownloadPOBarcodes}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                        >
-                          {csvPoBarcodeBusy ? 'Preparing…' : 'Download CSV'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
 
-                {/* ── Dispatch Barcode Breakdown CSV ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Dispatch Barcode Breakdown</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date From <span className="text-red-500">*</span></label>
-                      <input
-                        type="date"
-                        value={csvDispatchDateFrom}
-                        onChange={(e) => setCsvDispatchDateFrom(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date To <span className="text-red-500">*</span></label>
-                      <input
-                        type="date"
-                        value={csvDispatchDateTo}
-                        onChange={(e) => setCsvDispatchDateTo(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                      <input
-                        value={csvDispatchStoreId}
-                        onChange={(e) => setCsvDispatchStoreId(e.target.value)}
-                        placeholder="Matches source or destination"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
-                      <select
-                        value={csvDispatchStatus}
-                        onChange={(e) => setCsvDispatchStatus(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">All statuses</option>
-                        <option value="pending">pending</option>
-                        <option value="in_transit">in_transit</option>
-                        <option value="delivered">delivered</option>
-                        <option value="cancelled">cancelled</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h4 className="font-semibold text-gray-900 dark:text-white">Dispatch Barcodes CSV</h4>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Atomic barcode-level breakdown of dispatches — one row per scanned unit. Includes source/destination stores, carrier, product info, scan timestamp.
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Requires date range. Store filter matches <span className="font-semibold">either</span> source or destination.
-                    </p>
-                    <div className="mt-3">
+                    <div className="flex flex-wrap items-center gap-2">
                       <button
-                        disabled={csvDispatchBusy}
-                        onClick={doDownloadDispatchBarcodes}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
+                        onClick={() => loadData()}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-xs font-black uppercase tracking-[0.16em] text-white transition hover:scale-[1.01] dark:bg-white dark:text-gray-900"
                       >
-                        {csvDispatchBusy ? 'Preparing…' : 'Download CSV'}
+                        <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} /> Apply filters
                       </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Customer Installment / Partial Payment CSV ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Customer Installments & Partial Payments</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (optional)</label>
-                      <input
-                        value={csvInstallmentCustomerId}
-                        onChange={(e) => setCsvInstallmentCustomerId(e.target.value)}
-                        placeholder="e.g. 25"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                      <input
-                        value={csvInstallmentStoreId}
-                        onChange={(e) => setCsvInstallmentStoreId(e.target.value)}
-                        placeholder="e.g. 1"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Payment Status (optional)</label>
-                      <select
-                        value={csvInstallmentPaymentStatus}
-                        onChange={(e) => setCsvInstallmentPaymentStatus(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
+                      <button
+                        onClick={exportCsv}
+                        className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-5 py-3 text-xs font-black uppercase tracking-[0.16em] text-gray-700 transition hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
                       >
-                        <option value="">All statuses</option>
-                        <option value="unpaid">unpaid</option>
-                        <option value="partial">partial</option>
-                        <option value="paid">paid</option>
-                        <option value="overdue">overdue</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">Installments / Partial Payments CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Customer info, order details, full payment history — one row per payment. Includes balance before/after, installment number, payment method, due dates.
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Uses the main date range filter above. Leave all filters blank to export all installment orders.
-                      </p>
-                      <div className="mt-3">
-                        <button
-                          disabled={csvInstallmentBusy}
-                          onClick={doDownloadInstallments}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                        >
-                          {csvInstallmentBusy ? 'Preparing…' : 'Download CSV'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
-                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Installments CSV columns</h4>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                        Order Number, Order Date, Store, Customer Name, Customer Phone, Customer Email, Customer Address, Products, Total Items,
-                        Order Total, Total Paid, Outstanding, Payment Status, Next Payment Due,
-                        Payment Number, Payment Date, Payment Amount, Payment Method, Payment Type, Installment #,
-                        Balance Before, Balance After, Processed By, Payment Notes.
-                      </p>
+                        <Download className="h-4 w-4" /> Export
+                      </button>
                     </div>
                   </div>
                 </div>
               </div>
+
+              {loading ? (
+                <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
+                  {Array.from({ length: 6 }).map((_, i) => (
+                    <div key={i} className="h-36 animate-pulse rounded-2xl border border-gray-100 bg-white dark:border-gray-800 dark:bg-gray-900/50" />
+                  ))}
+                </div>
+              ) : error ? (
+                <div className="flex items-center gap-3 rounded-2xl border border-red-100 bg-red-50 p-6 text-red-700 dark:border-red-900/40 dark:bg-red-950/20 dark:text-red-300">
+                  <AlertTriangle className="h-5 w-5 shrink-0" />
+                  {error}
+                </div>
+              ) : data ? (
+                <div className="space-y-8 animate-in fade-in duration-500">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    {quickStats.map((card) => {
+                      const Icon = card.icon;
+                      return (
+                        <div key={card.label} className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-gray-800 dark:bg-gray-900">
+                          <div className="mb-4 flex items-start justify-between gap-4">
+                            <div>
+                              <div className="text-[11px] font-black uppercase tracking-[0.18em] text-gray-400 dark:text-gray-500">{card.label}</div>
+                              <div className="mt-2 text-xl font-black text-gray-900 dark:text-white">{card.value}</div>
+                            </div>
+                            <div className={`rounded-2xl bg-gradient-to-br p-3 text-white ${card.accent}`}>
+                              <Icon className="h-5 w-5" />
+                            </div>
+                          </div>
+                          <div className="text-sm text-gray-500 dark:text-gray-400">{card.sub}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <SalesTrendCard
+                    initialData={data.sales_trend}
+                    initialFilters={{
+                      from: filters.from as string,
+                      to: filters.to as string,
+                      store_id: filters.store_id,
+                      sku: filters.sku,
+                    }}
+                  />
+
+                  <div className="grid gap-8 xl:grid-cols-2">
+                    <StoreSalesOverviewCard data={data.branch_performance} />
+                    <CategoryPerformanceCard data={data.category_performance} />
+                  </div>
+
+                  <BestSellersCard
+                    initialData={data.top_products}
+                    initialFilters={{
+                      from: filters.from as string,
+                      to: filters.to as string,
+                      store_id: filters.store_id,
+                    }}
+                  />
+                </div>
+              ) : null}
             </div>
-
-            {/* Weekly report */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Weekly best selling & slow moving categories</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  Based on units sold per week (Mon–Sun).
-                </p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-gray-900/40">
-                    <tr>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Week</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Best selling</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Slow moving</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.weeks.map((w) => (
-                      <tr key={w.weekStart} className="border-t border-gray-100 dark:border-gray-700 align-top">
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white font-medium whitespace-nowrap">
-                          {w.weekStart} → {w.weekEnd}
-                        </td>
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white">
-                          {w.top.length === 0 ? (
-                            <span className="text-gray-500 dark:text-gray-400">No sales</span>
-                          ) : (
-                            <ul className="space-y-1">
-                              {w.top.map((r, idx) => (
-                                <li key={idx} className="flex items-center justify-between gap-3">
-                                  <span className="truncate max-w-[320px]">{r.category}</span>
-                                  <span className="text-gray-600 dark:text-gray-400">{r.units}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white">
-                          {w.slow.length === 0 ? (
-                            <span className="text-gray-500 dark:text-gray-400">No sales</span>
-                          ) : (
-                            <ul className="space-y-1">
-                              {w.slow.map((r, idx) => (
-                                <li key={idx} className="flex items-center justify-between gap-3">
-                                  <span className="truncate max-w-[320px]">{r.category}</span>
-                                  <span className="text-gray-600 dark:text-gray-400">{r.units}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {report.weeks.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="py-10 text-center text-sm text-gray-600 dark:text-gray-400">
-                          No weekly data for this range.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* CSV Preview Modal */}
-            {previewOpen && (
-              <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setPreviewOpen(false)}>
-                <div
-                  className="w-full max-w-5xl max-h-[85vh] bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{previewTitle}</h3>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Showing first {previewBody.length} rows</p>
-                    </div>
-                    <button
-                      onClick={() => setPreviewOpen(false)}
-                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Close
-                    </button>
-                  </div>
-
-                  <div className="overflow-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40 sticky top-0">
-                        <tr>
-                          {previewHeader.map((h, idx) => (
-                            <th
-                              key={idx}
-                              className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap"
-                            >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {previewBody.map((r, ridx) => (
-                          <tr key={ridx} className="border-t border-gray-100 dark:border-gray-700">
-                            {r.map((c, cidx) => (
-                              <td key={cidx} className="py-2 px-3 text-gray-900 dark:text-white whitespace-nowrap">
-                                {c}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                        {previewBody.length === 0 && (
-                          <tr>
-                            <td colSpan={previewHeader.length || 1} className="py-10 text-center text-gray-600 dark:text-gray-400">
-                              No rows.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            )}
           </main>
         </div>
       </div>
+
+      {showProductModal && (
+        <ProductSelectModal
+          onClose={() => setShowProductModal(false)}
+          onSelect={(sku) => {
+            applyFilters({ sku });
+            setShowProductModal(false);
+          }}
+        />
+      )}
     </div>
   );
 }

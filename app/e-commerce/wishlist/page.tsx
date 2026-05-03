@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import { wishlistUtils, WishlistItem } from '@/lib/wishlistUtils';
 import { useCart } from '@/app/e-commerce/CartContext';
 import Navigation from '@/components/ecommerce/Navigation';
-import Footer from '@/components/ecommerce/Footer';
 import CartSidebar from '@/components/ecommerce/cart/CartSidebar';
 
 export default function WishlistPage() {
@@ -59,7 +58,7 @@ export default function WishlistPage() {
     return (
       <>
         <Navigation />
-        <div className="min-h-screen bg-gray-50 py-12">
+        <div className="ec-root min-h-screen py-12">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <button
               onClick={() => router.push('/e-commerce')}
@@ -71,9 +70,9 @@ export default function WishlistPage() {
 
             <h1 className="text-3xl font-bold text-gray-900 mb-8">My Wishlist</h1>
             
-            <div className="bg-white rounded-lg shadow-sm p-12 text-center">
+            <div className="ec-dark-card p-12 text-center">
               <div className="max-w-md mx-auto">
-                <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
+                <div className="w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6" style={{ background: 'rgba(255,255,255,0.08)' }}>
                   <Heart size={48} className="text-gray-300" />
                 </div>
                 <h2 className="text-2xl font-semibold text-gray-900 mb-2">Your wishlist is empty</h2>
@@ -82,23 +81,21 @@ export default function WishlistPage() {
                 </p>
                 <button 
                   onClick={() => router.push('/e-commerce')}
-                  className="bg-red-700 text-white px-8 py-3 rounded-lg font-semibold hover:bg-red-800 transition-colors"
+                  className="ec-btn ec-btn-gold"
                 >
                   Continue Shopping
                 </button>
               </div>
             </div>
           </div>
-        </div>
-        <Footer />
-      </>
+        </div></>
     );
   }
 
   return (
     <>
       <Navigation />
-      <div className="min-h-screen bg-gray-50 py-12">
+      <div className="ec-root min-h-screen py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <button
             onClick={() => router.push('/e-commerce')}
@@ -114,7 +111,7 @@ export default function WishlistPage() {
             </h1>
             <button
               onClick={handleClearAll}
-              className="text-red-600 hover:text-red-700 font-medium text-sm transition-colors"
+              className="text-rose-600 hover:text-neutral-900 font-medium text-sm transition-colors"
             >
               Clear All
             </button>
@@ -124,11 +121,11 @@ export default function WishlistPage() {
             {wishlistItems.map((item) => (
               <div
                 key={item.id}
-                className="bg-white rounded-lg overflow-hidden shadow-sm hover:shadow-lg transition-shadow duration-300 group"
+                className="ec-dark-card ec-dark-card-hover overflow-hidden group" style={{ borderRadius: '14px' }}
               >
                 <div 
                   onClick={() => handleNavigateToProduct(item.id)}
-                  className="relative aspect-square overflow-hidden bg-gray-100 cursor-pointer"
+                  className="relative aspect-square overflow-hidden cursor-pointer" style={{ background: 'rgba(255,255,255,0.04)' }}
                 >
                   <img
                     src={item.image}
@@ -146,21 +143,21 @@ export default function WishlistPage() {
                       e.stopPropagation();
                       handleRemove(item.id);
                     }}
-                    className="absolute top-3 right-3 p-2 bg-white rounded-full shadow-lg hover:bg-red-50 transition-colors z-10"
+                    className="absolute top-3 right-3 p-2 rounded-full z-10 transition-colors" style={{ background: 'rgba(13,13,13,0.7)', border: '1px solid rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)' }}
                     title="Remove from wishlist"
                   >
-                    <X size={16} className="text-gray-700 hover:text-red-600" />
+                    <X size={16} className="text-gray-700 hover:text-rose-600" />
                   </button>
                 </div>
 
                 <div className="p-4">
                   <h3 
                     onClick={() => handleNavigateToProduct(item.id)}
-                    className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem] hover:text-red-600 cursor-pointer transition-colors"
+                    className="text-sm font-semibold mb-2 line-clamp-2 min-h-[2.5rem] cursor-pointer transition-colors text-white"
                   >
                     {item.name}
                   </h3>
-                  <p className="text-lg font-bold text-red-700 mb-4">
+                  <p className="text-lg font-bold text-neutral-900 mb-4">
                     {item.price.toLocaleString()}.00৳
                   </p>
                   
@@ -170,7 +167,7 @@ export default function WishlistPage() {
                     className={`w-full py-2.5 rounded-lg font-semibold text-sm transition-colors flex items-center justify-center gap-2 ${
                       addingToCartId === item.id
                         ? 'bg-green-600 text-white'
-                        : 'bg-red-700 text-white hover:bg-red-800'
+                        : 'bg-neutral-900 text-white hover:bg-neutral-800'
                     }`}
                   >
                     {addingToCartId === item.id ? (
@@ -187,9 +184,7 @@ export default function WishlistPage() {
             ))}
           </div>
         </div>
-      </div>
-      <Footer />
-      <CartSidebar isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} />
+      </div><CartSidebar isOpen={isCartOpen} onClose={() => setIsCartOpen(false)} />
     </>
   );
 }

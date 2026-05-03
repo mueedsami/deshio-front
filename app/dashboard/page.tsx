@@ -19,6 +19,8 @@ import {
 import axios from "axios";
 import Header from "@/components/Header";
 import Sidebar from "@/components/Sidebar";
+import { useTheme } from "@/contexts/ThemeContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 // ✅ Axios instance (same as you had, but safer extract below)
 const axiosInstance = axios.create({
@@ -68,7 +70,8 @@ interface DashboardData {
 }
 
 export default function FounderDashboard() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
+  const { role, isLoading: authLoading } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -89,15 +92,6 @@ export default function FounderDashboard() {
   const [timeFilter, setTimeFilter] = useState<"today" | "week" | "month">("today");
   const [branchFilter, setBranchFilter] = useState("all"); // reserved for store_id filter later
 
-  // Dark mode persistence
-  useEffect(() => {
-    const savedDarkMode = localStorage.getItem("darkMode") === "true";
-    setDarkMode(savedDarkMode);
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem("darkMode", darkMode.toString());
-  }, [darkMode]);
 
   // ✅ Normalizer: supports both shapes
   // A) { success:true, data:{...} }
@@ -264,8 +258,11 @@ export default function FounderDashboard() {
     return list;
   }, [operations]);
 
+  // Access Check
+  const canAccess = role === 'super-admin' || role === 'admin';
+
   // Loading state
-  if (loading && !data.todayMetrics) {
+  if ((loading || authLoading) && !data.todayMetrics) {
     return (
       <div className={darkMode ? "dark" : ""}>
         <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
@@ -281,6 +278,33 @@ export default function FounderDashboard() {
                 <RefreshCw className="w-12 h-12 animate-spin mx-auto mb-4 text-blue-600" />
                 <p className="text-xl mb-2 text-gray-900 dark:text-white">Loading Dashboard...</p>
                 <p className="text-sm text-gray-600 dark:text-gray-400">Connecting to backend...</p>
+              </div>
+            </main>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Restriction UI
+  if (!canAccess && !authLoading) {
+    return (
+      <div className={darkMode ? "dark" : ""}>
+        <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
+          <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <Header
+              darkMode={darkMode}
+              setDarkMode={setDarkMode}
+              toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+            />
+            <main className="flex-1 overflow-auto p-6 flex items-center justify-center">
+              <div className="text-center max-w-md p-8 rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950/60 shadow-xl backdrop-blur">
+                <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-4" />
+                <p className="text-xl font-semibold mb-4 text-gray-900 dark:text-white">Access Restricted</p>
+                <p className="text-gray-600 dark:text-gray-400">
+                  You do not have access to this page. Please go to a page you have access to.
+                </p>
               </div>
             </main>
           </div>
@@ -394,21 +418,19 @@ export default function FounderDashboard() {
                         <span className="text-slate-500 dark:text-slate-400">Time</span>
                         <button
                           onClick={() => setTimeFilter("today")}
-                          className={`rounded-full px-3 py-1 text-xs transition ${
-                            timeFilter === "today"
+                          className={`rounded-full px-3 py-1 text-xs transition ${timeFilter === "today"
                               ? "bg-slate-100 dark:bg-slate-800 font-medium text-slate-900 dark:text-slate-100 shadow-inner"
                               : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                          }`}
+                            }`}
                         >
                           Today
                         </button>
                         <button
                           onClick={() => setTimeFilter("month")}
-                          className={`rounded-full px-3 py-1 text-xs transition ${
-                            timeFilter === "month"
+                          className={`rounded-full px-3 py-1 text-xs transition ${timeFilter === "month"
                               ? "bg-slate-100 dark:bg-slate-800 font-medium text-slate-900 dark:text-slate-100 shadow-inner"
                               : "text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
-                          }`}
+                            }`}
                         >
                           This Month
                         </button>
@@ -892,8 +914,8 @@ function KpiCard({ label, value, delta, positive, neutral }: any) {
   const tone = neutral
     ? "text-slate-500 dark:text-slate-300"
     : positive
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-rose-600 dark:text-rose-400";
+      ? "text-emerald-600 dark:text-emerald-400"
+      : "text-rose-600 dark:text-rose-400";
 
   const Icon = neutral ? ShoppingBag : positive ? ArrowUpRight : ArrowDownRight;
 
@@ -1017,8 +1039,8 @@ function PipelineStage({ label, count, value, icon, highlight, warning }: any) {
   const color = highlight
     ? "border-emerald-300 bg-emerald-50 dark:border-emerald-500/50 dark:bg-emerald-500/10"
     : warning
-    ? "border-amber-300 bg-amber-50 dark:border-amber-500/50 dark:bg-amber-500/10"
-    : "border-slate-200 dark:border-slate-800";
+      ? "border-amber-300 bg-amber-50 dark:border-amber-500/50 dark:bg-amber-500/10"
+      : "border-slate-200 dark:border-slate-800";
 
   return (
     <div className={`${base} ${color}`}>

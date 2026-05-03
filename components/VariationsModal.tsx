@@ -31,9 +31,6 @@ export default function VariationsModal({
   groupedProducts = [],
 }: VariationsModalProps) {
   const [quantities, setQuantities] = useState<Record<string | number, number>>({});
-  const [imagePreviewOpen, setImagePreviewOpen] = useState(false);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [imagePreviewTitle, setImagePreviewTitle] = useState<string>('');
 
   useEffect(() => {
     const initial: Record<string | number, number> = {};
@@ -62,27 +59,10 @@ export default function VariationsModal({
     return parts.length > 0 ? parts.join(' - ') : 'Default';
   };
 
-  const closeImagePreview = () => {
-    setImagePreviewOpen(false);
-    setImagePreviewUrl(null);
-    setImagePreviewTitle('');
+  // Helper to view product details
+  const handleImageClick = (variationId: string | number) => {
+    window.open(`/product/view?id=${variationId}`, '_blank');
   };
-
-  const handleImageClick = (imageUrl: string, label: string) => {
-    if (!imageUrl) return;
-    setImagePreviewUrl(imageUrl);
-    setImagePreviewTitle(label);
-    setImagePreviewOpen(true);
-  };
-
-  useEffect(() => {
-    if (!imagePreviewOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') closeImagePreview();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [imagePreviewOpen]);
 
   if (!product.variations || product.variations.length === 0) {
     return (
@@ -177,9 +157,9 @@ export default function VariationsModal({
                     >
                       <td className="py-3 px-4">
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleImageClick(variationImage, `${product.name} - ${color} - ${size}`); }}
+                          onClick={() => handleImageClick(variation.id)}
                           className="relative group cursor-pointer"
-                          title="View image"
+                          title="Click to view product details"
                         >
                           <ImageWithFallback
                             src={variationImage}
@@ -244,39 +224,6 @@ export default function VariationsModal({
           </button>
         </div>
       </div>
-
-      {imagePreviewOpen && imagePreviewUrl && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/70" onClick={closeImagePreview} />
-          <div className="relative w-full max-w-4xl bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-            <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-black dark:text-white">Product Image</p>
-                <p className="text-[10px] text-gray-600 dark:text-gray-400">{imagePreviewTitle || product.name}</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeImagePreview}
-                className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="p-3 bg-gray-50 dark:bg-gray-950 flex items-center justify-center max-h-[80vh] overflow-auto">
-              <img
-                src={imagePreviewUrl}
-                alt={imagePreviewTitle || product.name}
-                className="max-w-full max-h-[72vh] object-contain rounded"
-                onError={(e) => {
-                  (e.currentTarget as HTMLImageElement).src = '/placeholder-product.png';
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }

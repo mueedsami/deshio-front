@@ -3,16 +3,21 @@ import axiosInstance from '@/lib/axios';
 
 export interface Product {
   id: number;
-  name: string;
+  name: string; // display name (auto-computed server-side)
   sku: string;
+  base_name?: string; // editable base name
+  variation_suffix?: string; // e.g. "-red-30"
   description?: string;
   category_id: number;
   vendor_id: number;
   is_archived: boolean;
   custom_fields?: CustomField[];
   images?: ProductImage[];
-  primary_image?: PrimaryImage;
+  /** Gallery-safe images (SKU-core fallback merged with variant image) */
+  display_images?: ProductImage[];
   variants?: any[]; // Product variants
+  has_variants?: boolean;
+  variants_count?: number;
   category?: {
     id: number;
     title: string;
@@ -21,6 +26,13 @@ export interface Product {
     id: number;
     name: string;
   };
+  selling_price?: number;
+  base_price?: number; // alias for selling_price
+  global_available?: number; // total available from reserved_products
+  stock_quantity?: number;
+  online_stock_quantity?: number;
+  offline_stock_quantity?: number;
+  in_stock?: boolean | number;
   created_at: string;
   updated_at: string;
 }
@@ -28,29 +40,18 @@ export interface Product {
 export interface CustomField {
   field_id: number;
   field_title: string;
-  field_type?: string;
+  field_type: string;
   value: any;
-  raw_value?: string;
+  raw_value: string;
 }
 
 export interface ProductImage {
   id: number;
   product_id: number;
-  image_path?: string;
-  image_url?: string;
-  url?: string;
-  is_primary?: boolean;
-  is_active?: boolean;
-  sort_order?: number;
-  display_order?: number;
-}
-
-export interface PrimaryImage {
-  id: number;
-  url: string;
-  alt_text?: string;
-  image_url?: string;
-  image_path?: string;
+  image_path: string;
+  is_primary: boolean;
+  is_active: boolean;
+  sort_order: number;
 }
 
 export interface Field {
@@ -64,9 +65,29 @@ export interface Field {
   order: number;
 }
 
+export interface ForceDeleteSummary {
+  product_id: number;
+  product_name?: string;
+  product_sku?: string;
+  deleted_at?: string;
+  // Any other counters returned by backend (batches_deleted, barcodes_deleted, etc.)
+  [key: string]: any;
+}
+
+export interface ForceDeleteResponse {
+  success: boolean;
+  message: string;
+  data: ForceDeleteSummary;
+}
+
 export interface CreateProductData {
-  name: string;
-  sku: string;
+  // Backward compatible: you may send `name` only.
+  // Recommended for variations: send `base_name` + `variation_suffix` and the backend computes `name`.
+  name?: string;
+  /** Optional: backend will auto-generate (9-digit) if omitted/null/empty */
+  sku?: string | null;
+  base_name?: string;
+  variation_suffix?: string;
   description?: string;
   category_id: number;
   vendor_id: number;
@@ -76,204 +97,82 @@ export interface CreateProductData {
   }[];
 }
 
+export interface SkuGroupResponse {
+  sku: string;
+  base_name: string;
+  total_variations: number;
+  products: Product[];
+}
+
+export interface UpdateCommonInfoRequest {
+  base_name: string;
+  description?: string;
+  category_id?: number;
+  vendor_id?: number;
+  brand?: string;
+}
+
 export interface CreateProductWithVariantsData extends CreateProductData {
   use_variants: boolean;
-  variant_attributes?: Record<string, string[]>;
+  variant_attributes?: Record<string, string[]>; // e.g., { Color: ["Red", "Blue"], Size: ["S", "M"] }
   base_price_adjustment?: number;
 }
 
-export type SearchField = 'name' | 'sku' | 'description' | 'category' | 'custom_fields';
-
-// ── Grouped product (returned by /products/grouped) ──────────────────────────
-
-export interface GroupedProductVariant {
-  id: number;
-  name: string;
-  sku: string | null;
-  image: string | null;
-  custom_fields: { field_id: number; field_title: string | null; value: any }[];
-  selling_price: number | null;
-  stock: number;
-  created_at: string;
-}
-
-export interface GroupedProduct {
-  rep_id: number;
-  sku: string | null;
-  base_name: string;
-  category_id: number;
-  category_path: string;
-  vendor_id: number | null;
-  vendor_name: string | null;
-  primary_image: string | null;
-  variants: GroupedProductVariant[];
-  total_variants: number;
-  has_variations: boolean;
-  selling_price: number | null;
-  total_stock: number;
-  in_stock: boolean;
-  /** Array of { store_id, store_name, stock } — aggregated across all variants in the SKU group */
-  stock_per_store: { store_id: number; store_name: string; stock: number }[];
-}
-
-export interface GroupedProductsResponse {
-  data: GroupedProduct[];
-  pagination: {
-    total: number;
-    per_page: number;
-    current_page: number;
-    last_page: number;
-    from: number | null;
-    to: number | null;
-  };
-  total_groups: number;
-}
-
-export interface GetGroupedProductsParams {
-  page?: number;
-  per_page?: number;
-  q?: string;
-  category_id?: number | string;
-  vendor_id?: number | string;
-  min_price?: number | string;
-  max_price?: number | string;
-  is_archived?: boolean;
-}
-
-export interface ProductSearchHit extends Product {
-  search_stage?: string;
-  base_score?: number;
-  relevance_score?: number;
-}
-
-export interface AdvancedSearchParams {
-  query: string;
-  category_id?: number;
-  vendor_id?: number;
-  is_archived?: boolean;
-  enable_fuzzy?: boolean;
-  fuzzy_threshold?: number; // 50-100
-  search_fields?: SearchField[];
-  per_page?: number;
-  page?: number;
-}
-
-export interface AdvancedSearchResponse {
-  success: boolean;
-  query: string;
-  search_terms: string[];
-  total_results: number;
-  items: ProductSearchHit[];
-  pagination: {
-    total: number;
-    per_page: number;
-    current_page: number;
-    last_page: number;
-    from?: number;
-    to?: number;
-  } | null;
-  raw: any;
-}
-
-// ---------- helpers ----------
-function normalizeCategory(raw: any): { id: number; title: string } | undefined {
-  if (!raw) return undefined;
-  const id = raw.id;
-  if (typeof id !== 'number') return undefined;
-  const title = String(raw.title ?? raw.name ?? raw.full_path ?? '').trim();
-  return { id, title: title || 'Uncategorized' };
-}
-
-function normalizeVendor(raw: any): { id: number; name: string } | undefined {
-  if (!raw) return undefined;
-  const id = raw.id;
-  if (typeof id !== 'number') return undefined;
-  const name = String(raw.name ?? raw.title ?? '').trim();
-  return { id, name: name || 'Vendor' };
-}
-
-// Normalize API response into our Product interface
+// Helper to normalize API response
 function transformProduct(product: any): Product {
   return {
-    id: Number(product.id),
-    name: String(product.name ?? ''),
-    sku: String(product.sku ?? ''),
-    description: product.description ?? undefined,
-    category_id: Number(product.category_id ?? (product.category?.id ?? 0)),
-    vendor_id: Number(product.vendor_id ?? (product.vendor?.id ?? 0)),
-    is_archived: Boolean(product.is_archived),
-    custom_fields: Array.isArray(product.custom_fields) ? product.custom_fields : undefined,
-    images: Array.isArray(product.images) ? product.images : undefined,
-    primary_image: (() => {
-      const pi = product?.primary_image;
-      if (!pi) return undefined;
-      const u = pi.url ?? pi.image_url ?? pi.image_path;
-      if (!u) return undefined;
-      return {
-        id: Number(pi.id ?? 0),
-        url: String(u),
-        alt_text: pi.alt_text ?? product?.name ?? undefined,
-        image_url: pi.image_url ?? undefined,
-        image_path: pi.image_path ?? undefined,
-      } as PrimaryImage;
-    })(),
-    variants: Array.isArray(product.variants) ? product.variants : undefined,
-    category: normalizeCategory(product.category),
-    vendor: normalizeVendor(product.vendor),
-    created_at: String(product.created_at ?? ''),
-    updated_at: String(product.updated_at ?? ''),
+    id: product.id,
+    name: product.name,
+    sku: product.sku,
+    base_name: product.base_name,
+    variation_suffix: product.variation_suffix,
+    description: product.description,
+    category_id: product.category_id,
+    vendor_id: product.vendor_id,
+    is_archived: product.is_archived,
+    custom_fields: product.custom_fields,
+    images: product.images,
+    display_images: product.display_images,
+    variants: product.variants,
+    has_variants: product.has_variants,
+    variants_count: product.variants_count,
+    category: product.category,
+    vendor: product.vendor,
+    selling_price: product.selling_price || product.base_price,
+    base_price: product.base_price || product.selling_price,
+    global_available: product.global_available,
+    stock_quantity: product.stock_quantity,
+    online_stock_quantity: product.online_stock_quantity,
+    offline_stock_quantity: product.offline_stock_quantity,
+    in_stock: product.in_stock,
+    created_at: product.created_at,
+    updated_at: product.updated_at,
   };
 }
 
-function extractItemsFromAdvancedSearch(result: any): any[] {
-  const root = result?.data ?? result ?? {};
-  // Common shapes:
-  // - { success, data: { items: [...], pagination: {...} } }
-  // - { success, data: { data: { items: [...] } } }
-  // - { success, data: [...] }
-  // - { success, data: { items: [...] } }
-  const dataRoot = root?.data ?? root;
+// Unwrap common backend response shapes safely
+function unwrapData(result: any): any {
+  // Typical shapes:
+  // 1) { success: true, data: {...} }
+  // 2) { success: true, data: { data: {...} } }
+  // 3) { data: {...} }
+  // 4) direct payload
+  let cur = result;
 
-  const candidates = [
-    dataRoot?.items,
-    dataRoot?.data?.items,
-    dataRoot?.data?.data?.items,
-    dataRoot?.data,
-    dataRoot?.data?.data,
-    dataRoot,
-  ];
-
-  for (const c of candidates) {
-    if (Array.isArray(c)) return c;
+  // Strip top-level {success, message}
+  if (cur && typeof cur === 'object' && 'success' in cur && 'data' in cur) {
+    cur = (cur as any).data;
   }
-  return [];
-}
 
-function extractPaginationFromAdvancedSearch(result: any): AdvancedSearchResponse['pagination'] {
-  const root = result?.data ?? result ?? {};
-  const dataRoot = root?.data ?? root;
-
-  const pg =
-    dataRoot?.pagination ??
-    dataRoot?.data?.pagination ??
-    dataRoot?.data?.data?.pagination ??
-    null;
-
-  if (!pg) return null;
-
-  const total = Number(pg.total ?? pg?.pagination?.total ?? 0);
-  const per_page = Number(pg.per_page ?? pg.limit ?? 0);
-  const current_page = Number(pg.current_page ?? pg.page ?? 1);
-  const last_page = Number(pg.last_page ?? pg.total_pages ?? 1);
-
-  return {
-    total: Number.isFinite(total) ? total : 0,
-    per_page: Number.isFinite(per_page) ? per_page : 0,
-    current_page: Number.isFinite(current_page) ? current_page : 1,
-    last_page: Number.isFinite(last_page) ? last_page : 1,
-    from: pg.from ?? undefined,
-    to: pg.to ?? undefined,
-  };
+  // Drill into nested data a couple times if present
+  for (let i = 0; i < 2; i++) {
+    if (cur && typeof cur === 'object' && 'data' in cur && (cur as any).data) {
+      cur = (cur as any).data;
+      continue;
+    }
+    break;
+  }
+  return cur;
 }
 
 export const productService = {
@@ -284,10 +183,30 @@ export const productService = {
     category_id?: number;
     vendor_id?: number;
     search?: string;
+    sort_by?: string;
+    sort_direction?: 'asc' | 'desc';
+    /** Proposal 1: return SKU-grouped response instead of flat variant rows */
+    group_by_sku?: boolean;
+    /** Proposal 2: server-side price filter (BDT) */
+    min_price?: number;
+    max_price?: number;
+    stock_status?: 'all' | 'in_stock' | 'not_in_stock' | 'available_online';
+    in_stock?: string;
     is_archived?: boolean;
+    no_pagination?: boolean;
   }): Promise<{ data: Product[]; total: number; current_page: number; last_page: number }> {
     try {
-      const response = await axiosInstance.get('/products', { params });
+      // Prefer employee-scoped endpoints when available; fallback keeps backward compatibility.
+      let response;
+      try {
+        response = await axiosInstance.get('/products', { params });
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.get('/products', { params });
+        } else {
+          throw e;
+        }
+      }
       const result = response.data;
 
       if (!result?.success) {
@@ -310,14 +229,15 @@ export const productService = {
 
       const products = rawList.map(transformProduct);
 
-      // Pagination (new shape)
+      // Pagination (new shape — used by Proposal 1 grouped endpoint)
       const pagination = dataRoot.pagination;
       if (pagination) {
         return {
           data: products,
           total: pagination.total ?? products.length,
           current_page: pagination.current_page ?? 1,
-          last_page: pagination.total_pages ?? pagination.last_page ?? 1,
+          // Some backends use `last_page`, others use `total_pages` — support both
+          last_page: pagination.last_page ?? pagination.total_pages ?? 1,
         };
       }
 
@@ -335,191 +255,97 @@ export const productService = {
   },
 
   /**
-   * Get ALL products by paging through /products.
-   * Fixes environments where backend caps per_page (common cause of “missing products”).
+   * Proposal 5 — Wire the advanced search controller.
+   * Uses ProductSearchController (fuzzy, Bangla, phonetic) when a query is present.
+   * Falls back gracefully: if the endpoint is unavailable, the caller should use getAll().
    */
-  async getAllAll(
-    params?: {
-      category_id?: number;
-      vendor_id?: number;
-      is_archived?: boolean;
-      search?: string;
-      per_page?: number;
-    },
-    opts?: { max_items?: number; max_pages?: number }
-  ): Promise<Product[]> {
-    const per_page = Math.min(Math.max(Number(params?.per_page ?? 200), 1), 200);
-    const max_items = Number(opts?.max_items ?? 100000);
-    const max_pages = Number(opts?.max_pages ?? 500);
-
-    const out: Product[] = [];
-    let page = 1;
-
-    while (page <= max_pages && out.length < max_items) {
-      const res = await this.getAll({ ...(params ?? {}), page, per_page });
-      out.push(...(res.data ?? []));
-
-      const last = Number(res.last_page ?? 1);
-      const total = Number(res.total ?? out.length);
-
-      if (page >= last) break;
-      if (out.length >= total) break;
-
-      page += 1;
-    }
-
-    // De-dup by id (defensive)
-    const seen = new Set<number>();
-    return out.filter((p) => {
-      if (!p?.id) return false;
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
-  },
-
-  /** Advanced multi-language search (Bangla + Roman + English + fuzzy) */
-  async advancedSearch(params: AdvancedSearchParams): Promise<AdvancedSearchResponse> {
-    // Backend validation: per_page must be <= 100
-    const per_page = Math.min(Math.max(Number(params.per_page ?? 50), 1), 100);
-    const page = Math.max(1, Number(params.page ?? 1) || 1);
-    const payload: any = {
-      query: params.query,
-      category_id: params.category_id,
-      vendor_id: params.vendor_id,
-      is_archived: params.is_archived ?? false,
-      enable_fuzzy: params.enable_fuzzy ?? true,
-      fuzzy_threshold: params.fuzzy_threshold ?? 60,
-      search_fields: params.search_fields ?? ['name', 'sku', 'description', 'category', 'custom_fields'],
-      per_page,
-      page,
-    };
-
+  async advancedSearch(params: {
+    query: string;
+    category_id?: number;
+    vendor_id?: number;
+    per_page?: number;
+    page?: number;
+    enable_fuzzy?: boolean;
+    stock_status?: 'all' | 'in_stock' | 'not_in_stock';
+    in_stock?: string;
+  }): Promise<{ data: Product[]; total: number; current_page: number; last_page: number }> {
     try {
-      const response = await axiosInstance.post('/products/advanced-search', payload, {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      const response = await axiosInstance.post('/products/advanced-search', params);
+      const result = response.data;
+      if (!result?.success) return { data: [], total: 0, current_page: 1, last_page: 1 };
 
-      const result = response.data ?? {};
-      const itemsRaw = extractItemsFromAdvancedSearch(result);
-      const items: ProductSearchHit[] = itemsRaw.map((p: any) => ({
-        ...transformProduct(p),
-        search_stage: p.search_stage ?? p.searchStage ?? undefined,
-        base_score: p.base_score ?? undefined,
-        relevance_score: p.relevance_score ?? p.relevanceScore ?? undefined,
-      }));
+      const dataRoot = result.data ?? {};
+      const rawList: any[] = Array.isArray(dataRoot.items)
+        ? dataRoot.items
+        : Array.isArray(dataRoot.products)
+          ? dataRoot.products
+          : Array.isArray(dataRoot.data)
+            ? dataRoot.data
+            : [];
 
-      const search_terms: string[] =
-        (result.search_terms || result.data?.search_terms || result.data?.data?.search_terms || []) ?? [];
-
-      const total_results =
-        Number(result.total_results ?? result.data?.total_results ?? result.data?.data?.total_results ?? items.length);
-
-      const pagination = extractPaginationFromAdvancedSearch(result);
-
+      const products = rawList.map(transformProduct);
+      const pagination = dataRoot.pagination ?? dataRoot;
       return {
-        success: Boolean(result.success ?? true),
-        query: String(result.query ?? params.query),
-        search_terms: Array.isArray(search_terms) ? search_terms : [],
-        total_results: Number.isFinite(total_results) ? total_results : items.length,
-        items,
-        pagination,
-        raw: result,
+        data: products,
+        total: pagination.total ?? products.length,
+        current_page: pagination.current_page ?? 1,
+        last_page: pagination.last_page ?? pagination.total_pages ?? 1,
       };
     } catch (error: any) {
       console.error('Advanced search error:', error);
-      return {
-        success: false,
-        query: params.query,
-        search_terms: [params.query],
-        total_results: 0,
-        items: [],
-        pagination: null,
-        raw: error?.response?.data ?? null,
-      };
+      // Surface as a typed error so caller can fall back to getAll
+      throw error;
     }
   },
 
-  /**
-   * Advanced search but return more complete coverage by paging.
-   * Use max_items to cap the returned list for UI safety.
-   */
   async advancedSearchAll(
-    params: Omit<AdvancedSearchParams, 'page' | 'per_page'> & { per_page?: number },
-    opts?: { max_items?: number; max_pages?: number }
-  ): Promise<ProductSearchHit[]> {
-    // Backend validation: per_page must be <= 100
-    const per_page = Math.min(Math.max(Number(params.per_page ?? 100), 1), 100);
-    const max_items = Number(opts?.max_items ?? 2000);
-    const max_pages = Number(opts?.max_pages ?? 50);
+    filters: any = {}, // Use any or ProductSearchFilters if available
+    options: { max_items?: number; max_pages?: number } = {}
+  ): Promise<Product[]> {
+    const maxItems = options.max_items ?? 500;
+    const maxPages = options.max_pages ?? 10;
+    const all: Product[] = [];
+    let page = Number(filters.page || 1) || 1;
+    let pagesRead = 0;
 
-    const out: ProductSearchHit[] = [];
-    let page = 1;
+    while (pagesRead < maxPages && all.length < maxItems) {
+      const response = await this.advancedSearch({
+        ...filters,
+        page,
+        per_page: filters.per_page || 100,
+      });
 
-    while (page <= max_pages && out.length < max_items) {
-      const res = await this.advancedSearch({ ...(params as any), page, per_page });
-      out.push(...(res.items ?? []));
+      const items = Array.isArray((response as any)?.data) ? (response as any).data : [];
+      all.push(...items);
 
-      const last = Number(res.pagination?.last_page ?? 1);
-      const total = Number(res.pagination?.total ?? res.total_results ?? out.length);
+      const meta: any = (response as any)?.meta || response;
+      const currentPage = Number(meta?.current_page || page);
+      const lastPage = Number(meta?.last_page || currentPage);
 
-      if (page >= last) break;
-      if (out.length >= total) break;
+      if (!items.length || currentPage >= lastPage) {
+        break;
+      }
 
-      page += 1;
+      page = currentPage + 1;
+      pagesRead += 1;
     }
 
-    // de-dup by id
-    const seen = new Set<number>();
-    return out.filter((p) => {
-      if (!p?.id) return false;
-      if (seen.has(p.id)) return false;
-      seen.add(p.id);
-      return true;
-    });
-  },
-
-  /** Quick Search (autocomplete) */
-  async quickSearch(q: string, limit = 10): Promise<ProductSearchHit[]> {
-    try {
-      const response = await axiosInstance.get('/products/quick-search', { params: { q, limit } });
-      const result = response.data;
-      const list = Array.isArray(result?.data) ? result.data : Array.isArray(result?.data?.data) ? result.data.data : [];
-      return list.map((p: any) => ({ ...transformProduct(p) }));
-    } catch (error) {
-      console.error('Quick search error:', error);
-      return [];
-    }
-  },
-
-  /** Search Suggestions */
-  async searchSuggestions(q: string, limit = 5): Promise<any[]> {
-    try {
-      const response = await axiosInstance.get('/products/search-suggestions', { params: { q, limit } });
-      const result = response.data;
-      return Array.isArray(result?.data) ? result.data : [];
-    } catch (error) {
-      console.error('Search suggestions error:', error);
-      return [];
-    }
-  },
-
-  /** Search Statistics */
-  async getSearchStats(): Promise<any> {
-    try {
-      const response = await axiosInstance.get('/products/search-stats');
-      const result = response.data;
-      return result?.data ?? {};
-    } catch (error) {
-      console.error('Search stats error:', error);
-      return {};
-    }
+    return all.slice(0, maxItems);
   },
 
   /** Get single product by ID */
   async getById(id: number | string): Promise<Product> {
     try {
-      const response = await axiosInstance.get(`/products/${id}`);
+      let response;
+      try {
+        response = await axiosInstance.get(`/products/${id}`);
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.get(`/products/${id}`);
+        } else {
+          throw e;
+        }
+      }
       const result = response.data;
       const product = result.data || result;
       return transformProduct(product);
@@ -529,12 +355,91 @@ export const productService = {
     }
   },
 
+  /**
+   * Get all products that share the same SKU as this product (SKU group / variations group)
+   * API: GET /api/products/{id}/sku-group
+   */
+  async getSkuGroup(id: number | string): Promise<SkuGroupResponse> {
+    try {
+      let response;
+      try {
+        response = await axiosInstance.get(`/products/${id}/sku-group`);
+      } catch (e: any) {
+        // Some deployments may expose this without the /employee prefix
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.get(`/products/${id}/sku-group`);
+        } else {
+          throw e;
+        }
+      }
+
+      const payload = unwrapData(response.data);
+
+      const productsRaw: any[] = Array.isArray(payload?.products)
+        ? payload.products
+        : Array.isArray(payload?.data?.products)
+          ? payload.data.products
+          : [];
+
+      const baseName = payload?.base_name ?? payload?.data?.base_name ?? '';
+      const sku = payload?.sku ?? payload?.data?.sku ?? '';
+      const total = payload?.total_variations ?? payload?.data?.total_variations ?? productsRaw.length ?? 0;
+      return {
+        sku: String(sku || ''),
+        base_name: String(baseName || ''),
+        total_variations: Number(total || 0),
+        products: productsRaw.map(transformProduct),
+      };
+    } catch (error: any) {
+      console.error('Get SKU group error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to fetch SKU group');
+    }
+  },
+
+  /**
+   * Magic common edit: update base_name (and optional common fields) for ALL products in a SKU group
+   * API: PUT /api/products/{id}/common-info
+   */
+  async updateCommonInfo(id: number | string, data: UpdateCommonInfoRequest): Promise<any> {
+    try {
+      let response;
+      try {
+        response = await axiosInstance.put(`/products/${id}/common-info`, data, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.put(`/products/${id}/common-info`, data, {
+            headers: { 'Content-Type': 'application/json' },
+          });
+        } else {
+          throw e;
+        }
+      }
+      return response.data;
+    } catch (error: any) {
+      console.error('Update common info error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to update common info');
+    }
+  },
+
   /** Create product (simple or with variants) */
   async create(data: CreateProductData | CreateProductWithVariantsData): Promise<Product> {
     try {
-      const response = await axiosInstance.post('/products', data, {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      let response;
+      try {
+        response = await axiosInstance.post('/products', data, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.post('/products', data, {
+            headers: { 'Content-Type': 'application/json' },
+          });
+        } else {
+          throw e;
+        }
+      }
       const result = response.data;
       return transformProduct(result.data || result);
     } catch (error: any) {
@@ -573,9 +478,20 @@ export const productService = {
   /** Update product by ID */
   async update(id: number | string, data: Partial<CreateProductData>): Promise<Product> {
     try {
-      const response = await axiosInstance.put(`/products/${id}`, data, {
-        headers: { 'Content-Type': 'application/json' },
-      });
+      let response;
+      try {
+        response = await axiosInstance.put(`/products/${id}`, data, {
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (e: any) {
+        if (e?.response?.status === 404) {
+          response = await axiosInstance.put(`/products/${id}`, data, {
+            headers: { 'Content-Type': 'application/json' },
+          });
+        } else {
+          throw e;
+        }
+      }
       const result = response.data;
       return transformProduct(result.data || result);
     } catch (error: any) {
@@ -592,6 +508,37 @@ export const productService = {
       console.error('Delete product error:', error);
       throw new Error(error.response?.data?.message || 'Failed to delete product');
     }
+  },
+
+
+  /**
+   * Force delete product and ALL related data (Admin only)
+   * Backend spec: DELETE /api/employee/products/{id}/force-delete
+   */
+  async forceDelete(id: number | string): Promise<ForceDeleteResponse> {
+    const candidates = [
+      `/employee/products/${id}/force-delete`,
+      `/products/${id}/force-delete`, // fallback for deployments without /employee prefix
+    ];
+
+    let lastErr: any = null;
+
+    for (const url of candidates) {
+      try {
+        const res = await axiosInstance.delete(url);
+        return res.data as ForceDeleteResponse;
+      } catch (e: any) {
+        lastErr = e;
+        // Try next candidate only if endpoint not found
+        if (e?.response?.status === 404) continue;
+
+        console.error('Force delete product error:', e);
+        throw new Error(e?.response?.data?.message || 'Failed to force delete product');
+      }
+    }
+
+    console.error('Force delete endpoint not found:', candidates);
+    throw new Error(lastErr?.response?.data?.message || 'Force delete endpoint not found');
   },
 
   /** Archive product */
@@ -712,34 +659,45 @@ export const productService = {
     }
   },
 
-  /** Grouped products — server-side SKU grouping, pagination, search & filters */
-  async getGroupedProducts(params: GetGroupedProductsParams = {}): Promise<GroupedProductsResponse> {
+  /**
+   * Public: Find stock details by barcode
+   * API: GET /api/catalog/find-stock/{barcode}
+   */
+  async findStockByBarcode(barcode: string): Promise<StockDetail> {
     try {
-      // Strip undefined / empty-string values so they don't pollute the query string
-      const cleanParams: Record<string, any> = {};
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && v !== null && v !== '') cleanParams[k] = v;
+      const response = await axiosInstance.get(`/catalog/find-stock/${barcode}`);
+      const result = response.data;
+      if (!result.success || !result.data) {
+        throw new Error(result.message || 'Failed to fetch stock details');
       }
-
-      const response = await axiosInstance.get('/products/grouped', { params: cleanParams });
-      const result = response.data ?? {};
-
-      return {
-        data: Array.isArray(result.data) ? result.data : [],
-        pagination: result.pagination ?? {
-          total: 0, per_page: 20, current_page: 1, last_page: 1, from: null, to: null,
-        },
-        total_groups: Number(result.total_groups ?? result.pagination?.total ?? 0),
-      };
+      return result.data as StockDetail;
     } catch (error: any) {
-      console.error('getGroupedProducts error:', error);
-      return {
-        data: [],
-        pagination: { total: 0, per_page: 20, current_page: 1, last_page: 1, from: null, to: null },
-        total_groups: 0,
-      };
+      console.error('Find stock by barcode error:', error);
+      throw new Error(error.response?.data?.message || 'Barcode not found or error fetching data');
     }
   },
 };
+
+export interface StockDetail {
+  product_id: number;
+  name: string;
+  sku: string;
+  description?: string;
+  category?: string;
+  images: any[];
+  inventory: {
+    physical_stock: number;
+    reserved_stock: number;
+    available_stock: number;
+  };
+  branch_stock: {
+    store_id: number;
+    store_name: string;
+    store_address?: string;
+    quantity: number;
+  }[];
+  variants: any[];
+  scanned_barcode: string;
+}
 
 export default productService;

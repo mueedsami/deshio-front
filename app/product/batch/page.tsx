@@ -1,16 +1,18 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import { Search, Trash2, X, Layers, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import BatchForm from '@/components/BatchForm';
 import BatchCard from '@/components/BatchCard';
-import GroupedBatchCard, { buildSkuGroups, BatchSkuGroup } from '@/components/GroupedBatchCard';
 import batchService, { Batch, CreateBatchData, UpdateBatchData } from '@/services/batchService';
-import productService, { ProductSearchHit } from '@/services/productService';
 import storeService, { Store } from '@/services/storeService';
+import PaginationControls from '@/components/PaginationControls';
+import useDebounce from '@/lib/hooks/useDebounce';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Product {
   id: number;
@@ -31,25 +33,25 @@ interface QueuedBatch {
 export default function BatchPage() {
   const router = useRouter();
 
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const { isRole } = useAuth();
+  const isAdmin = isRole(['admin', 'super-admin']);
 
   const [stores, setStores] = useState<Store[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
 
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
 
-  // ✅ Flat search mode: either select a product (recommended) or search by batch number
-  const [flatSearchMode, setFlatSearchMode] = useState<'product' | 'batch'>('product');
-  const [flatProductFilter, setFlatProductFilter] = useState<ProductSearchHit | null>(null);
-  const [productHits, setProductHits] = useState<ProductSearchHit[]>([]);
-  const [productHitsOpen, setProductHitsOpen] = useState(false);
-  const [productHitsLoading, setProductHitsLoading] = useState(false);
-
-
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null);
   const [selectedProductName, setSelectedProductName] = useState<string>('');
   const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+
+  // Pagination states
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalBatchesCount, setTotalBatchesCount] = useState(0);
+  const [perPage, setPerPage] = useState(20);
 
   const [loading, setLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState<string>('');
@@ -61,25 +63,8 @@ export default function BatchPage() {
   const [queuedBatches, setQueuedBatches] = useState<QueuedBatch[]>([]);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
-  // ✅ View mode: grouped by SKU (easy for variations) vs flat batches
-  // Default to flat to avoid loading ALL batches on initial page load.
-  const [viewMode, setViewMode] = useState<'grouped' | 'flat'>('flat');
-
-  // ✅ Pagination + server-side search for flat view
-  const [flatPage, setFlatPage] = useState<number>(1);
-  const [flatPerPage, setFlatPerPage] = useState<number>(50);
-  const [flatPagination, setFlatPagination] = useState<{
-    current_page: number;
-    last_page: number;
-    per_page: number;
-    total: number;
-    from: number;
-    to: number;
-  }>({ current_page: 1, last_page: 1, per_page: 50, total: 0, from: 0, to: 0 });
-
-  // ✅ Client-side pagination for grouped view (after we fetch all matching batches)
-  const [groupPage, setGroupPage] = useState<number>(1);
-  const [groupsPerPage, setGroupsPerPage] = useState<number>(12);
+  // Debounced search query for backend search
+  const debouncedSearchQuery = useDebounce(batchSearchQuery, 500);
 
   // Read URL parameters when redirected back from product selection
   useEffect(() => {
@@ -94,39 +79,11 @@ export default function BatchPage() {
   }, []);
 
   useEffect(() => {
-    loadInitialData();
+    loadInitialData(1, debouncedSearchQuery);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [debouncedSearchQuery]);
 
-  const filteredBatches = useMemo(() => {
-    // Flat view uses backend pagination + backend search, so don't re-filter client-side.
-    if (viewMode === 'flat') return batches;
-
-    const q = batchSearchQuery.trim().toLowerCase();
-    if (!q) return batches;
-    return batches.filter((b) => {
-      const productName = String(b.product?.name || '').toLowerCase();
-      const productSku = String((b as any).product?.sku || '').toLowerCase();
-      const batchNo = String(b.batch_number || '').toLowerCase();
-      return productName.includes(q) || productSku.includes(q) || batchNo.includes(q);
-    });
-  }, [batches, batchSearchQuery, viewMode]);
-
-  const skuGroups: BatchSkuGroup[] = useMemo(() => {
-    // Group from the filtered list so search applies naturally.
-    return buildSkuGroups(filteredBatches);
-  }, [filteredBatches]);
-
-  const groupLastPage = useMemo(() => {
-    return Math.max(1, Math.ceil((skuGroups.length || 0) / Math.max(1, groupsPerPage)));
-  }, [skuGroups.length, groupsPerPage]);
-
-  const pagedSkuGroups = useMemo(() => {
-    const start = (Math.max(1, groupPage) - 1) * Math.max(1, groupsPerPage);
-    return skuGroups.slice(start, start + Math.max(1, groupsPerPage));
-  }, [skuGroups, groupPage, groupsPerPage]);
-
-  const loadInitialData = async () => {
+  const loadInitialData = async (page = 1, searchQuery = '') => {
     try {
       setLoading(true);
       setLoadingMessage('Loading stores & batches...');
@@ -140,6 +97,25 @@ export default function BatchPage() {
       if (storesData.length > 0 && !selectedStoreId) {
         setSelectedStoreId(storesData[0].id);
       }
+
+      // Load batches
+      const batchResponse = await batchService.getBatches({
+        sort_by: 'created_at',
+        sort_order: 'desc',
+        page: page,
+        search: searchQuery
+      });
+      
+      const batchPagination = batchResponse.data;
+      if (batchPagination) {
+        setBatches(Array.isArray(batchPagination.data) ? batchPagination.data : []);
+        setCurrentPage(batchPagination.current_page || 1);
+        setTotalPages(batchPagination.last_page || 1);
+        setTotalBatchesCount(batchPagination.total || 0);
+        setPerPage(batchPagination.per_page || 20);
+      } else {
+        setBatches([]);
+      }
     } catch (err) {
       console.error('Error loading data:', err);
       showToast('Failed to load data', 'error');
@@ -149,136 +125,9 @@ export default function BatchPage() {
     }
   };
 
-  // ---------------------------
-  // ✅ List loaders (Flat: paginated, Grouped: fetch all then client paginate groups)
-  // ---------------------------
-  const loadFlatBatches = async (args?: { page?: number; per_page?: number }) => {
-    const page = Math.max(1, Number(args?.page ?? flatPage) || 1);
-    const per_page = Math.max(1, Math.min(100, Number(args?.per_page ?? flatPerPage) || 50));
-    try {
-      setLoading(true);
-      setLoadingMessage('Loading batches...');
-
-      const search = flatSearchMode === 'batch' && batchSearchQuery.trim() ? batchSearchQuery.trim() : undefined;
-      const product_id = flatSearchMode === 'product' && flatProductFilter?.id ? flatProductFilter.id : undefined;
-
-      const resp = await batchService.getBatches({
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        page,
-        per_page,
-        ...(product_id ? { product_id } : {}),
-        ...(search ? { search } : {}),
-      });
-
-      const items = resp?.data?.data ?? [];
-      setBatches(Array.isArray(items) ? items : []);
-      setFlatPagination({
-        current_page: Number(resp?.data?.current_page || page),
-        last_page: Number(resp?.data?.last_page || 1),
-        per_page: Number(resp?.data?.per_page || per_page),
-        total: Number(resp?.data?.total || 0),
-        from: Number(resp?.data?.from || 0),
-        to: Number(resp?.data?.to || 0),
-      });
-    } catch (err) {
-      console.error('Error loading flat batches:', err);
-      showToast('Failed to load batches', 'error');
-    } finally {
-      setLoading(false);
-      setLoadingMessage('');
-    }
+  const handlePageChange = (page: number) => {
+    loadInitialData(page, debouncedSearchQuery);
   };
-
-  const loadGroupedBatches = async () => {
-    try {
-      setLoading(true);
-      // ⚠️ Do NOT fetch all batches here (it can be thousands).
-      // Grouped view will start with a single page (100 max) and can be expanded later if needed.
-      setLoadingMessage('Loading batches for grouped view...');
-
-      const resp = await batchService.getBatches({
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        page: 1,
-        per_page: 100,
-      });
-      const items = resp?.data?.data ?? [];
-      setBatches(Array.isArray(items) ? items : []);
-    } catch (err) {
-      console.error('Error loading grouped batches:', err);
-      showToast('Failed to load batches', 'error');
-    } finally {
-      setLoading(false);
-      setLoadingMessage('');
-    }
-  };
-
-  const flatQueryKey = useMemo(() => {
-    // In product mode, we only apply search after user selects a product.
-    if (flatSearchMode === 'product') {
-      return flatProductFilter?.id ? `product:${flatProductFilter.id}` : 'product:none';
-    }
-    // Batch mode applies backend "search".
-    return `batch:${batchSearchQuery.trim()}`;
-  }, [flatSearchMode, flatProductFilter?.id, batchSearchQuery]);
-
-  // Product suggestions for flat view (so you can filter batches by product without loading everything)
-  useEffect(() => {
-    if (viewMode !== 'flat' || flatSearchMode !== 'product') {
-      setProductHits([]);
-      setProductHitsOpen(false);
-      setProductHitsLoading(false);
-      return;
-    }
-
-    // Once a product is selected, no need to keep suggestions open.
-    if (flatProductFilter?.id) {
-      setProductHits([]);
-      setProductHitsOpen(false);
-      setProductHitsLoading(false);
-      return;
-    }
-
-    const q = batchSearchQuery.trim();
-    if (q.length < 2) {
-      setProductHits([]);
-      setProductHitsLoading(false);
-      return;
-    }
-
-    const t = setTimeout(async () => {
-      try {
-        setProductHitsLoading(true);
-        const hits = await productService.quickSearch(q, 12);
-        setProductHits(Array.isArray(hits) ? hits : []);
-      } finally {
-        setProductHitsLoading(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(t);
-  }, [viewMode, flatSearchMode, batchSearchQuery, flatProductFilter?.id]);
-
-  // Reload list when view / paging / applied filters change
-  useEffect(() => {
-    const t = setTimeout(() => {
-      if (viewMode === 'flat') {
-        loadFlatBatches({ page: flatPage, per_page: flatPerPage });
-      } else {
-        loadGroupedBatches();
-      }
-    }, 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, flatPage, flatPerPage, flatQueryKey]);
-
-  // Reset paging when search / view changes
-  useEffect(() => {
-    setFlatPage(1);
-    setGroupPage(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [batchSearchQuery, viewMode]);
 
   const openProductListForSelection = () => {
     router.push('/product/list?selectMode=true&redirect=/product/batch');
@@ -344,13 +193,8 @@ export default function BatchPage() {
 
       const response = await batchService.createBatch(batchData);
 
-      // Reload list to include newly created batch
-      if (viewMode === 'flat') {
-        setFlatPage(1);
-        await loadFlatBatches({ page: 1, per_page: flatPerPage });
-      } else {
-        await loadGroupedBatches();
-      }
+      // Reload batches to get the newly created batch with barcodes
+      await loadInitialData(1, debouncedSearchQuery);
 
       showToast(
         `Batch created successfully! ${response.data?.barcodes_generated ?? ''} barcode(s) generated.`,
@@ -474,13 +318,7 @@ export default function BatchPage() {
         }
       }
 
-      // Reload list to include newly created batches
-      if (viewMode === 'flat') {
-        setFlatPage(1);
-        await loadFlatBatches({ page: 1, per_page: flatPerPage });
-      } else {
-        await loadGroupedBatches();
-      }
+      await loadInitialData(1, debouncedSearchQuery);
 
       // Keep only failed rows so user can retry quickly
       setQueuedBatches(failed);
@@ -506,7 +344,6 @@ export default function BatchPage() {
 
       setBatches((prev) => prev.map((b) => (b.id === batchId ? response.data : b)));
       showToast('Batch updated successfully', 'success');
-      sessionStorage.setItem('product_list_refresh_needed', '1');
     } catch (err: any) {
       console.error('Failed to update batch:', err);
       const errorMsg = err.response?.data?.message || 'Failed to update batch';
@@ -518,17 +355,8 @@ export default function BatchPage() {
   const handleDeleteBatch = async (batchId: number) => {
     try {
       await batchService.deleteBatch(batchId);
-      // Keep UI snappy, then refresh counts/pagination
       setBatches((prev) => prev.filter((b) => b.id !== batchId));
       showToast('Batch deactivated successfully', 'success');
-
-      if (viewMode === 'flat') {
-        // Reload current page (or previous if this page becomes empty)
-        const nextPage = Math.min(flatPagination.last_page || flatPage, flatPage);
-        await loadFlatBatches({ page: nextPage, per_page: flatPerPage });
-      } else {
-        await loadGroupedBatches();
-      }
     } catch (err: any) {
       console.error('Failed to delete batch:', err);
       const errorMsg = err.response?.data?.message || 'Failed to delete batch';
@@ -649,7 +477,7 @@ export default function BatchPage() {
                             {q.product_name}
                           </div>
                           <div className="text-sm text-gray-500 dark:text-gray-400">
-                            Store: {q.store_name || q.store_id} • Qty: {q.quantity} • Cost: {q.cost_price} • Sell: {q.sell_price}
+                            Store: {q.store_name || q.store_id} • Qty: {q.quantity} {isAdmin && `• Cost: ${q.cost_price}`} • Sell: {q.sell_price}
                           </div>
                         </div>
 
@@ -678,241 +506,36 @@ export default function BatchPage() {
 
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div className="flex items-end gap-3">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  {viewMode === 'grouped' ? 'Products (Grouped by SKU)' : 'Recent Batches'}
-                </h2>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Recent Batches</h2>
                 <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {viewMode === 'grouped' ? (
-                    <>
-                      {skuGroups.length} product group{skuGroups.length !== 1 ? 's' : ''}
-                      {skuGroups.length > groupsPerPage ? (
-                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
-                          (showing {(Math.max(1, groupPage) - 1) * groupsPerPage + 1}–{Math.min(groupPage * groupsPerPage, skuGroups.length)} of {skuGroups.length})
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      {flatPagination.total} batch{flatPagination.total !== 1 ? 'es' : ''}
-                      {flatPagination.total ? (
-                        <span className="ml-2 text-xs text-gray-400 dark:text-gray-500">
-                          (showing {flatPagination.from}–{flatPagination.to})
-                        </span>
-                      ) : null}
-                    </>
-                  )}
-                  {viewMode === 'grouped'
-                    ? (batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null)
-                    : (flatSearchMode === 'batch'
-                        ? (batchSearchQuery.trim() ? <span className="ml-1">(searched)</span> : null)
-                        : (flatProductFilter ? <span className="ml-1">(filtered)</span> : null)
-                      )}
+                  {totalBatchesCount} batch{totalBatchesCount !== 1 ? 'es' : ''}
+                  {batchSearchQuery.trim() ? <span className="ml-1">(filtered)</span> : null}
                 </span>
               </div>
 
-              {/* View toggle */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  onClick={() => setViewMode('grouped')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition ${
-                    viewMode === 'grouped'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  Grouped
-                </button>
-                <button
-                  onClick={() => setViewMode('flat')}
-                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition ${
-                    viewMode === 'flat'
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  Flat
-                </button>
-
-                {/* Per-page controls */}
-                {viewMode === 'flat' ? (
-                  <div className="flex items-center gap-2 ml-1">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Per page</span>
-                    <select
-                      value={flatPerPage}
-                      onChange={(e) => setFlatPerPage(Number(e.target.value) || 50)}
-                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                    >
-                      <option value={20}>20</option>
-                      <option value={50}>50</option>
-                      <option value={100}>100</option>
-                    </select>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2 ml-1">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Groups/page</span>
-                    <select
-                      value={groupsPerPage}
-                      onChange={(e) => setGroupsPerPage(Number(e.target.value) || 12)}
-                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                    >
-                      <option value={6}>6</option>
-                      <option value={12}>12</option>
-                      <option value={24}>24</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-
-              {/* Search */}
-              <div className="w-full md:w-[520px]">
-                {viewMode === 'flat' ? (
-                  <div className="mb-2 flex items-center gap-2 flex-wrap">
-                    <span className="text-xs text-gray-500 dark:text-gray-400">Search by</span>
-                    <select
-                      value={flatSearchMode}
-                      onChange={(e) => {
-                        const mode = (e.target.value as any) as 'product' | 'batch';
-                        setFlatSearchMode(mode);
-                        setFlatPage(1);
-                        setProductHits([]);
-                        setProductHitsOpen(false);
-                        if (mode === 'batch') setFlatProductFilter(null);
-                      }}
-                      className="px-2 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                    >
-                      <option value="product">Product (name/SKU)</option>
-                      <option value="batch">Batch number</option>
-                    </select>
-
-                    {flatSearchMode === 'product' && flatProductFilter ? (
-                      <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300">
-                        {flatProductFilter.name}
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFlatProductFilter(null);
-                            setBatchSearchQuery('');
-                            setProductHits([]);
-                            setProductHitsOpen(false);
-                            setFlatPage(1);
-                          }}
-                          className="hover:opacity-80"
-                          title="Clear product filter"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
-
+              {/* Search (Product-wise / Batch-wise) */}
+              <div className="w-full md:w-[420px]">
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
                     type="text"
                     value={batchSearchQuery}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setBatchSearchQuery(v);
-                      if (viewMode === 'flat' && flatSearchMode === 'product') {
-                        // Typing a new keyword should clear existing product selection.
-                        if (flatProductFilter && v.trim() !== flatProductFilter.name) {
-                          setFlatProductFilter(null);
-                        }
-                        setProductHitsOpen(true);
-                      }
-                    }}
-                    onFocus={() => {
-                      if (viewMode === 'flat' && flatSearchMode === 'product') setProductHitsOpen(true);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && viewMode === 'flat' && flatSearchMode === 'product' && !flatProductFilter) {
-                        // Convenience: Enter selects the first suggestion.
-                        const first = productHits?.[0];
-                        if (first?.id) {
-                          setFlatProductFilter(first);
-                          setBatchSearchQuery(first.name || '');
-                          setProductHitsOpen(false);
-                          setFlatPage(1);
-                        }
-                      }
-                    }}
-                    placeholder={
-                      viewMode === 'flat'
-                        ? flatSearchMode === 'product'
-                          ? 'Type product name/SKU, then pick from suggestions…'
-                          : 'Type batch number…'
-                        : 'Search within loaded list…'
-                    }
-                    className="w-full pl-10 pr-10 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    onChange={(e) => setBatchSearchQuery(e.target.value)}
+                    placeholder="Search by product name, SKU, or batch number..."
+                    className="w-full pl-10 pr-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   />
-
-                  {batchSearchQuery.trim() ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBatchSearchQuery('');
-                        setProductHits([]);
-                        setProductHitsOpen(false);
-                        // Only clear product filter if we were searching by product.
-                        if (flatSearchMode === 'product') setFlatProductFilter(null);
-                      }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                      title="Clear"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  ) : null}
-
-                  {/* Product suggestions dropdown (flat + product mode) */}
-                  {viewMode === 'flat' && flatSearchMode === 'product' && !flatProductFilter && productHitsOpen ? (
-                    <div className="absolute z-50 mt-2 w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-lg overflow-hidden">
-                      {productHitsLoading ? (
-                        <div className="p-3 text-sm text-gray-500 dark:text-gray-400">Searching products…</div>
-                      ) : productHits.length === 0 ? (
-                        <div className="p-3 text-sm text-gray-500 dark:text-gray-400">
-                          {batchSearchQuery.trim().length < 2 ? 'Type at least 2 characters to search products.' : 'No matching products found.'}
-                        </div>
-                      ) : (
-                        <div className="max-h-72 overflow-auto">
-                          {productHits.map((p) => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => {
-                                setFlatProductFilter(p);
-                                setBatchSearchQuery(p.name || '');
-                                setProductHitsOpen(false);
-                                setFlatPage(1);
-                              }}
-                              className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700"
-                            >
-                              <div className="text-sm font-semibold text-gray-900 dark:text-white truncate">{p.name}</div>
-                              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">SKU: {p.sku || '—'}</div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
                 </div>
               </div>
             </div>
 
-            <div className={
-              viewMode === 'grouped'
-                ? 'grid grid-cols-1 lg:grid-cols-2 gap-6'
-                : 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6'
-            }>
-              {(viewMode === 'grouped' ? skuGroups.length === 0 : filteredBatches.length === 0) && !loading ? (
-                <div className="col-span-full text-center py-12 bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {batches.length === 0 && !loading ? (
+                <div className="col-span-3 text-center py-12 bg-white dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-700">
                   <svg className="w-16 h-16 mx-auto text-gray-400 dark:text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                   </svg>
                   <p className="text-gray-500 dark:text-gray-400 font-medium">
-                    {batchSearchQuery.trim()
-                      ? (viewMode === 'grouped' ? 'No products match your search' : 'No batches match your search')
-                      : (viewMode === 'grouped' ? 'No stock entries yet' : 'No batches created yet')}
+                    {batchSearchQuery.trim() ? 'No batches match your search' : 'No batches created yet'}
                   </p>
                   <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
                     {batchSearchQuery.trim()
@@ -920,71 +543,26 @@ export default function BatchPage() {
                       : 'Create your first batch to get started'}
                   </p>
                 </div>
-              ) : viewMode === 'grouped' ? (
-                pagedSkuGroups.map((g) => <GroupedBatchCard key={g.sku || String(g.variants?.[0]?.productId || Math.random())} group={g} />)
               ) : (
-                filteredBatches.map((batch) => (
+                batches.map((batch) => (
                   <BatchCard key={batch.id} batch={batch} onDelete={handleDeleteBatch} onEdit={handleEditBatch} />
                 ))
               )}
             </div>
 
-            {/* Pagination controls */}
-            {viewMode === 'flat' && flatPagination.last_page > 1 ? (
-              <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  Page <span className="font-semibold text-gray-900 dark:text-white">{flatPagination.current_page}</span> /{' '}
-                  <span className="font-semibold text-gray-900 dark:text-white">{flatPagination.last_page}</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFlatPage((p) => Math.max(1, p - 1))}
-                    disabled={flatPagination.current_page <= 1 || loading}
-                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFlatPage((p) => Math.min(flatPagination.last_page || p + 1, p + 1))}
-                    disabled={flatPagination.current_page >= flatPagination.last_page || loading}
-                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
-                  >
-                    Next
-                  </button>
+            {/* ✅ Pagination Controls */}
+            {!loading && batches.length > 0 && (
+              <div className="mt-8 pb-8 border-t border-gray-200 dark:border-gray-700 pt-6">
+                <PaginationControls
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={handlePageChange}
+                />
+                <div className="mt-2 text-center text-xs text-gray-500 dark:text-gray-400">
+                  Showing {batches.length} of {totalBatchesCount} batches (Page {currentPage} of {totalPages})
                 </div>
               </div>
-            ) : null}
-
-            {viewMode === 'grouped' && skuGroups.length > groupsPerPage ? (
-              <div className="mt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div className="text-sm text-gray-600 dark:text-gray-400">
-                  Page <span className="font-semibold text-gray-900 dark:text-white">{Math.min(groupLastPage, Math.max(1, groupPage))}</span> /{' '}
-                  <span className="font-semibold text-gray-900 dark:text-white">{groupLastPage}</span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setGroupPage((p) => Math.max(1, p - 1))}
-                    disabled={groupPage <= 1 || loading}
-                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
-                  >
-                    Prev
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGroupPage((p) => Math.min(groupLastPage, p + 1))}
-                    disabled={groupPage >= groupLastPage || loading}
-                    className="px-3 py-2 rounded-lg text-sm font-semibold border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
-                  >
-                    Next
-                  </button>
-                </div>
-              </div>
-            ) : null}
+            )}
           </main>
         </div>
       </div>

@@ -113,14 +113,14 @@ export default function MyAccountAddressesPage() {
   return (
     <MyAccountShell title="Addresses" subtitle="Manage your shipping and billing addresses.">
       {error ? (
-        <div className="border border-red-200 bg-red-50 text-red-700 rounded-md p-3 text-sm mb-4">
+        <div className="border border-rose-200 bg-rose-50 text-neutral-900 rounded-md p-3 text-sm mb-4">
           {error}
         </div>
       ) : null}
 
       <button
         onClick={openCreate}
-        className="bg-red-700 text-white px-4 py-2 rounded-md text-sm hover:bg-red-800 mb-6"
+        className="bg-neutral-900 text-white px-4 py-2 rounded-md text-sm hover:bg-neutral-800 mb-6"
       >
         + Add New Address
       </button>
@@ -208,7 +208,7 @@ export default function MyAccountAddressesPage() {
             </div>
 
             <div className="flex gap-2 mt-5">
-              <button onClick={save} className="bg-red-700 text-white px-4 py-2 rounded-md text-sm hover:bg-red-800">
+              <button onClick={save} className="bg-neutral-900 text-white px-4 py-2 rounded-md text-sm hover:bg-neutral-800">
                 Save
               </button>
               <button onClick={() => setFormOpen(false)} className="border px-4 py-2 rounded-md text-sm">

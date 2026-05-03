@@ -6,7 +6,7 @@ export default function CategoryHero({ title, description, image }: any) {
       {/* Soft background and image wash */}
       <div className="absolute inset-0">
         <div className="absolute -top-24 -left-24 h-80 w-80 rounded-full bg-rose-100/60 blur-3xl" />
-        <div className="absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-red-100/50 blur-3xl" />
+        <div className="absolute -bottom-24 -right-24 h-96 w-96 rounded-full bg-rose-50/50 blur-3xl" />
         {image && (
           <img
             src={image}

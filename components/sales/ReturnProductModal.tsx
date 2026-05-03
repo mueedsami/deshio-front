@@ -171,9 +171,13 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     setReturnedQuantities(prev => ({ ...prev, [productId]: qty }));
   };
 
-  const calculateTotals = () => {
-    const parseFloatValue = (value: string) => parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+  const parseFloatValue = (value: any) => {
+    if (value == null) return 0;
+    const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
+    return isNaN(n) ? 0 : n;
+  };
 
+  const calculateTotals = () => {
     const orderSubtotal = order.items.reduce((sum, item) => {
       const price = parseFloatValue(item.unit_price);
       return sum + (price * item.quantity);
@@ -433,11 +437,11 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                                 </div>
                               </div>
                               <p className="font-bold text-gray-900 dark:text-white">
-                                ৳{(parseFloat(String(product.unit_price).replace(/[^0-9.-]/g, '')) * product.quantity).toFixed(2)}
+                                ৳{(parseFloatValue(product.unit_price) * product.quantity).toFixed(2)}
                               </p>
                             </div>
                             <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
-                              Price: ৳{parseFloat(String(product.unit_price).replace(/[^0-9.-]/g, '')).toFixed(2)} × Qty: {product.quantity}
+                              Price: ৳{parseFloatValue(product.unit_price).toFixed(2)} × Qty: {product.quantity}
                             </p>
                             
                             {selectedProducts.includes(product.id) && (

@@ -78,7 +78,7 @@ export default function OrderTrackingPage() {
       case 'delivered':
         return 'text-green-600 bg-green-50';
       case 'cancelled':
-        return 'text-red-600 bg-red-50';
+        return 'text-rose-600 bg-rose-50';
       default:
         return 'text-gray-600 bg-gray-50';
     }
@@ -87,14 +87,14 @@ export default function OrderTrackingPage() {
   // Search Form (when no order number in URL)
   if (!orderNumber || (!loading && !order)) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="ec-root min-h-screen">
         <Navigation />
         <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
           <div className="bg-white rounded-lg shadow-md p-8">
             <div className="text-center mb-8">
               <div className="flex justify-center mb-4">
-                <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center">
-                  <Package className="text-red-700" size={32} />
+                <div className="w-16 h-16 bg-rose-50 rounded-full flex items-center justify-center">
+                  <Package className="text-neutral-900" size={32} />
                 </div>
               </div>
               <h1 className="text-3xl font-bold text-gray-900 mb-2">Track Your Order</h1>
@@ -102,9 +102,9 @@ export default function OrderTrackingPage() {
             </div>
 
             {error && (
-              <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-                <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
-                <p className="text-red-700">{error}</p>
+              <div className="mb-6 bg-rose-50 border border-rose-200 rounded-lg p-4 flex items-start gap-3">
+                <AlertCircle className="text-rose-600 flex-shrink-0 mt-0.5" size={20} />
+                <p className="text-neutral-900">{error}</p>
               </div>
             )}
 
@@ -118,14 +118,14 @@ export default function OrderTrackingPage() {
                   value={searchOrderNumber}
                   onChange={(e) => setSearchOrderNumber(e.target.value)}
                   placeholder="e.g., ORD-241118-1234"
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-700 focus:border-transparent"
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-neutral-200 focus:border-transparent"
                   required
                 />
               </div>
 
               <button
                 type="submit"
-                className="w-full bg-red-700 text-white py-3 rounded-lg font-semibold hover:bg-red-800 transition-colors"
+                className="w-full bg-neutral-900 text-white py-3 rounded-lg font-semibold hover:bg-neutral-800 transition-colors"
               >
                 Track Order
               </button>
@@ -137,7 +137,7 @@ export default function OrderTrackingPage() {
               </p>
               <button
                 onClick={() => router.push('/')}
-                className="text-red-700 text-sm font-medium hover:underline"
+                className="text-neutral-900 text-sm font-medium hover:underline"
               >
                 Continue Shopping
               </button>
@@ -150,11 +150,11 @@ export default function OrderTrackingPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="ec-root min-h-screen">
         <Navigation />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
           <div className="text-center">
-            <Loader2 className="animate-spin h-12 w-12 text-red-700 mx-auto mb-4" />
+            <Loader2 className="animate-spin h-12 w-12 text-neutral-900 mx-auto mb-4" />
             <p className="text-gray-600">Loading tracking information...</p>
           </div>
         </div>
@@ -167,7 +167,7 @@ export default function OrderTrackingPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="ec-root min-h-screen">
       <Navigation />
       
       <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -210,7 +210,7 @@ export default function OrderTrackingPage() {
             
             {/* Timeline Steps */}
             <div className="space-y-8">
-              {tracking.steps.map((step, index) => (
+              {(tracking.steps || []).map((step, index) => (
                 <div key={index} className="relative flex gap-6">
                   {/* Icon */}
                   <div className={`relative z-10 flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center ${
@@ -238,7 +238,7 @@ export default function OrderTrackingPage() {
                         })}
                       </p>
                     )}
-                    {!step.completed && index === tracking.steps.findIndex(s => !s.completed) && (
+                    {!step.completed && index === (tracking.steps || []).findIndex(s => !s.completed) && (
                       <p className="text-sm text-gray-500 mt-1">In progress...</p>
                     )}
                   </div>
@@ -252,7 +252,7 @@ export default function OrderTrackingPage() {
           {/* Shipping Address */}
           <div className="bg-white rounded-lg shadow-md p-6">
             <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <MapPin className="text-red-700" size={20} />
+              <MapPin className="text-neutral-900" size={20} />
               Delivery Address
             </h3>
             <div className="text-gray-700 space-y-1">
@@ -285,18 +285,18 @@ export default function OrderTrackingPage() {
           {/* Order Summary */}
           <div className="bg-white rounded-lg shadow-md p-6">
             <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Package className="text-red-700" size={20} />
+              <Package className="text-neutral-900" size={20} />
               Order Summary
             </h3>
             <div className="space-y-3">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Items ({order.items.length})</span>
+                <span className="text-gray-600">Items ({(order.items || []).length})</span>
                 <span className="font-medium">৳{order.subtotal.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
               </div>
               
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Shipping</span>
-                <span className="font-medium">৳{order.shipping_charge.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
+                <span className="font-medium">৳{(order.shipping_amount || 0).toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
               </div>
               
               {order.discount_amount > 0 && (
@@ -308,7 +308,7 @@ export default function OrderTrackingPage() {
               
               <div className="border-t pt-3 flex justify-between">
                 <span className="font-bold text-gray-900">Total</span>
-                <span className="font-bold text-red-700 text-lg">
+                <span className="font-bold text-neutral-900 text-lg">
                   ৳{order.total_amount.toLocaleString('en-BD', { minimumFractionDigits: 2 })}
                 </span>
               </div>
@@ -335,7 +335,7 @@ export default function OrderTrackingPage() {
         <div className="bg-white rounded-lg shadow-md p-6 mt-8">
           <h3 className="font-bold text-gray-900 mb-4">Items in This Order</h3>
           <div className="space-y-4">
-            {order.items.map((item, index) => (
+            {(order.items || []).map((item, index) => (
               <div key={index} className="flex gap-4 pb-4 border-b last:border-b-0">
                 {item.product_image && (
                   <img
@@ -343,7 +343,9 @@ export default function OrderTrackingPage() {
                     alt={item.product_name}
                     className="w-20 h-20 object-cover rounded"
                     onError={(e) => {
-                      e.currentTarget.src = '/placeholder-product.png';
+                      if (!e.currentTarget.src.includes('/placeholder-product.png')) {
+                        e.currentTarget.src = '/placeholder-product.png';
+                      }
                     }}
                   />
                 )}
@@ -361,7 +363,7 @@ export default function OrderTrackingPage() {
                 </div>
                 <div className="text-right">
                   <p className="font-semibold text-gray-900">
-                    ৳{item.total.toLocaleString('en-BD', { minimumFractionDigits: 2 })}
+                    ৳{(item.total || 0).toLocaleString('en-BD', { minimumFractionDigits: 2 })}
                   </p>
                 </div>
               </div>
@@ -373,7 +375,7 @@ export default function OrderTrackingPage() {
         <div className="flex flex-wrap gap-4 mt-8">
           <button
             onClick={() => router.push('/')}
-            className="flex-1 bg-red-700 text-white px-6 py-3 rounded-lg font-semibold hover:bg-red-800 transition-colors flex items-center justify-center gap-2"
+            className="flex-1 bg-neutral-900 text-white px-6 py-3 rounded-lg font-semibold hover:bg-neutral-800 transition-colors flex items-center justify-center gap-2"
           >
             <Home size={20} />
             Continue Shopping

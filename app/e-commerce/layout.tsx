@@ -1,20 +1,42 @@
 'use client';
 
+import { Suspense } from 'react';
 import { CustomerAuthProvider } from '@/contexts/CustomerAuthContext';
-import { CartProvider } from '@/app/e-commerce/CartContext';
-import Footer from '@/components/ecommerce/Footer';
 
-export default function EcommerceLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+import { PromotionProvider } from '@/contexts/PromotionContext';
+import Footer from '@/components/ecommerce/Footer';
+import ScrollToTopOnRouteChange from '@/components/ecommerce/ScrollToTopOnRouteChange';
+import GlobalCartSidebar from '@/components/ecommerce/cart/GlobalCartSidebar';
+
+
+export default function EcommerceLayout({ children }: { children: React.ReactNode }) {
   return (
     <CustomerAuthProvider>
-      <CartProvider>
-        {children}
-        <Footer />
-      </CartProvider>
+      <PromotionProvider>
+        <Suspense fallback={null}>
+          <ScrollToTopOnRouteChange />
+        </Suspense>
+
+        <GlobalCartSidebar />
+
+        {/* Clean white e-commerce layout */}
+        <div
+          className="ec-root"
+          style={{
+            minHeight: '100vh',
+            backgroundColor: '#ffffff',
+            position: 'relative',
+          }}
+        >
+          {/* All page content */}
+          <div style={{ position: 'relative', zIndex: 10 }}>
+            {children}
+          </div>
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <Footer />
+          </div>
+        </div>
+      </PromotionProvider>
     </CustomerAuthProvider>
   );
 }

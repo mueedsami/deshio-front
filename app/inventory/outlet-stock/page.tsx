@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Package, TruckIcon, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { useTheme } from "@/contexts/ThemeContext";
+import { Package, TruckIcon, CheckCircle2, AlertCircle, X, FileText } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import storeService, { Store } from '@/services/storeService';
@@ -26,7 +27,7 @@ function parseAmount(value: unknown): number {
 }
 
 export default function DispatchManagementPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [store, setStore] = useState<Store | null>(null);
   const [stores, setStores] = useState<Store[]>([]);
@@ -113,68 +114,23 @@ export default function DispatchManagementPage() {
     try {
       setLoading(true);
 
-      // Create dispatch
-      const dispatchResponse = await dispatchService.createDispatch({
-        source_store_id: parseInt(data.source_store_id),
-        destination_store_id: parseInt(data.destination_store_id),
+      // Create dispatch with items and draft scans in ONE atomic call
+      await dispatchService.createDispatch({
+        source_store_id: typeof data.source_store_id === 'string' ? parseInt(data.source_store_id) : data.source_store_id,
+        destination_store_id: typeof data.destination_store_id === 'string' ? parseInt(data.destination_store_id) : data.destination_store_id,
         expected_delivery_date: data.expected_delivery_date,
         carrier_name: data.carrier_name,
         tracking_number: data.tracking_number,
         notes: data.notes,
+        items: data.items.map((item: any) => ({
+          batch_id: typeof item.batch_id === 'string' ? parseInt(item.batch_id) : item.batch_id,
+          quantity: typeof item.quantity === 'string' ? parseInt(item.quantity) : item.quantity,
+        })),
+        draft_scan_history: (data.draft_scan_history || []).map((s: any) => ({
+          barcode: s.barcode,
+          batch_id: typeof s.batch_id === 'string' ? parseInt(s.batch_id) : s.batch_id,
+        })),
       });
-
-      const dispatchId = dispatchResponse.data.id;
-
-      // Add items
-      for (const item of data.items) {
-        await dispatchService.addItem(dispatchId, {
-          batch_id: parseInt(item.batch_id),
-          quantity: parseInt(item.quantity),
-        });
-      }
-
-      // If staff scanned barcodes while creating the dispatch (quick-add),
-      // attach those scans to the newly created dispatch items immediately (DB),
-      // so the dispatch cannot be marked "in_transit" until all required barcodes are scanned.
-      if (Array.isArray(data?.draft_scan_history) && data.draft_scan_history.length > 0) {
-        let synced = 0;
-        let failed = 0;
-
-        try {
-          const details = await dispatchService.getDispatch(dispatchId);
-          const fullDispatch = details.data;
-          const fullItems = Array.isArray(fullDispatch?.items) ? fullDispatch.items : [];
-
-          const batchToItemId: Record<string, number> = {};
-          for (const it of fullItems) {
-            const batchId = it?.batch?.id;
-            if (batchId) batchToItemId[String(batchId)] = it.id;
-          }
-
-          for (const s of data.draft_scan_history) {
-            const itemId = batchToItemId[String(s.batch_id)];
-            if (!itemId) {
-              failed += 1;
-              continue;
-            }
-            try {
-              await dispatchService.scanBarcode(dispatchId, itemId, s.barcode);
-              synced += 1;
-            } catch {
-              failed += 1;
-            }
-          }
-        } catch {
-          failed = data.draft_scan_history.length;
-        }
-
-        if (synced > 0) {
-          showToast(`Saved ${synced} barcode scan(s) to this dispatch.`, 'success');
-        }
-        if (failed > 0) {
-          showToast(`${failed} barcode(s) could not be saved. You can re-scan from "Scan to Send".`, 'error');
-        }
-      }
 
       showToast('Dispatch created successfully', 'success');
       setShowCreateModal(false);
@@ -488,24 +444,52 @@ export default function DispatchManagementPage() {
             </div>
 
             <div className="p-6 overflow-y-auto max-h-[60vh]">
-              <div className="grid grid-cols-2 gap-6 mb-6">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400 mb-1">
                     Source Store
                   </h3>
-                  <p className="text-gray-900 dark:text-white">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
                     {selectedDispatch.source_store.name}
                   </p>
                 </div>
                 <div>
-                  <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400 mb-1">
                     Destination Store
                   </h3>
-                  <p className="text-gray-900 dark:text-white">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
                     {selectedDispatch.destination_store.name}
                   </p>
                 </div>
+                <div>
+                  <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400 mb-1">
+                    Carrier / Logistics
+                  </h3>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {selectedDispatch.carrier_name || '—'}
+                  </p>
+                </div>
+                <div>
+                  <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 dark:text-gray-400 mb-1">
+                    Tracking Number
+                  </h3>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    {selectedDispatch.tracking_number || '—'}
+                  </p>
+                </div>
               </div>
+
+              {(selectedDispatch.notes || (selectedDispatch as any).note || (selectedDispatch as any).remarks || (selectedDispatch as any).remark || (selectedDispatch as any).comment) && (
+                <div className="mb-6 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4">
+                  <h3 className="text-xs font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wide mb-2 flex items-center gap-2">
+                    <Package className="w-3.5 h-3.5" />
+                    Dispatch Notes
+                  </h3>
+                  <p className="text-sm text-amber-900 dark:text-amber-100 whitespace-pre-wrap leading-relaxed">
+                    {selectedDispatch.notes || (selectedDispatch as any).note || (selectedDispatch as any).remarks || (selectedDispatch as any).remark || (selectedDispatch as any).comment}
+                  </p>
+                </div>
+              )}
 
               {selectedDispatch.items && selectedDispatch.items.length > 0 && (
                 <div>

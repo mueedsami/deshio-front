@@ -10,7 +10,7 @@ export interface Address {
   address_line_2?: string;
   city: string;
   state: string;
-  postal_code: string;
+  postal_code?: string;
   country: string;
   landmark?: string;
   delivery_instructions?: string;
@@ -23,12 +23,24 @@ export interface OrderItem {
   product_id: number;
   product_name: string;
   quantity: number;
-  price: number;
-  total: number;
+  price?: number;
+  unit_price?: number;
+  total?: number;
+  total_amount?: number;
   product_image?: string;
+  image_url?: string;
   sku?: string;
+  product_sku?: string;
   color?: string;
   size?: string;
+  variant_options?: any;
+  product?: {
+    images?: Array<{
+      image_url?: string;
+      url?: string;
+      is_primary?: boolean | number;
+    }>;
+  };
 }
 
 export interface OrderSummary {
@@ -47,6 +59,17 @@ export interface CreateOrderRequest {
   coupon_code?: string;
   delivery_preference?: 'standard' | 'express' | 'scheduled';
   scheduled_delivery_date?: string;
+  // Keep unassigned so warehouse/store-assignment can assign later
+  store_id?: number | null;
+
+  // Extra hints for backends that support explicit assignment workflow
+  // (ignored safely by most APIs if unsupported)
+  assigned_store_id?: number | null;
+  status?: string;
+  order_status?: string;
+  assignment_status?: string;
+  auto_assign_store?: boolean;
+  requires_store_assignment?: boolean;
 }
 
 export interface Order {
@@ -184,7 +207,7 @@ class CheckoutService {
     // Online payment methods that require payment gateway
     const onlineTypes = ['card', 'online_banking', 'mobile_banking', 'digital_wallet'];
     const onlineProcessors = ['sslcommerz', 'stripe', 'paypal', 'bkash', 'nagad'];
-    
+
     return (
       onlineTypes.includes(paymentMethod.type) ||
       (paymentMethod.processor && onlineProcessors.includes(paymentMethod.processor.toLowerCase())) ||
@@ -215,29 +238,67 @@ class CheckoutService {
     payment_url?: string; // For SSLCommerz
     transaction_id?: string; // For SSLCommerz
   }> {
-    try {
-      console.log('📦 Creating order from cart...');
-      console.log('📋 Order data:', orderData);
-      
-      const response = await axiosInstance.post<ApiResponse<{
-        order: Order;
-        order_summary: any;
-        payment_url?: string;
-        transaction_id?: string;
-      }>>('/customer/orders/create-from-cart', orderData);
-      
-      console.log('✅ Order created successfully:', response.data);
-      
-      return response.data.data;
-    } catch (error: any) {
-      console.error('❌ Failed to create order - Full error details:');
-      console.error('Status:', error.response?.status);
-      console.error('Status Text:', error.response?.statusText);
-      console.error('Data:', error.response?.data);
-      console.error('Message:', error.message);
-      
-      throw new Error(error.response?.data?.message || 'Failed to create order');
+    const basePayload: CreateOrderRequest = {
+      ...orderData,
+      // enforce "not assigned" at order creation
+      store_id: null,
+      assigned_store_id: null,
+    };
+
+    // Try explicit pending-assignment hints first; fall back gracefully
+    // so checkout never breaks on strict validators.
+    const payloadVariants: CreateOrderRequest[] = [
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+        order_status: 'pending_assignment',
+        assignment_status: 'unassigned',
+        auto_assign_store: false,
+        requires_store_assignment: true,
+      },
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+      },
+      {
+        ...basePayload,
+      },
+    ];
+
+    let lastError: any = null;
+
+    for (const payload of payloadVariants) {
+      try {
+        console.log('📦 Creating order from cart...');
+        console.log('📋 Order payload:', payload);
+
+        const response = await axiosInstance.post<ApiResponse<{
+          order: Order;
+          order_summary: any;
+          payment_url?: string;
+          transaction_id?: string;
+        }>>('/customer/orders/create-from-cart', payload);
+
+        console.log('✅ Order created successfully:', response.data);
+
+        return response.data.data;
+      } catch (error: any) {
+        lastError = error;
+        console.warn('⚠️ create-from-cart attempt failed, trying fallback payload...', {
+          status: error?.response?.status,
+          message: error?.response?.data?.message || error?.message,
+          errors: error?.response?.data?.errors,
+        });
+      }
     }
+
+    console.error('❌ Failed to create order - Full error details:');
+    console.error('Status:', lastError?.response?.status);
+    console.error('Status Text:', lastError?.response?.statusText);
+    console.error('Data:', lastError?.response?.data);
+    console.error('Message:', lastError?.message);
+
+    throw new Error(lastError?.response?.data?.message || 'Failed to create order');
   }
 
   /**
@@ -351,7 +412,7 @@ class CheckoutService {
         default_billing: Address | null;
         total: number;
       }>>('/customer/addresses', { params });
-      
+
       return response.data.data;
     } catch (error: any) {
       console.error('Failed to fetch addresses:', error);
@@ -374,7 +435,7 @@ class CheckoutService {
         formatted_address: string;
         full_address: string;
       }>>(`/customer/addresses/${id}`);
-      
+
       return response.data.data;
     } catch (error: any) {
       console.error('Failed to fetch address:', error);
@@ -395,7 +456,7 @@ class CheckoutService {
         address: Address;
         formatted_address: string;
       }>>('/customer/addresses', addressData);
-      
+
       return response.data.data;
     } catch (error: any) {
       console.error('Failed to create address:', error);
@@ -416,7 +477,7 @@ class CheckoutService {
         address: Address;
         formatted_address: string;
       }>>(`/customer/addresses/${id}`, addressData);
-      
+
       return response.data.data;
     } catch (error: any) {
       console.error('Failed to update address:', error);
@@ -490,7 +551,7 @@ class CheckoutService {
         state,
         postal_code,
       });
-      
+
       return response.data.data;
     } catch (error: any) {
       console.error('Failed to validate delivery area:', error);
@@ -556,8 +617,8 @@ class CheckoutService {
       };
     }
 
-    const discount = coupon.type === 'percentage' 
-      ? (subtotal * coupon.value) / 100 
+    const discount = coupon.type === 'percentage'
+      ? (subtotal * coupon.value) / 100
       : coupon.value;
 
     return {
@@ -572,13 +633,13 @@ class CheckoutService {
    */
   calculateDeliveryCharge(city: string): number {
     const cityLower = city.toLowerCase();
-    
+
     if (cityLower.includes('dhaka')) {
       return 60.00;
     } else if (['chittagong', 'sylhet', 'rajshahi', 'khulna', 'chattogram'].some(c => cityLower.includes(c))) {
       return 120.00;
     } else {
-      return 150.00;
+      return 120.00;
     }
   }
 
@@ -599,7 +660,7 @@ class CheckoutService {
     const validStatuses = ['pending', 'processing', 'pending_assignment'];
     const orderDate = new Date(order.created_at);
     const hoursSinceOrder = (Date.now() - orderDate.getTime()) / (1000 * 60 * 60);
-    
+
     return validStatuses.includes(order.status) && hoursSinceOrder <= 24;
   }
 
@@ -608,10 +669,10 @@ class CheckoutService {
    */
   canReturnOrder(order: Order): boolean {
     if (order.status !== 'delivered') return false;
-    
+
     const deliveryDate = new Date(order.created_at);
     const daysSinceDelivery = (Date.now() - deliveryDate.getTime()) / (1000 * 60 * 60 * 24);
-    
+
     return daysSinceDelivery <= 7;
   }
 
@@ -627,7 +688,7 @@ class CheckoutService {
       address.postal_code,
       address.country
     ].filter(Boolean);
-    
+
     return parts.join(', ');
   }
 }

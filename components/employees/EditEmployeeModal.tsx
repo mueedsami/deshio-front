@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import employeeService, { Employee, UpdateEmployeeData } from '@/services/employeeService2';
 import storeService, { Store } from '@/services/storeService';
 import roleService, { Role } from '@/services/roleService';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface EditEmployeeModalProps {
   isOpen: boolean;
@@ -14,6 +15,10 @@ interface EditEmployeeModalProps {
 }
 
 export default function EditEmployeeModal({ isOpen, onClose, onSuccess, employee }: EditEmployeeModalProps) {
+  const { user, isSuperAdmin } = useAuth();
+  const isGlobal = isSuperAdmin || user?.role?.slug === 'admin';
+  const isBranchManager = user?.role?.slug === 'branch-manager';
+
   const [loading, setLoading] = useState(false);
   const [stores, setStores] = useState<Store[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -64,9 +69,16 @@ export default function EditEmployeeModal({ isOpen, onClose, onSuccess, employee
       }
 
       if (rolesResponse.success) {
-        const activeRoles = Array.isArray(rolesResponse.data)
+        let activeRoles = Array.isArray(rolesResponse.data)
           ? rolesResponse.data.filter(role => role.is_active)
           : [];
+        
+        // Non-global users (Branch Managers) shouldn't be able to assign Admins or other Global roles
+        if (!isGlobal) {
+          const restrictedSlugs = ['super-admin', 'admin', 'super_admin'];
+          activeRoles = activeRoles.filter(role => !restrictedSlugs.includes(role.slug || ''));
+        }
+        
         setRoles(activeRoles);
       }
     } catch (error) {
@@ -214,8 +226,8 @@ export default function EditEmployeeModal({ isOpen, onClose, onSuccess, employee
                 name="store_id"
                 value={formData.store_id}
                 onChange={handleChange}
-                disabled={loadingData}
-                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white disabled:opacity-50 ${
+                disabled={loadingData || isBranchManager}
+                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white disabled:opacity-75 ${
                   errors.store_id ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
                 }`}
               >

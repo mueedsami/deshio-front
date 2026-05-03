@@ -27,7 +27,7 @@ export default function ProductsToolbar({ viewMode, sortBy, onViewModeChange, on
       <select
         value={sortBy}
         onChange={(e) => onSortChange(e.target.value)}
-        className="px-4 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+        className="px-4 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-rose-600"
       >
         <option value="featured">Default sorting</option>
         <option value="price-low">Price: Low to High</option>

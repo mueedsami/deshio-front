@@ -15,7 +15,7 @@ export type GuestDeliveryAddress = {
   address_line_2?: string;
   city: string;
   state?: string;
-  postal_code: string;
+  postal_code?: string;
   country?: string;
 };
 
@@ -27,6 +27,15 @@ export type GuestCheckoutRequest = {
   customer_name?: string;
   customer_email?: string;
   notes?: string;
+
+  // Keep guest e-commerce orders unassigned initially
+  store_id?: number | null;
+  assigned_store_id?: number | null;
+  status?: string;
+  order_status?: string;
+  assignment_status?: string;
+  auto_assign_store?: boolean;
+  requires_store_assignment?: boolean;
 };
 
 export type GuestCheckoutCodSuccess = {
@@ -98,11 +107,51 @@ type ApiResponse<T> = {
 
 class GuestCheckoutService {
   async checkout(payload: GuestCheckoutRequest): Promise<GuestCheckoutResponse> {
-    const response = await axiosInstance.post<ApiResponse<any>>('/guest-checkout', payload);
-    return response.data as any;
+    const basePayload: GuestCheckoutRequest = {
+      ...payload,
+      store_id: null,
+      assigned_store_id: null,
+    };
+
+    const payloadVariants: GuestCheckoutRequest[] = [
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+        order_status: 'pending_assignment',
+        assignment_status: 'unassigned',
+        auto_assign_store: false,
+        requires_store_assignment: true,
+      },
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+      },
+      {
+        ...basePayload,
+      },
+    ];
+
+    let lastError: any = null;
+
+    for (const body of payloadVariants) {
+      try {
+        const response = await axiosInstance.post<ApiResponse<any>>('/guest-checkout', body);
+        return response.data as any;
+      } catch (error: any) {
+        lastError = error;
+        console.warn('⚠️ guest-checkout attempt failed, trying fallback payload...', {
+          status: error?.response?.status,
+          message: error?.response?.data?.message || error?.message,
+          errors: error?.response?.data?.errors,
+        });
+      }
+    }
+
+    throw new Error(lastError?.response?.data?.message || 'Failed to place guest order');
   }
 
-  async ordersByPhone(phone: string): Promise<GuestOrdersByPhoneResponse> {
+  async ordersByPhone(phoneOrPayload: string | { phone: string }): Promise<GuestOrdersByPhoneResponse> {
+    const phone = typeof phoneOrPayload === "string" ? phoneOrPayload : phoneOrPayload?.phone;
     const response = await axiosInstance.post<ApiResponse<any>>('/guest-orders/by-phone', { phone });
     return response.data as any;
   }

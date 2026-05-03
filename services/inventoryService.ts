@@ -5,6 +5,7 @@ export interface Store {
   store_id: number;
   store_name: string;
   store_code: string;
+  store_address?: string;
   quantity: number;
   batches_count?: number;
   is_warehouse?: boolean;
@@ -13,9 +14,14 @@ export interface Store {
 
 export interface GlobalInventoryItem {
   product_id: number;
+  category_id?: number;
   product_name: string;
+  base_name: string;
+  variation_suffix?: string;
   sku: string;
   total_quantity: number;
+  available_quantity?: number;
+  reserved_quantity?: number;
   stores_count: number;
   stores: Store[];
   is_low_stock: boolean;
@@ -23,9 +29,14 @@ export interface GlobalInventoryItem {
 
 export interface ProductAvailability {
   product_id: number;
+  category_id?: number;
   product_name: string;
+  base_name: string;
+  variation_suffix?: string;
   sku: string;
   total_quantity: number;
+  available_quantity?: number;
+  reserved_quantity?: number;
   available_in_stores: number;
   stores: Store[];
 }
@@ -66,6 +77,8 @@ export interface ProductValue {
   product_name: string;
   sku: string;
   total_quantity: number;
+  available_quantity?: number;
+  reserved_quantity?: number;
   total_value: number;
   average_unit_cost: number;
 }
@@ -127,7 +140,9 @@ export interface StockAgingResponse {
 export interface GlobalInventoryParams {
   product_id?: number;
   store_id?: number;
+  category_id?: number;
   low_stock?: boolean;
+  skipStoreScope?: boolean;
 }
 
 export interface SearchProductParams {
@@ -147,9 +162,10 @@ const inventoryService = {
    * Get global inventory overview across all stores
    */
   getGlobalInventory: async (params?: GlobalInventoryParams) => {
+    const { skipStoreScope, ...rest } = params || {};
     const response = await axiosInstance.get<ApiResponse<GlobalInventoryItem[]>>(
-      '/inventory/global',
-      { params }
+      '/catalog/inventory/global',
+      { params: rest, skipStoreScope }
     );
     return response.data;
   },
@@ -159,7 +175,7 @@ const inventoryService = {
    */
   getStoreInventory: async (storeId: number) => {
     const response = await axiosInstance.get<ApiResponse<GlobalInventoryItem[]>>(
-      '/inventory/global',
+      '/catalog/inventory/global',
       { params: { store_id: storeId } }
     );
     return response.data;
@@ -170,7 +186,7 @@ const inventoryService = {
    */
   getStatistics: async () => {
     const response = await axiosInstance.get<ApiResponse<StatisticsResponse>>(
-      '/inventory/statistics'
+      '/catalog/inventory/statistics'
     );
     return response.data;
   },
@@ -180,7 +196,7 @@ const inventoryService = {
    */
   getInventoryValue: async () => {
     const response = await axiosInstance.get<ApiResponse<InventoryValueResponse>>(
-      '/inventory/value'
+      '/catalog/inventory/value'
     );
     return response.data;
   },
@@ -190,7 +206,7 @@ const inventoryService = {
    */
   searchProductAcrossStores: async (params: SearchProductParams) => {
     const response = await axiosInstance.post<ApiResponse<ProductAvailability[]>>(
-      '/inventory/search',
+      '/catalog/inventory/search',
       params
     );
     return response.data;
@@ -201,7 +217,7 @@ const inventoryService = {
    */
   getLowStockAlerts: async () => {
     const response = await axiosInstance.get<ApiResponse<LowStockAlertsResponse>>(
-      '/inventory/low-stock-alerts'
+      '/catalog/inventory/low-stock-alerts'
     );
     return response.data;
   },
@@ -211,7 +227,7 @@ const inventoryService = {
    */
   getStockAging: async () => {
     const response = await axiosInstance.get<ApiResponse<StockAgingResponse>>(
-      '/inventory/stock-aging'
+      '/catalog/inventory/stock-aging'
     );
     return response.data;
   },

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ShoppingCart,
@@ -9,34 +9,341 @@ import {
   Minus,
   Plus,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ArrowRight,
+  Eye,
+  HelpCircle,
+  Truck,
+  RotateCcw,
+  ShieldCheck,
+  Grid
 } from 'lucide-react';
+
+import PremiumProductCard from '@/components/ecommerce/ui/PremiumProductCard';
+import { usePromotion } from '@/contexts/PromotionContext';
+
 
 import { useCart } from '@/app/e-commerce/CartContext';
 import Navigation from '@/components/ecommerce/Navigation';
 import { getBaseProductName, getColorLabel, getSizeLabel } from '@/lib/productNameUtils';
+import { adaptCatalogGroupedProducts, groupProductsByMother } from '@/lib/ecommerceProductGrouping';
 import CartSidebar from '@/components/ecommerce/cart/CartSidebar';
 import catalogService, {
   Product,
+  ProductCategory,
   ProductDetailResponse,
   SimpleProduct,
   ProductImage
 } from '@/services/catalogService';
 import cartService from '@/services/cartService';
 import { wishlistUtils } from '@/lib/wishlistUtils';
+import ProductImageGallery from '@/components/ecommerce/ProductImageGallery';
+import VariantSelector from '@/components/ecommerce/VariantSelector';
+import StickyAddToCart from '@/components/ecommerce/StickyAddToCart';
 
 // Types for product variations
-interface ProductVariant {
+export interface ProductVariant {
   id: number;
   name: string;
   sku: string;
   color?: string;
   size?: string;
+  variation_suffix?: string | null;
+  option_label?: string;
   selling_price: number | null; // ✅ allow null safely
   in_stock: boolean;
-  stock_quantity: number | null; // ✅ allow null safely
+  stock_quantity: number | null;
+  available_inventory: number | null; // ✅ from reserved_products — drives button & badge
   images: ProductImage[] | null; // ✅ allow null safely
 }
+
+const normalizeVariantText = (value: any): string =>
+  String(value ?? '')
+    .trim()
+    .replace(/[‐‑‒–—−﹘﹣－]/g, '-')
+    .replace(/\s+/g, ' ');
+
+const slugify = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+
+const parseMarketSizePairs = (value: string): string[] => {
+  const text = normalizeVariantText(value)
+    .replace(/[|,;/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return [];
+
+  const pairs: string[] = [];
+  const seen = new Set<string>();
+  const re = /(US|EU|UK|BD|CM|MM)\s*[:\-]?\s*(\d{1,3}(?:\.\d+)?)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = re.exec(text)) !== null) {
+    const market = String(match[1] || '').toUpperCase();
+    const size = String(match[2] || '').trim();
+    if (!market || !size) continue;
+
+    const key = `${market}-${size}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pairs.push(`${market} ${size}`);
+  }
+
+  // Helpful fallback for values like "40 US 7" where EU is implied.
+  if (pairs.length > 0) {
+    const hasUS = pairs.some((p) => p.startsWith('US '));
+    const hasEU = pairs.some((p) => p.startsWith('EU '));
+
+    if (hasUS && !hasEU) {
+      const twoDigit = text.match(/\b(3\d|4\d|5\d|60)\b/);
+      if (twoDigit && !seen.has(`EU-${twoDigit[1]}`)) {
+        pairs.unshift(`EU ${twoDigit[1]}`);
+      }
+    }
+  }
+
+  return pairs;
+};
+
+const normalizeSizeDescriptor = (value: string): string | undefined => {
+  const text = normalizeVariantText(value);
+  if (!text) return undefined;
+
+  const pairs = parseMarketSizePairs(text);
+  if (pairs.length > 0) {
+    return Array.from(new Set(pairs)).join(' / ');
+  }
+
+  return undefined;
+};
+
+const SIZE_WORD_TOKENS = new Set([
+  'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL',
+  'FREE SIZE', 'FREESIZE', 'ONE SIZE', 'ONESIZE',
+]);
+
+const isLikelySizeToken = (token: string): boolean => {
+  const t = normalizeVariantText(token).toUpperCase();
+  if (!t) return false;
+  if (SIZE_WORD_TOKENS.has(t)) return true;
+
+  if (parseMarketSizePairs(t).length > 0) return true;
+
+  if (/^\d{1,3}$/.test(t)) {
+    const n = Number(t);
+    // shoes/apparel size ranges + compact single digit sizes.
+    return (n >= 1 && n <= 15) || (n >= 20 && n <= 60);
+  }
+
+  if (/^\d{1,3}(US|EU|UK|BD|CM|MM)$/i.test(t)) return true;
+
+  return /^(US|EU|UK|BD|CM|MM)\s*\d{1,3}(?:\.\d+)?$/i.test(t);
+};
+
+const MARKET_SIZE_TOKENS = new Set(['US', 'EU', 'UK', 'BD', 'CM', 'MM']);
+const NON_COLOR_TOKENS = new Set(['NA', 'N/A', 'NOT', 'APPLICABLE', 'NOT APPLICABLE']);
+
+const isNumericToken = (value: string): boolean => /^\d{1,3}(?:\.\d+)?$/.test(normalizeVariantText(value));
+
+const prettifyToken = (token: string): string => {
+  const t = normalizeVariantText(token).replace(/_/g, ' ');
+  if (!t) return '';
+  const up = t.toUpperCase();
+  if (MARKET_SIZE_TOKENS.has(up) || NON_COLOR_TOKENS.has(up)) return up;
+  if (isNumericToken(t)) return t;
+  return t
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const normalizeColorToken = (token: string): string => {
+  const up = normalizeVariantText(token).toUpperCase();
+  if (NON_COLOR_TOKENS.has(up)) return '';
+  return prettifyToken(token);
+};
+
+const parseVariationSuffix = (suffix?: string | null): { color?: string; size?: string; label?: string } => {
+  const raw = normalizeVariantText(suffix || '');
+  if (!raw) return {};
+
+  const marketPairsFromRaw = parseMarketSizePairs(raw);
+  let trimmed = raw;
+  while (trimmed.startsWith('-')) {
+    trimmed = trimmed.substring(1).trim();
+  }
+  const tokens = trimmed.split('-').map((t) => normalizeVariantText(t)).filter(Boolean);
+  if (!tokens.length) {
+    const sizeOnly = normalizeSizeDescriptor(raw);
+    return sizeOnly
+      ? { size: sizeOnly, label: sizeOnly }
+      : {};
+  }
+
+  const usedAsSize = new Set<number>();
+  const sizeParts: string[] = [];
+
+  // First pass: explicit market-size pairs (e.g., US-7, EU-40)
+  for (let i = 0; i < tokens.length - 1; i += 1) {
+    const current = tokens[i];
+    const next = tokens[i + 1];
+    const currentUp = current.toUpperCase();
+    const nextIsNumeric = isNumericToken(next);
+
+    if (MARKET_SIZE_TOKENS.has(currentUp) && nextIsNumeric) {
+      sizeParts.push(`${currentUp} ${next}`);
+      usedAsSize.add(i);
+      usedAsSize.add(i + 1);
+      i += 1;
+      continue;
+    }
+
+    // Pattern like 40-US-7 should preserve 40 and only pair US-7.
+    const nextUp = next.toUpperCase();
+    const hasTrailingNumeric = i + 2 < tokens.length && isNumericToken(tokens[i + 2]);
+    if (isNumericToken(current) && MARKET_SIZE_TOKENS.has(nextUp) && !hasTrailingNumeric) {
+      sizeParts.push(`${nextUp} ${current}`);
+      usedAsSize.add(i);
+      usedAsSize.add(i + 1);
+      i += 1;
+    }
+  }
+
+  // Second pass: leftover tokens that look like size values (e.g., 7, 40, XL)
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (usedAsSize.has(i)) continue;
+    const token = tokens[i];
+    if (isLikelySizeToken(token)) {
+      // If US size already exists and this is a plain 2-digit number, treat as EU size.
+      const hasUS = sizeParts.some((s) => s.startsWith('US '));
+      const n = Number(token);
+      if (hasUS && /^\d{2}$/.test(token) && n >= 30 && n <= 60) {
+        sizeParts.push(`EU ${token}`);
+      } else {
+        sizeParts.push(prettifyToken(token));
+      }
+      usedAsSize.add(i);
+    }
+  }
+
+  // Ensure market-size pairs are never lost for values like "EU 40 US 7"
+  // where tokenization may keep them in a single token.
+  marketPairsFromRaw.forEach((pair) => sizeParts.push(pair));
+
+  const colorTokens = tokens
+    .filter((_, idx) => !usedAsSize.has(idx))
+    .map((t) => normalizeColorToken(t))
+    .filter(Boolean);
+
+  const color = colorTokens.length ? colorTokens.join(' ') : undefined;
+  const dedupedSizeParts = Array.from(new Set(sizeParts.filter(Boolean)));
+  const size = dedupedSizeParts.length ? dedupedSizeParts.join(' / ') : undefined;
+
+  const label =
+    (color && size && `${color} / ${size}`) ||
+    color ||
+    size ||
+    tokens.map((t) => prettifyToken(t)).filter(Boolean).join(' ');
+
+  return { color, size, label: label || undefined };
+};
+
+const deriveVariantMeta = (variant: any, name: string) => {
+  const parsed = parseVariationSuffix(variant?.variation_suffix);
+
+  const rawColor = normalizeVariantText(variant?.attributes?.color || variant?.color);
+  const rawSize = normalizeVariantText(variant?.attributes?.size || variant?.size);
+
+  const color =
+    (rawColor ? normalizeColorToken(rawColor) : '') ||
+    parsed.color ||
+    getColorLabel(name) ||
+    undefined;
+
+  const size =
+    (rawSize ? normalizeSizeDescriptor(rawSize) || prettifyToken(rawSize) : '') ||
+    parsed.size ||
+    normalizeSizeDescriptor(name || '') ||
+    getSizeLabel(name) ||
+    undefined;
+
+  const variationSuffix = normalizeVariantText(variant?.variation_suffix || '') || null;
+
+  const optionLabel =
+    normalizeVariantText(
+      variant?.option_label ||
+      parsed.label ||
+      (variationSuffix ? parseVariationSuffix(variationSuffix).label : '') ||
+      [color, size].filter(Boolean).join(' / ')
+    ) ||
+    undefined;
+
+  return { color, size, variationSuffix, optionLabel };
+};
+
+const getVariationDisplayLabel = (variant: ProductVariant, index: number): string => {
+  const explicit = normalizeVariantText(variant.option_label || '');
+  if (explicit) return explicit;
+
+  // Use the suffix if available, as it's the most reliable source for "40 (US 7)" etc.
+  if (variant.variation_suffix) {
+    let clean = normalizeVariantText(variant.variation_suffix);
+    while (clean.startsWith('-')) {
+      clean = clean.substring(1).trim();
+    }
+    if (clean) return clean;
+  }
+
+  const parts = [normalizeVariantText(variant.color || ''), normalizeVariantText(variant.size || '')]
+    .filter(Boolean);
+
+  if (parts.length > 0) {
+    return parts.join(' / ');
+  }
+
+  if (variant.sku) return `SKU ${variant.sku}`;
+  return `Option ${index + 1}`;
+};
+
+const getCategoryId = (category: Product['category'] | null | undefined): number | undefined => {
+  if (!category || typeof category === 'string') return undefined;
+  const id = Number(category.id);
+  return Number.isFinite(id) ? id : undefined;
+};
+
+const getCategoryName = (category: Product['category'] | null | undefined): string | undefined => {
+  if (!category) return undefined;
+  if (typeof category === 'string') {
+    const value = category.trim();
+    return value || undefined;
+  }
+
+  const value = String(category.name || '').trim();
+  return value || undefined;
+};
+
+const getCategorySlug = (category: Product['category'] | null | undefined): string | undefined => {
+  if (!category) return undefined;
+  if (typeof category === 'string') return slugify(category);
+  if (category.slug) return category.slug;
+  return slugify(category.name);
+};
+
+
+const getNewestKey = (product: SimpleProduct): number => {
+  const variantIds = Array.isArray((product as any).variants)
+    ? ((product as any).variants as any[]).map((v) => Number(v?.id) || 0)
+    : [];
+  const selfId = Number(product?.id) || 0;
+  return Math.max(selfId, ...variantIds);
+};
 
 export default function ProductDetailPage() {
   const params = useParams();
@@ -44,31 +351,101 @@ export default function ProductDetailPage() {
   const productId = params?.id ? parseInt(params.id as string) : null;
 
   const { refreshCart } = useCart();
+  const { getApplicablePromotion } = usePromotion();
 
   // State
   const [product, setProduct] = useState<Product | null>(null);
   const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [productVariants, setProductVariants] = useState<ProductVariant[]>([]);
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(null);
-  const [relatedProducts, setRelatedProducts] = useState<SimpleProduct[]>([]);
-
-  // Suggested Products State
-  const [suggestedProducts, setSuggestedProducts] = useState<SimpleProduct[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [relatedProducts, setRelatedProducts] = useState<SimpleProduct[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cartSidebarOpen, setCartSidebarOpen] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [quantity, setQuantity] = useState(1);
   const [isAdding, setIsAdding] = useState(false);
-  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const [cartSidebarOpen, setCartSidebarOpen] = useState(false);
+  const [cartStatus, setCartStatus] = useState<'idle' | 'loading' | 'success'>('idle');
   const [isInWishlist, setIsInWishlist] = useState(false);
+  const [liveViewers, setLiveViewers] = useState(0);
+  const [isStickyVisible, setIsStickyVisible] = useState(false);
+  const [recentlyViewed, setRecentlyViewed] = useState<SimpleProduct[]>([]);
+  const mainCtaRef = useRef<HTMLButtonElement>(null);
+
+  // 3.2 — Live Viewers Calculation
+  useEffect(() => {
+    const updateViewers = () => {
+      if (!productId) return;
+      const bracket = Math.floor(Date.now() / (1000 * 60 * 5));
+      const seed = (parseInt(productId.toString(), 36) + bracket) % 23 + 4;
+      setLiveViewers(seed);
+    };
+
+    updateViewers();
+    const interval = setInterval(updateViewers, 1000 * 60 * 5);
+    return () => clearInterval(interval);
+  }, [productId]);
+
+  // 3.7 — Recently Viewed Logic
+  useEffect(() => {
+    if (product) {
+      const existingRaw = localStorage.getItem('ec_recently_viewed');
+      const existing = existingRaw ? JSON.parse(existingRaw) : [];
+      const productSummary: SimpleProduct = {
+        id: product.id,
+        name: product.name,
+        selling_price: Number(selectedVariant?.selling_price || product.selling_price),
+        in_stock: product.in_stock,
+        stock_quantity: product.stock_quantity,
+        images: product.images,
+        sku: product.sku
+      };
+
+      const filtered = existing.filter((p: any) => p.id !== product.id);
+      const updated = [productSummary, ...filtered].slice(0, 8);
+      localStorage.setItem('ec_recently_viewed', JSON.stringify(updated));
+      setRecentlyViewed(updated.filter(p => p.id !== product.id));
+    }
+  }, [product, selectedVariant]);
+
+  // 3.9 — Preload variant images for instant switching
+  useEffect(() => {
+    if (productVariants.length > 0) {
+      const urls = new Set<string>();
+      productVariants.forEach(v => {
+        if (Array.isArray(v.images)) {
+          v.images.forEach(img => {
+            if (img.url && !urls.has(img.url)) {
+              urls.add(img.url);
+              // Background preloading
+              const i = new Image();
+              i.src = img.url;
+            }
+          });
+        }
+      });
+    }
+  }, [productVariants]);
+
+  // Sticky Bar Observer
+  useEffect(() => {
+    if (!mainCtaRef.current) return;
+
+    const observer = new IntersectionObserver(([entry]) => {
+      setIsStickyVisible(!entry.isIntersecting);
+    }, { threshold: 0 });
+
+    observer.observe(mainCtaRef.current);
+    return () => observer.disconnect();
+  }, [loading]);
 
   // ✅ Safe price formatter (prevents toLocaleString crash)
   const formatBDT = (value: any) => {
     const n = Number(value);
-    if (!Number.isFinite(n) || n <= 0) return '৳0.00';
-    return `৳${n.toLocaleString('en-BD', { minimumFractionDigits: 2 })}`;
+    if (!Number.isFinite(n) || n <= 0) return 'Tk 0.00';
+    return `Tk ${n.toLocaleString('en-BD', { minimumFractionDigits: 2 })}`;
   };
 
   // Check if user is authenticated
@@ -79,31 +456,32 @@ export default function ProductDetailPage() {
       localStorage.getItem('token');
     return !!token;
   };
-  // Helper functions
-  // Fetch suggested products
-  useEffect(() => {
-    if (!productId) return;
 
-    const fetchSuggestedProducts = async () => {
-      try {
-        setLoadingSuggestions(true);
-        const response = await catalogService.getSuggestedProducts(4);
 
-        if (response.suggested_products && response.suggested_products.length > 0) {
-          setSuggestedProducts(response.suggested_products);
-        } else {
-          setSuggestedProducts([]);
-        }
-      } catch (err: any) {
-        console.error('❌ Error fetching suggested products:', err);
-        setSuggestedProducts([]);
-      } finally {
-        setLoadingSuggestions(false);
-      }
+  const buildVariantFromAny = (variant: any): ProductVariant => {
+    const name = variant?.name || '';
+    const meta = deriveVariantMeta(variant, name);
+
+    return {
+      id: Number(variant?.id),
+      name,
+      sku: variant?.sku || `product-${variant?.id}`,
+      color: meta.color,
+      size: meta.size,
+      variation_suffix: meta.variationSuffix,
+      option_label: meta.optionLabel,
+      selling_price: Number(variant?.selling_price ?? variant?.price ?? 0),
+      in_stock:
+        typeof variant?.in_stock === 'boolean'
+          ? variant.in_stock
+          : Number(variant?.stock_quantity || 0) > 0,
+      stock_quantity: Number(variant?.stock_quantity || 0),
+      available_inventory: variant?.available_inventory != null
+        ? Number(variant.available_inventory)
+        : Number(variant?.stock_quantity || 0),
+      images: Array.isArray(variant?.images) ? variant.images : [],
     };
-
-    fetchSuggestedProducts();
-  }, [productId]);
+  };
 
   // Fetch product data and variations
   useEffect(() => {
@@ -114,75 +492,157 @@ export default function ProductDetailPage() {
     }
 
     const fetchProductAndVariations = async () => {
+      // Prevent redundant loading if the ID is already handled
+      if (selectedVariant && selectedVariant.id === productId) return;
+
+      // If the ID exists in our variants list, just switch selection and end early
+      const existingMatch = productVariants.find(v => v.id === productId);
+      if (existingMatch) {
+        setSelectedVariant(existingMatch);
+        // Even if we found it, it might have partial images. 
+        // handleVariantChange handles fetching full details if needed, 
+        // but for initial load, if it's a found variant, we should ideally ensure it's full.
+        return;
+      }
+
       try {
         setLoading(true);
         setError(null);
 
-        const response: ProductDetailResponse = await catalogService.getProduct(productId);
+        const response: ProductDetailResponse = await catalogService.getProduct(productId, { include_availability: false });
         const mainProduct = response.product;
 
         setProduct(mainProduct);
         setRelatedProducts(response.related_products || []);
 
-        // ✅ If SKU is missing, treat this product as standalone (no variations)
-        if (!mainProduct.sku) {
-          const selfVariant: ProductVariant = {
-            id: mainProduct.id,
-            name: mainProduct.name,
-            sku: `product-${mainProduct.id}`,
-            color: getColorLabel(mainProduct.name),
-            size: getSizeLabel(mainProduct.name),
-            selling_price: (mainProduct as any).selling_price ?? null,
-            in_stock: !!(mainProduct as any).in_stock,
-            stock_quantity: (mainProduct as any).stock_quantity ?? 0,
-            images: (mainProduct as any).images ?? [],
-          };
+        const directVariantsRaw = Array.isArray((mainProduct as any).variants)
+          ? (mainProduct as any).variants
+          : [];
 
-          setAllProducts([]);
-          setProductVariants([selfVariant]);
-          setSelectedVariant(selfVariant);
+
+        // Prefer backend-provided grouped variants from single-product endpoint
+        if (directVariantsRaw.length > 0) {
+          const deduped = new Map<number, ProductVariant>();
+
+          directVariantsRaw.forEach((variant: any) => {
+            const normalized = buildVariantFromAny(variant);
+            if (!deduped.has(normalized.id)) deduped.set(normalized.id, normalized);
+          });
+
+          const currentVariant = buildVariantFromAny(mainProduct);
+          if (!deduped.has(currentVariant.id)) deduped.set(currentVariant.id, currentVariant);
+
+          const variations = Array.from(deduped.values()).sort((a, b) => {
+            const aColor = (a.color || '').toLowerCase();
+            const bColor = (b.color || '').toLowerCase();
+            const aSize = (a.size || '').toLowerCase();
+            const bSize = (b.size || '').toLowerCase();
+
+            if (aColor !== bColor) return aColor.localeCompare(bColor);
+            return aSize.localeCompare(bSize);
+          });
+
+          setProductVariants(variations);
+          setSelectedVariant(
+            variations.find((v) => v.id === productId) ||
+            variations.find((v) => v.in_stock) ||
+            variations[0] ||
+            null
+          );
+
           return;
         }
 
         const allProductsResponse = await catalogService.getProducts({
-          per_page: 100,
+          // Pull a wider range so we can find sibling variations even when each variation has a unique SKU.
+          per_page: 500,
         });
 
         setAllProducts(allProductsResponse.products);
 
-        const variations: ProductVariant[] = allProductsResponse.products
-          .filter(p => p.sku === mainProduct.sku)
-          .map(p => ({
-            id: p.id,
-            name: p.name,
-            sku: p.sku,
-            color: getColorLabel(p.name),
-            size: getSizeLabel(p.name),
-            selling_price: (p as any).selling_price ?? null,
-            in_stock: !!p.in_stock,
-            stock_quantity: (p as any).stock_quantity ?? 0,
-            images: (p as any).images ?? [],
-          }))
+        const mainBaseName = getBaseProductName(
+          mainProduct.name || '',
+          (mainProduct as any).base_name || undefined
+        );
+        const mainCategoryId = getCategoryId(mainProduct.category);
+
+        const groupedFromApi = Array.isArray(allProductsResponse.grouped_products)
+          ? adaptCatalogGroupedProducts(allProductsResponse.grouped_products)
+          : [];
+
+        const grouped = groupedFromApi.length > 0
+          ? groupedFromApi
+          : groupProductsByMother(allProductsResponse.products, {
+            // Home sections group by mother name irrespective of category payload shape.
+            // Use same behavior on details page so "X options" always matches.
+            useCategoryInKey: false,
+            preferSkuGrouping: false,
+          });
+
+        const selectedGroupById = grouped.find((g) =>
+          g.variants.some((v) => Number(v.id) === Number(mainProduct.id))
+        );
+
+        const selectedGroupByRule = grouped.find((g) => {
+          const sameSku = !!mainProduct.sku && g.variants.some((v) => v.sku === mainProduct.sku);
+
+          const sameBase =
+            g.baseName.trim().toLowerCase() === mainBaseName.trim().toLowerCase();
+
+          const sameCategory = mainCategoryId
+            ? !g.category?.id || g.category.id === mainCategoryId
+            : true;
+
+          return sameSku || (sameBase && sameCategory);
+        });
+
+        const selectedGroup = selectedGroupById || selectedGroupByRule;
+
+        const variations: ProductVariant[] = (selectedGroup?.variants || [])
+          .map((variant) => {
+            const raw = (variant as any).raw || {};
+            const meta = deriveVariantMeta(raw, variant.name || raw?.name || '');
+
+            return {
+              id: variant.id,
+              name: variant.name,
+              sku: variant.sku || `product-${variant.id}`,
+              color: meta.color || variant.color || getColorLabel(variant.name),
+              size: meta.size || variant.size || getSizeLabel(variant.name),
+              variation_suffix: meta.variationSuffix || raw?.variation_suffix || null,
+              option_label: meta.optionLabel,
+              selling_price: variant.price ?? raw.selling_price ?? null,
+              in_stock: !!variant.in_stock,
+              stock_quantity: variant.stock_quantity ?? raw.stock_quantity ?? 0,
+              available_inventory: (variant as any).available_inventory ?? raw.available_inventory ?? variant.stock_quantity ?? raw.stock_quantity ?? 0,
+              images: raw.images ?? [],
+            } as ProductVariant;
+          })
           .sort((a, b) => {
-            const aColor = a.color || '';
-            const bColor = b.color || '';
-            const aSize = a.size || '';
-            const bSize = b.size || '';
+            const aColor = (a.color || '').toLowerCase();
+            const bColor = (b.color || '').toLowerCase();
+            const aSize = (a.size || '').toLowerCase();
+            const bSize = (b.size || '').toLowerCase();
+
             if (aColor !== bColor) return aColor.localeCompare(bColor);
             return aSize.localeCompare(bSize);
           });
 
         // ✅ If no variations were found for this SKU, still show the product itself
         if (variations.length === 0) {
+          const selfMeta = deriveVariantMeta(mainProduct as any, mainProduct.name);
           const selfVariant: ProductVariant = {
             id: mainProduct.id,
             name: mainProduct.name,
             sku: mainProduct.sku || `product-${mainProduct.id}`,
-            color: getColorLabel(mainProduct.name),
-            size: getSizeLabel(mainProduct.name),
+            color: selfMeta.color || getColorLabel(mainProduct.name),
+            size: selfMeta.size || getSizeLabel(mainProduct.name),
+            variation_suffix: selfMeta.variationSuffix || (mainProduct as any).variation_suffix || null,
+            option_label: selfMeta.optionLabel,
             selling_price: (mainProduct as any).selling_price ?? null,
             in_stock: !!(mainProduct as any).in_stock,
             stock_quantity: (mainProduct as any).stock_quantity ?? 0,
+            available_inventory: (mainProduct as any).available_inventory ?? (mainProduct as any).stock_quantity ?? 0,
             images: (mainProduct as any).images ?? [],
           };
 
@@ -211,19 +671,24 @@ export default function ProductDetailPage() {
     fetchProductAndVariations();
   }, [productId]);
 
-  // Get unique colors and sizes from variants
-  const availableColors = useMemo(() => {
-    const colors = productVariants
-      .map(v => v.color)
-      .filter((color): color is string => !!color);
-    return Array.from(new Set(colors));
-  }, [productVariants]);
+  const variationChoices = useMemo(() => {
+    return productVariants
+      .map((variant, index) => ({
+        variant,
+        label: getVariationDisplayLabel(variant, index),
+      }))
+      .sort((a, b) => {
+        // In-stock first
+        if (a.variant.in_stock !== b.variant.in_stock) {
+          return a.variant.in_stock ? -1 : 1;
+        }
 
-  const availableSizes = useMemo(() => {
-    const sizes = productVariants
-      .map(v => v.size)
-      .filter((size): size is string => !!size);
-    return Array.from(new Set(sizes));
+        // Keep same labels grouped
+        const lcmp = a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' });
+        if (lcmp !== 0) return lcmp;
+
+        return a.variant.id - b.variant.id;
+      });
   }, [productVariants]);
 
   // Listen for wishlist updates
@@ -239,21 +704,45 @@ export default function ProductDetailPage() {
   }, [selectedVariant]);
 
   // Handlers
-  const handleVariantChange = (variant: ProductVariant) => {
+  const handleVariantChange = async (variant: ProductVariant) => {
+    // 3.8 — Prevent scroll-to-top on variant change
+    if (typeof window !== 'undefined') {
+      (window as any).__ERRUM_SKIP_SCROLL__ = true;
+    }
+
+    // Instantly update for responsiveness (shows primary image from the list)
     setSelectedVariant(variant);
     setSelectedImageIndex(0);
     setQuantity(1);
-    router.push(`/e-commerce/product/${variant.id}`);
+
+    // 3.5 — No page reload
+    window.history.replaceState(null, '', `/e-commerce/product/${variant.id}`);
+
+    // Background fetch for FULL details (including all images)
+    try {
+      const response = await catalogService.getProduct(variant.id, { include_availability: false });
+      if (response?.product) {
+        const fullVariant = buildVariantFromAny(response.product);
+
+        // Update the variant in the list and current selection
+        setProductVariants(prev => prev.map(v => v.id === variant.id ? fullVariant : v));
+        setSelectedVariant(prev => (prev?.id === variant.id ? fullVariant : prev));
+      }
+    } catch (err) {
+      console.warn('Failed to fetch full variant details in background:', err);
+    }
   };
 
-  const handleColorSelect = (color: string) => {
-    const variant = productVariants.find(v => v.color === color);
-    if (variant) handleVariantChange(variant);
-  };
-
-  const handleSizeSelect = (size: string) => {
-    const variant = productVariants.find(v => v.size === size);
-    if (variant) handleVariantChange(variant);
+  // Helper for navigating to other products (Related / Recently Viewed)
+  const handleProductNavigation = (p: SimpleProduct | Product) => {
+    // Check if the target product is actually a variant of the current one
+    const variantMatch = productVariants.find(v => v.id === p.id);
+    if (variantMatch) {
+      handleVariantChange(variantMatch);
+      // Optional: scroll to top if needed, but variants usually want to stay in context
+    } else {
+      router.push(`/e-commerce/product/${p.id}`);
+    }
   };
 
   const handleToggleWishlist = () => {
@@ -277,11 +766,13 @@ export default function ProductDetailPage() {
     if (!selectedVariant || !selectedVariant.in_stock) return;
 
     const stockQty = Number(selectedVariant.stock_quantity ?? 0);
-    if (stockQty <= 0) return;
-
-    setIsAdding(true);
+    const currentAvailable = Number(selectedVariant.available_inventory ?? stockQty);
+    if (currentAvailable <= 0) return;
 
     try {
+      setIsAdding(true);
+      setCartStatus('loading');
+
       await cartService.addToCart({
         product_id: selectedVariant.id,
         quantity: quantity,
@@ -294,10 +785,12 @@ export default function ProductDetailPage() {
 
       await refreshCart();
 
+      setCartStatus('success');
       setTimeout(() => {
         setIsAdding(false);
+        setCartStatus('idle');
         setCartSidebarOpen(true);
-      }, 800);
+      }, 2000);
 
     } catch (error: any) {
       console.error('Error adding to cart:', error);
@@ -311,7 +804,49 @@ export default function ProductDetailPage() {
     }
   };
 
-  const handleAddSuggestedToCart = async (item: SimpleProduct, e: React.MouseEvent) => {
+  const handleBuyItNow = async () => {
+    if (!selectedVariant || !selectedVariant.in_stock) return;
+
+    const stockQty = Number(selectedVariant.stock_quantity ?? 0);
+    const currentAvailable = Number(selectedVariant.available_inventory ?? stockQty);
+    if (currentAvailable <= 0) return;
+
+    try {
+      setIsAdding(true);
+      const res = await cartService.addToCart({
+        product_id: selectedVariant.id,
+        quantity: quantity,
+        variant_options: {
+          color: selectedVariant.color,
+          size: selectedVariant.size,
+        },
+        notes: undefined
+      });
+
+      const cartItemId = res?.cart_item?.id;
+      if (cartItemId) {
+        localStorage.setItem('checkout-selected-items', JSON.stringify([cartItemId]));
+        router.push('/e-commerce/checkout');
+      } else {
+        // Fallback: try to find the item in the cart
+        const cartData = await cartService.getCart();
+        const addedItem = cartData.cart_items.find(it => it.product_id === selectedVariant.id);
+        if (addedItem) {
+          localStorage.setItem('checkout-selected-items', JSON.stringify([addedItem.id]));
+          router.push('/e-commerce/checkout');
+        } else {
+          router.push('/e-commerce');
+        }
+      }
+    } catch (error: any) {
+      console.error('Error in Buy it Now:', error);
+      alert(error.message || 'Failed to process Buy it Now. Please try again.');
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleQuickAddToCart = async (item: SimpleProduct, e: React.MouseEvent) => {
     e.stopPropagation();
 
     if (!item.in_stock) return;
@@ -341,29 +876,13 @@ export default function ProductDetailPage() {
     }
   };
 
-  const handleToggleSuggestedWishlist = (item: SimpleProduct, e: React.MouseEvent) => {
-    e.stopPropagation();
 
-    const isItemInWishlist = wishlistUtils.isInWishlist(item.id);
-
-    if (isItemInWishlist) {
-      wishlistUtils.remove(item.id);
-    } else {
-      wishlistUtils.add({
-        id: item.id,
-        name: item.name,
-        image: item.images?.[0]?.url || '/placeholder-product.png',
-        price: Number((item as any).selling_price ?? 0),
-        sku: item.sku,
-      });
-    }
-  };
 
   const handleQuantityChange = (delta: number) => {
     if (!selectedVariant) return;
-    const stockQty = Number(selectedVariant.stock_quantity ?? 0);
+    const availQty = Number(selectedVariant.available_inventory ?? selectedVariant.stock_quantity ?? 0);
     const newQuantity = quantity + delta;
-    if (newQuantity >= 1 && newQuantity <= stockQty) {
+    if (newQuantity >= 1 && newQuantity <= availQty) {
       setQuantity(newQuantity);
     }
   };
@@ -406,12 +925,12 @@ export default function ProductDetailPage() {
   // ---------------------------
   if (loading) {
     return (
-      <div className="min-h-screen bg-white">
+      <div className="ec-root bg-[var(--bg-root)] min-h-screen">
         <Navigation />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
-            <p className="mt-4 text-gray-600 text-sm">Loading product...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 mx-auto border-[var(--cyan)]"></div>
+            <p className="mt-4 text-sm text-[var(--text-muted)]">Loading product...</p>
           </div>
         </div>
       </div>
@@ -420,17 +939,17 @@ export default function ProductDetailPage() {
 
   if (error || !product || !selectedVariant) {
     return (
-      <div className="min-h-screen bg-white">
+      <div className="ec-root bg-[var(--bg-root)] min-h-screen">
         <Navigation />
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24">
           <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-900 mb-3">
+            <h1 className="text-2xl font-bold mb-3 text-[var(--text-primary)]">
               Product Not Found
             </h1>
-            <p className="text-gray-600 mb-6 text-sm">{error}</p>
+            <p className="mb-6 text-sm text-[var(--text-muted)]">{error}</p>
             <button
               onClick={() => router.back()}
-              className="inline-flex items-center justify-center rounded-xl bg-gray-900 px-5 py-3 text-xs font-semibold text-white hover:bg-black transition"
+              className="inline-flex items-center justify-center rounded-xl bg-[var(--text-primary)] px-5 py-3 text-xs font-semibold text-[var(--bg-root)] hover:opacity-90 transition"
             >
               Go Back
             </button>
@@ -439,522 +958,328 @@ export default function ProductDetailPage() {
       </div>
     );
   }
-
   // ---------------------------
   // Derived safe values
   // ---------------------------
-  const baseName = getBaseProductName(product.name);
+  const baseName = (product as any).base_name || getBaseProductName(product.name);
 
-  const sellingPrice = Number(selectedVariant.selling_price ?? 0);
+  const originalSellingPrice = Number(selectedVariant.selling_price ?? 0);
   const costPrice = Number((product as any).cost_price ?? 0);
+  
+  const categoryId = getCategoryId(product.category);
+  const salePromo = getApplicablePromotion(selectedVariant.id, categoryId ?? null);
+  const salePercent = salePromo?.discount_value ?? 0;
+  const salePrice = salePromo ? Math.max(0, originalSellingPrice - (originalSellingPrice * salePercent) / 100) : null;
+  const sellingPrice = salePrice ?? originalSellingPrice;
+
   const stockQty = Number(selectedVariant.stock_quantity ?? 0);
+  // available_inventory = total - reserved. Falls back to stockQty if backend doesn't send it.
+  const availableInventory = Number(selectedVariant.available_inventory ?? stockQty);
 
   const safeImages =
     Array.isArray(selectedVariant.images) && selectedVariant.images.length > 0
       ? selectedVariant.images
       : [{ id: 0, url: '/placeholder-product.png', is_primary: true, alt_text: 'Product' } as any];
 
-  const primaryImage =
-    safeImages[selectedImageIndex]?.url || safeImages[0]?.url;
+  const primaryImage = safeImages[selectedImageIndex]?.url || safeImages[0]?.url;
 
-  const discountPercent =
-    costPrice > sellingPrice && costPrice > 0
+  const discountPercent = salePromo
+    ? salePercent
+    : costPrice > sellingPrice && costPrice > 0
       ? Math.round(((costPrice - sellingPrice) / costPrice) * 100)
       : 0;
 
+  const hasMultipleVariants = productVariants.length > 1;
+  const selectedVariantIndex = Math.max(
+    0,
+    productVariants.findIndex((variant) => variant.id === selectedVariant.id)
+  );
+  const selectedVariationLabel = getVariationDisplayLabel(selectedVariant, selectedVariantIndex);
+
   // ---------------------------
-  // Premium UI
+  // Main render
   // ---------------------------
   return (
-    <div className="min-h-screen bg-white">
+    <div className="bg-[var(--bg-root)] min-h-screen text-[var(--text-primary)]">
       <Navigation />
+      <CartSidebar isOpen={cartSidebarOpen} onClose={() => setCartSidebarOpen(false)} />
 
-      <CartSidebar
-        isOpen={cartSidebarOpen}
-        onClose={() => setCartSidebarOpen(false)}
-      />
-
-      {/* Premium breadcrumb bar */}
-      <div className="border-b border-gray-100 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center gap-2 text-[11px] sm:text-xs text-gray-500">
-            <button
-              onClick={() => router.push('/e-commerce')}
-              className="hover:text-gray-900 transition"
-            >
-              Home
-            </button>
-            <span className="text-gray-300">/</span>
-            <button
-              onClick={() => router.back()}
-              className="hover:text-gray-900 transition"
-            >
-              {product.category?.name || 'Products'}
-            </button>
-            <span className="text-gray-300">/</span>
-            <span className="text-gray-900 font-medium">{baseName}</span>
+      {/* Breadcrumb & Navigation */}
+      <div className="border-b border-gray-100">
+        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-[10px] font-bold tracking-[0.15em] text-gray-400 uppercase">
+              <button onClick={() => router.push('/e-commerce')} className="hover:text-gray-900 transition-colors">HOME</button>
+              <span className="text-gray-200">/</span>
+              <button onClick={() => router.push('/e-commerce/search')} className="hover:text-gray-900 transition-colors">SHOP ALL PRODUCTS</button>
+              <span className="text-gray-200 lg:inline hidden">/</span>
+              <span className="text-gray-900 lg:inline hidden truncate max-w-[200px]">{baseName}</span>
+            </div>
+            
+            <div className="flex items-center gap-4 text-gray-400">
+               <button onClick={() => router.back()} className="hover:text-gray-900 transition-colors flex items-center gap-1">
+                 <ChevronLeft size={16} />
+               </button>
+               <button onClick={() => router.push('/e-commerce/search')} className="hover:text-gray-900 transition-colors">
+                 <Grid size={16} />
+               </button>
+               <button className="hover:text-gray-900 transition-colors opacity-30 cursor-not-allowed">
+                 <ChevronRight size={16} />
+               </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Luxury background wash */}
-      <div className="relative">
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-rose-100/50 blur-3xl" />
-          <div className="absolute top-24 -right-24 h-96 w-96 rounded-full bg-red-100/40 blur-3xl" />
-          <div className="absolute inset-0 bg-gradient-to-b from-white via-white to-white" />
-        </div>
+      {/* Main product section */}
+      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-8 md:pt-10 md:pb-12">
+        <div className="grid lg:grid-cols-2 gap-8 lg:gap-16 items-start">
 
-        {/* Product Details */}
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-12">
-          <div className="grid lg:grid-cols-2 gap-10 lg:gap-16 items-start">
+          {/* 3.1 — Image Gallery */}
+          <ProductImageGallery
+            images={safeImages}
+            productName={baseName}
+            discountPercent={discountPercent}
+            inStock={selectedVariant.in_stock}
+          />
 
-            {/* Image Gallery */}
+          {/* ── Buy Column ── */}
+          <div className="lg:sticky lg:top-24 space-y-4 font-[var(--font-poppins)]">
             <div className="space-y-4">
-              <div className="relative aspect-square bg-white rounded-3xl overflow-hidden border border-gray-100 shadow-sm group">
-                <div className="absolute inset-0 bg-gradient-to-br from-gray-50/60 to-transparent" />
-
-                <img
-                  src={primaryImage}
-                  alt={selectedVariant.name}
-                  className="relative w-full h-full object-contain p-8 md:p-10"
-                />
-
-                {safeImages.length > 1 && (
-                  <>
-                    <button
-                      onClick={handlePrevImage}
-                      className="absolute left-4 top-1/2 -translate-y-1/2 bg-white/90 backdrop-blur p-2.5 md:p-3 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-white"
-                    >
-                      <ChevronLeft size={22} className="text-gray-800" />
-                    </button>
-                    <button
-                      onClick={handleNextImage}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 bg-white/90 backdrop-blur p-2.5 md:p-3 rounded-full shadow-md opacity-0 group-hover:opacity-100 transition-all hover:bg-white"
-                    >
-                      <ChevronRight size={22} className="text-gray-800" />
-                    </button>
-                  </>
-                )}
-
-                {!selectedVariant.in_stock && (
-                  <div className="absolute top-4 left-4 rounded-xl bg-red-600 text-white px-3 py-1.5 text-[10px] sm:text-xs font-bold tracking-wide">
-                    OUT OF STOCK
-                  </div>
-                )}
-
-                {selectedVariant.in_stock && stockQty > 0 && stockQty < 5 && (
-                  <div className="absolute top-4 left-4 rounded-xl bg-amber-500 text-white px-3 py-1.5 text-[10px] sm:text-xs font-bold tracking-wide">
-                    Only {stockQty} left
-                  </div>
-                )}
-              </div>
-
-              {safeImages.length > 1 && (
-                <div className="grid grid-cols-4 gap-3">
-                  {safeImages.map((img, index) => (
-                    <button
-                      key={img.id}
-                      onClick={() => setSelectedImageIndex(index)}
-                      className={`aspect-square rounded-2xl overflow-hidden border bg-white transition-all ${
-                        selectedImageIndex === index
-                          ? 'border-gray-900 ring-1 ring-gray-900'
-                          : 'border-gray-100 hover:border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <img
-                        src={img.url}
-                        alt={`View ${index + 1}`}
-                        className="w-full h-full object-contain p-2"
-                      />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Right Buy Column (premium card) */}
-            <div className="lg:sticky lg:top-24 space-y-6">
-              <div className="rounded-3xl border border-gray-100 bg-white shadow-sm p-6 sm:p-8">
-                {/* Title */}
-                <div>
-                  <p className="text-[10px] uppercase tracking-widest text-gray-400">
-                    Errum Collection
+              {/* Product Info */}
+              <div className="space-y-4">
+                <div className="flex justify-between items-start">
+                  <p className="text-[10px] font-bold tracking-widest text-[#b83228] uppercase">
+                    New Collection
                   </p>
-                  <h1 className="mt-2 text-2xl sm:text-3xl font-bold text-gray-900">
-                    {baseName}
-                  </h1>
+                  <button className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-gray-500 hover:text-gray-900 transition-colors uppercase underline underline-offset-4">
+                    <HelpCircle size={14} />
+                    Ask a Question
+                  </button>
                 </div>
 
-                {/* Price */}
-                <div className="mt-5 flex flex-wrap items-center gap-3">
-                  <span className="text-2xl sm:text-3xl font-bold text-gray-900">
+                <h1 className="text-3xl sm:text-4xl font-semibold text-gray-900 tracking-tight leading-tight uppercase font-[var(--font-poppins)]">
+                  {baseName}
+                </h1>
+
+                <div className="flex items-baseline gap-4 pt-2">
+                  <span className="text-3xl font-semibold text-gray-900 font-[var(--font-libre)]">
                     {formatBDT(sellingPrice)}
                   </span>
-
-                  {costPrice > sellingPrice && sellingPrice > 0 && (
-                    <>
-                      <span className="text-sm sm:text-base text-gray-400 line-through">
-                        {formatBDT(costPrice)}
-                      </span>
-                      <span className="text-[10px] sm:text-xs font-semibold text-red-700 bg-red-50 border border-red-100 px-2.5 py-1 rounded-full">
-                        Save {discountPercent}%
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {/* Stock micro status */}
-                <div className="mt-3">
-                  {selectedVariant.in_stock && stockQty > 0 ? (
-                    <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 border border-emerald-100 px-3 py-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-                      <span className="text-[10px] sm:text-xs font-medium text-emerald-700">
-                        In stock • {stockQty} available
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="inline-flex items-center gap-2 rounded-full bg-red-50 border border-red-100 px-3 py-1">
-                      <span className="h-1.5 w-1.5 rounded-full bg-red-600" />
-                      <span className="text-[10px] sm:text-xs font-medium text-red-700">
-                        Out of stock
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* SKU */}
-                {selectedVariant.sku && (
-                  <div className="mt-4 text-[11px] text-gray-500">
-                    SKU: <span className="font-semibold text-gray-800">{selectedVariant.sku}</span>
-                  </div>
-                )}
-
-                {/* Description */}
-                {(product.short_description || product.description) && (
-                  <div className="mt-6 border-t border-gray-100 pt-5">
-                    <h3 className="text-xs font-semibold text-gray-900 tracking-wide uppercase">
-                      Description
-                    </h3>
-                    <p className="mt-2 text-sm text-gray-600 leading-relaxed">
-                      {product.short_description || product.description}
-                    </p>
-                  </div>
-                )}
-
-                {/* Sizes */}
-                {availableSizes.length > 0 && (
-                  <div className="mt-6">
-                    <label className="block text-xs font-semibold text-gray-900 mb-3 tracking-wide uppercase">
-                      Sizes
-                      {selectedVariant.size && (
-                        <span className="ml-2 font-normal text-gray-500">
-                          ({selectedVariant.size})
-                        </span>
-                      )}
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableSizes.map((size) => {
-                        const sizeVariant = productVariants.find(v => v.size === size);
-                        const isSelected = selectedVariant.size === size;
-                        const isAvailable = !!(sizeVariant && sizeVariant.in_stock);
-
-                        return (
-                          <button
-                            key={size}
-                            onClick={() => handleSizeSelect(size)}
-                            disabled={!isAvailable}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                              isSelected
-                                ? 'border-gray-900 bg-gray-900 text-white'
-                                : isAvailable
-                                ? 'border-gray-200 bg-white text-gray-800 hover:border-gray-300 hover:bg-gray-50'
-                                : 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed line-through'
-                            }`}
-                          >
-                            {size}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Colors */}
-                {availableColors.length > 0 && (
-                  <div className="mt-6">
-                    <label className="block text-xs font-semibold text-gray-900 mb-3 tracking-wide uppercase">
-                      Colors
-                      {selectedVariant.color && (
-                        <span className="ml-2 font-normal text-gray-500">
-                          ({selectedVariant.color})
-                        </span>
-                      )}
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {availableColors.map((color) => {
-                        const colorVariant = productVariants.find(v => v.color === color);
-                        const isSelected = selectedVariant.color === color;
-                        const isAvailable = !!(colorVariant && colorVariant.in_stock);
-
-                        return (
-                          <button
-                            key={color}
-                            onClick={() => handleColorSelect(color)}
-                            disabled={!isAvailable}
-                            className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-all ${
-                              isSelected
-                                ? 'border-gray-900 bg-gray-900 text-white'
-                                : isAvailable
-                                ? 'border-gray-200 bg-white text-gray-800 hover:border-gray-300 hover:bg-gray-50'
-                                : 'border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed line-through'
-                            }`}
-                          >
-                            {color}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Quantity + Actions */}
-                <div className="mt-7">
-                  <div className="flex items-center justify-between gap-4">
-                    <label className="text-xs font-semibold text-gray-900 tracking-wide uppercase">
-                      Quantity
-                    </label>
-                    <div className="flex items-center rounded-xl border border-gray-200 bg-white">
-                      <button
-                        onClick={() => handleQuantityChange(-1)}
-                        disabled={quantity <= 1}
-                        className="p-2.5 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                        aria-label="Decrease quantity"
-                      >
-                        <Minus size={16} />
-                      </button>
-                      <span className="px-4 py-1 text-sm font-semibold min-w-[48px] text-center">
-                        {quantity}
-                      </span>
-                      <button
-                        onClick={() => handleQuantityChange(1)}
-                        disabled={quantity >= stockQty}
-                        className="p-2.5 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition"
-                        aria-label="Increase quantity"
-                      >
-                        <Plus size={16} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 flex gap-2">
-                    <button
-                      onClick={handleAddToCart}
-                      disabled={!selectedVariant.in_stock || isAdding || stockQty <= 0}
-                      className={`
-                        flex-1 rounded-xl py-3.5 text-sm font-semibold
-                        flex items-center justify-center gap-2 transition-all
-                        ${isAdding
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-gray-900 text-white hover:bg-black disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed'
-                        }
-                      `}
-                    >
-                      <ShoppingCart size={18} />
-                      {isAdding ? 'Added' : 'Add to Cart'}
-                    </button>
-
-                    <button
-                      onClick={handleToggleWishlist}
-                      className={`rounded-xl border px-3.5 py-3.5 transition-all ${
-                        isInWishlist
-                          ? 'border-red-200 bg-red-50 text-red-700'
-                          : 'border-gray-200 bg-white text-gray-700 hover:border-red-200 hover:bg-red-50 hover:text-red-700'
-                      }`}
-                      aria-label="Wishlist"
-                    >
-                      <Heart size={18} className={isInWishlist ? 'fill-current' : ''} />
-                    </button>
-
-                    <button
-                      onClick={handleShare}
-                      className="rounded-xl border border-gray-200 bg-white px-3.5 py-3.5 text-gray-700 hover:bg-gray-50 transition"
-                      aria-label="Share"
-                    >
-                      <Share2 size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Meta */}
-                <div className="mt-6 border-t border-gray-100 pt-5 space-y-2 text-[11px] sm:text-xs">
-                  {product.category && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Category</span>
-                      <span className="font-semibold text-gray-800">
-                        {product.category.name}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Availability</span>
-                    <span className={`font-semibold ${
-                      selectedVariant.in_stock && stockQty > 0 ? 'text-emerald-700' : 'text-red-700'
-                    }`}>
-                      {selectedVariant.in_stock && stockQty > 0
-                        ? `In Stock (${stockQty})`
-                        : 'Out of Stock'
-                      }
+                  {(costPrice > sellingPrice || salePromo) && originalSellingPrice > 0 && (
+                    <span className="text-xl line-through text-gray-400 font-semibold font-[var(--font-libre)]">
+                      {formatBDT(salePromo ? originalSellingPrice : Math.max(costPrice, originalSellingPrice))}
                     </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Urgency & Social Proof */}
+              <div className="space-y-6">
+                {/* Live Activity */}
+                <div className="flex items-center gap-2 text-sm font-medium text-gray-600 bg-gray-50/80 w-fit px-4 py-2 rounded-full border border-gray-100">
+                  <Eye size={16} className="text-gray-400" />
+                  <span><span className="text-gray-900 font-bold">{liveViewers}</span> people viewing this right now</span>
+                </div>
+
+                {/* Stock Progress Bar */}
+                <div className="space-y-2 p-3 bg-gray-50/50 rounded-xl border border-gray-100">
+                  <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest">
+                    <span className={availableInventory <= 5 ? 'text-[#b83228]' : 'text-gray-600'}>
+                      {availableInventory <= 0 ? 'Out of stock' :
+                        availableInventory <= 8 ? `HURRY! ONLY ${availableInventory} LEFT IN STOCK.` :
+                          `IN STOCK — READY TO SHIP`}
+                    </span>
+                    <span className="text-gray-400">{Math.round(Math.min((availableInventory / 25) * 100, 100))}%</span>
+                  </div>
+                  <div className="h-[4px] w-full bg-white rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-1000 ease-out ${
+                        availableInventory <= 5 ? 'bg-[#b83228]' : 'bg-gray-400'
+                      }`}
+                      style={{ width: `${Math.min((availableInventory / 25) * 100, 100)}%` }}
+                    />
                   </div>
                 </div>
               </div>
 
-              {/* Subtle trust strip */}
-              <div className="rounded-2xl border border-gray-100 bg-white p-4 sm:p-5 text-xs text-gray-600">
-                <div className="flex flex-wrap gap-x-6 gap-y-2">
-                  <span>Premium selection</span>
-                  <span>Authentic sourcing</span>
-                  <span>In-store support</span>
-                  <span>Secure checkout</span>
+              {/* 3.5 — Variant Selector */}
+              {hasMultipleVariants && (
+                <VariantSelector
+                  variants={productVariants}
+                  selectedVariant={selectedVariant}
+                  onVariantChange={handleVariantChange}
+                  baseName={baseName}
+                />
+              )}
+
+               {/* Quantity + CTAs */}
+              <div className="space-y-4 pt-2">
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center h-[52px] border border-gray-200 rounded-lg overflow-hidden bg-white">
+                    <button onClick={() => handleQuantityChange(-1)} disabled={quantity <= 1}
+                      className="px-4 h-full text-gray-400 hover:text-black transition-colors disabled:opacity-20">
+                      <Minus size={14} strokeWidth={3} />
+                    </button>
+                    <span className="min-w-[40px] text-center font-bold text-gray-900">{quantity}</span>
+                    <button onClick={() => handleQuantityChange(1)} disabled={quantity >= availableInventory}
+                      className="px-4 h-full text-gray-400 hover:text-black transition-colors disabled:opacity-20">
+                      <Plus size={14} strokeWidth={3} />
+                    </button>
+                  </div>
+
+                  <button
+                    ref={mainCtaRef}
+                    onClick={handleAddToCart}
+                    disabled={!selectedVariant.in_stock || isAdding || availableInventory <= 0}
+                    className={`flex-1 h-[52px] rounded-lg font-bold uppercase tracking-wider text-[11px] flex items-center justify-center gap-3 transition-all active:scale-95 disabled:bg-gray-100 disabled:text-gray-400 ${
+                      cartStatus === 'success' ? 'bg-[#1a9456] text-white' : 'bg-black text-white hover:bg-gray-800'
+                    }`}
+                  >
+                    {cartStatus === 'idle' && <ShoppingCart size={16} />}
+                    {cartStatus === 'loading' && <div className="h-5 w-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                    {cartStatus === 'success' && <span>✓ Added!</span>}
+                    {cartStatus === 'idle' && (availableInventory <= 0 ? 'SOLD OUT' : 'ADD TO CART')}
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleBuyItNow}
+                  disabled={!selectedVariant.in_stock || isAdding || availableInventory <= 0}
+                  className="w-full h-[52px] bg-black text-white rounded-lg font-bold uppercase tracking-wider text-[11px] transition-all hover:bg-gray-800 active:scale-95 disabled:opacity-50"
+                >
+                  BUY IT NOW
+                </button>
+              </div>
+
+              {/* Payment Options */}
+              <div className="pt-0">
+                <img
+                  src="/payment_option.png"
+                  alt="Payment Options"
+                  className="w-[85%] h-auto object-contain mx-auto lg:mx-0"
+                />
+              </div>
+
+              {/* Accordion Sections */}
+              <div className="pt-4 space-y-2 border-t border-gray-100">
+                {[
+                  { title: 'DESCRIPTION', content: product.description || product.short_description },
+                  { title: 'ADDITIONAL INFORMATION', content: `SKU: ${selectedVariant.sku}\nCategory: ${getCategoryName(product.category)}` }
+                ].map((section, idx) => (
+                  <details key={idx} className="group overflow-hidden rounded-md border border-gray-100">
+                    <summary className="flex items-center justify-between cursor-pointer list-none p-3 bg-gray-50/50 hover:bg-gray-50 transition-colors">
+                      <span className="text-[10px] font-bold tracking-widest text-gray-900">
+                        {section.title}
+                      </span>
+                      <Plus size={14} className="text-gray-400 group-open:rotate-45 transition-transform" />
+                    </summary>
+                    <div className="p-3 text-sm text-gray-600 leading-relaxed whitespace-pre-line bg-white border-t border-gray-100">
+                      {section.content}
+                    </div>
+                  </details>
+                ))}
+              </div>
+
+              {/* Bottom Trust Badges */}
+              <div className="grid grid-cols-3 gap-2 pt-4 border-t border-gray-100">
+                <div className="flex flex-col items-center text-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-400">
+                    <Truck size={16} strokeWidth={1.5} />
+                  </div>
+                  <span className="text-[8px] font-bold tracking-wider text-gray-900 uppercase">Shipping Worldwide</span>
+                </div>
+                <div className="flex flex-col items-center text-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-400">
+                    <RotateCcw size={16} strokeWidth={1.5} />
+                  </div>
+                  <span className="text-[8px] font-bold tracking-wider text-gray-900 uppercase">Easy Returns</span>
+                </div>
+                <div className="flex flex-col items-center text-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-400">
+                    <ShieldCheck size={16} strokeWidth={1.5} />
+                  </div>
+                  <span className="text-[8px] font-bold tracking-wider text-gray-900 uppercase">Secure Checkout</span>
                 </div>
               </div>
             </div>
           </div>
-
-          {/* YOU MAY ALSO LIKE */}
-          <div className="mt-14 md:mt-20">
-            <div className="flex items-end justify-between gap-4 mb-6">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-gray-400">
-                  Curated for you
-                </p>
-                <h2 className="text-xl sm:text-2xl font-bold text-gray-900">
-                  You may also like
-                </h2>
-              </div>
-            </div>
-
-            {loadingSuggestions && (
-              <div className="flex justify-center py-12">
-                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-gray-900"></div>
-              </div>
-            )}
-
-            {!loadingSuggestions && suggestedProducts.length === 0 && (
-              <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center">
-                <p className="text-gray-500 text-sm">
-                  No suggested products available at the moment.
-                </p>
-              </div>
-            )}
-
-            {!loadingSuggestions && suggestedProducts.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                {suggestedProducts.map((item) => {
-                  const itemImage = item.images?.[0]?.url || '/placeholder-product.png';
-                  const isItemInWishlist = wishlistUtils.isInWishlist(item.id);
-                  const sp = Number((item as any).selling_price ?? 0);
-
-                  return (
-                    <div
-                      key={item.id}
-                      className="group bg-white rounded-2xl border border-gray-100 overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
-                      onClick={() => router.push(`/e-commerce/product/${item.id}`)}
-                    >
-                      <div className="relative aspect-square bg-gray-50">
-                        <img
-                          src={itemImage}
-                          alt={item.name}
-                          className="w-full h-full object-contain p-5 group-hover:scale-[1.03] transition-transform duration-300"
-                        />
-
-                        {!item.in_stock && (
-                          <div className="absolute top-3 left-3 bg-red-600 text-white px-2.5 py-1 rounded-full text-[10px] font-bold">
-                            OUT OF STOCK
-                          </div>
-                        )}
-
-                        <div className="absolute bottom-3 right-3 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={(e) => handleToggleSuggestedWishlist(item, e)}
-                            className={`p-2 rounded-full shadow-sm border transition ${
-                              isItemInWishlist
-                                ? 'bg-red-600 text-white border-red-600'
-                                : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                            }`}
-                            title={isItemInWishlist ? 'Remove from wishlist' : 'Add to wishlist'}
-                          >
-                            <Heart
-                              className={`h-4 w-4 ${isItemInWishlist ? 'fill-current' : ''}`}
-                            />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="p-4">
-                        <h3 className="text-sm font-semibold text-gray-900 line-clamp-2 min-h-[2.5rem]">
-                          {item.name}
-                        </h3>
-
-                        <div className="mt-3 flex items-center justify-between">
-                          <span className="text-base font-bold text-gray-900">
-                            {formatBDT(sp)}
-                          </span>
-
-                          <button
-                            onClick={(e) => handleAddSuggestedToCart(item, e)}
-                            disabled={!item.in_stock}
-                            className={`p-2.5 rounded-full transition ${
-                              item.in_stock
-                                ? 'bg-gray-900 text-white hover:bg-black'
-                                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                            }`}
-                            title={item.in_stock ? 'Add to cart' : 'Out of stock'}
-                          >
-                            <ShoppingCart className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Features */}
-          <div className="mt-14 md:mt-18 border-t border-gray-100 pt-10">
-            <div className="grid md:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-gray-100">
-                <h3 className="font-bold text-gray-900 mb-2 text-sm">
-                  Free Shipping
-                </h3>
-                <p className="text-gray-600 text-sm">
-                  Free shipping on all orders over ৳5,000
-                </p>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-gray-100">
-                <h3 className="font-bold text-gray-900 mb-2 text-sm">
-                  Easy Returns
-                </h3>
-                <p className="text-gray-600 text-sm">
-                  30-day return policy for all products
-                </p>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-gray-100">
-                <h3 className="font-bold text-gray-900 mb-2 text-sm">
-                  Secure Payment
-                </h3>
-                <p className="text-gray-600 text-sm">
-                  100% secure payment processing
-                </p>
-              </div>
-            </div>
-          </div>
-
         </div>
+
+        {/* Related Products */}
+        {relatedProducts.length > 0 && (
+          <div className="mt-16 sm:mt-24 py-16 bg-[var(--bg-surface)] border-y border-[var(--border-default)] -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+            <div className="max-w-[1400px] mx-auto">
+              <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-[var(--text-muted)] mb-2 block">Pairs Well With</span>
+              <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between mb-10 gap-4">
+                <h2 className="text-3xl sm:text-4xl font-light text-[var(--text-primary)] tracking-tight"
+                  style={{ fontFamily: "'Poppins', sans-serif" }}>
+                  Related Essentials
+                </h2>
+                <button
+                  onClick={() => {
+                    const slug = getCategorySlug(product.category);
+                    if (slug) {
+                      router.push(`/e-commerce/${slug}`);
+                    } else {
+                      router.push('/e-commerce/search?category=' + getCategoryId(product.category));
+                    }
+                  }}
+                  className="text-xs font-bold uppercase tracking-widest text-[var(--text-primary)] border-b border-[var(--text-primary)] pb-1 hover:opacity-60 transition-all self-start"
+                >
+                  View Full Collection
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-6 sm:gap-8 sm:grid-cols-3 lg:grid-cols-4">
+                {relatedProducts.map(item => (
+                  <PremiumProductCard
+                    key={item.id}
+                    product={item}
+                    compact
+                    onOpen={handleProductNavigation}
+                    onAddToCart={(p, e) => handleQuickAddToCart(p, e)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3.7 — Recently Viewed Strip */}
+        {recentlyViewed.length > 0 && (
+          <div className="py-16 bg-[var(--bg-surface)] border-b border-[var(--border-default)] -mx-4 px-4 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+            <div className="max-w-[1400px] mx-auto">
+              <span className="text-[10px] uppercase tracking-[0.2em] font-bold text-[var(--text-muted)] mb-2 block" style={{ fontFamily: "'Poppins', sans-serif" }}>Your History</span>
+              <h2 className="text-3xl sm:text-4xl font-light text-[var(--text-primary)] tracking-tight mb-10"
+                style={{ fontFamily: "'Poppins', sans-serif" }}>
+                Recently Viewed
+              </h2>
+              <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-hide no-scrollbar">
+                {recentlyViewed.map(item => (
+                  <div key={item.id} className="min-w-[180px] sm:min-w-[220px]">
+                    <PremiumProductCard
+                      product={item}
+                      compact
+                      onOpen={handleProductNavigation}
+                      onAddToCart={(p, e) => handleQuickAddToCart(p, e)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
+
+      <StickyAddToCart
+        isVisible={isStickyVisible}
+        productName={selectedVariant.name}
+        priceText={formatBDT(sellingPrice)}
+        isAdding={isAdding}
+        disabled={!selectedVariant.in_stock || availableInventory <= 0}
+        onAddToCart={handleAddToCart}
+      />
     </div>
   );
 }

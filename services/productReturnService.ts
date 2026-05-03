@@ -7,6 +7,7 @@ export interface ProductReturn {
   order_id: number;
   customer_id: number;
   store_id: number;
+  received_at_store_id?: number;
   return_reason: 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
   return_type?: 'customer_return' | 'store_return' | 'warehouse_return';
   status: ReturnStatus;
@@ -45,7 +46,7 @@ export type ReturnStatus =
   | 'pending'
   | 'approved'
   | 'rejected'
-  | 'processing'
+  | 'processed'
   | 'completed'
   | 'refunded';
 
@@ -72,6 +73,7 @@ export interface ProductReturnFilters {
   sort_order?: 'asc' | 'desc';
   per_page?: number;
   page?: number;
+  skipStoreScope?: boolean;
 }
 
 export interface CreateReturnRequest {
@@ -132,6 +134,7 @@ export interface StatisticsFilters {
   from_date?: string;
   to_date?: string;
   store_id?: number;
+  skipStoreScope?: boolean;
 }
 
 // Service Class
@@ -142,7 +145,11 @@ class ProductReturnService {
    * Get all product returns with filters and pagination
    */
   async getAll(filters?: ProductReturnFilters) {
-    const response = await axiosInstance.get(this.basePath, { params: filters });
+    const { skipStoreScope, ...params } = filters || {};
+    const response = await axiosInstance.get(this.basePath, { 
+      params,
+      skipStoreScope
+    } as any);
     return response.data;
   }
 
@@ -151,6 +158,14 @@ class ProductReturnService {
    */
   async getById(id: number) {
     const response = await axiosInstance.get(`${this.basePath}/${id}`);
+    return response.data;
+  }
+
+  /**
+   * Quick-complete a return (Atomic: create + QC + approve + process + complete)
+   */
+  async quickComplete(data: CreateReturnRequest) {
+    const response = await axiosInstance.post(`${this.basePath}/quick-complete`, data);
     return response.data;
   }
 
@@ -239,9 +254,11 @@ class ProductReturnService {
    * Get return statistics
    */
   async getStatistics(filters?: StatisticsFilters) {
+    const { skipStoreScope, ...params } = filters || {};
     const response = await axiosInstance.get(`${this.basePath}/statistics`, {
-      params: filters,
-    });
+      params,
+      skipStoreScope
+    } as any);
     return response.data;
   }
 

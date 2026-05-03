@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import Link from 'next/link';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
@@ -9,7 +10,6 @@ import { Copy, Check, Image as ImageIcon, Eye, Link as LinkIcon } from 'lucide-r
 import inventoryService, { GlobalInventoryItem } from '@/services/inventoryService';
 import productImageService from '@/services/productImageService';
 import storeService from '@/services/storeService';
-import productService from '@/services/productService';
 
 // NOTE: Gallery used to fetch batches per-product to calculate price.
 // That pattern is very slow at scale (N products => N extra requests).
@@ -38,7 +38,7 @@ interface ProductWithInventory {
 }
 
 export default function GalleryPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [products, setProducts] = useState<ProductWithInventory[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,8 +48,6 @@ export default function GalleryPage() {
   const [allLightboxImages, setAllLightboxImages] = useState<string[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [searchTerm, setSearchTerm] = useState('');
-  const [serverMatchedIds, setServerMatchedIds] = useState<number[] | null>(null);
-  const [serverSearching, setServerSearching] = useState(false);
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [copiedImage, setCopiedImage] = useState<string | null>(null);
@@ -79,47 +77,6 @@ export default function GalleryPage() {
     else document.documentElement.classList.remove('dark');
   }, [darkMode]);
 
-  // ✅ Backend-powered multi-language search for Gallery (Bangla/Roman/English + fuzzy)
-  useEffect(() => {
-    const q = searchTerm.trim();
-    if (!q || q.length < 2) {
-      setServerMatchedIds(null);
-      return;
-    }
-
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      try {
-        setServerSearching(true);
-        const hits = await productService.advancedSearchAll(
-          {
-            query: q,
-            is_archived: false,
-            enable_fuzzy: true,
-            fuzzy_threshold: 60,
-            search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-            per_page: 50,
-          },
-          { max_items: 12000 }
-        );
-
-        if (!cancelled) {
-          setServerMatchedIds(Array.isArray(hits) && hits.length > 0 ? hits.map((h: any) => h.id) : null);
-        }
-      } catch (e) {
-        console.warn('Gallery server search failed; falling back to local filter', e);
-        if (!cancelled) setServerMatchedIds(null);
-      } finally {
-        if (!cancelled) setServerSearching(false);
-      }
-    }, 300);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [searchTerm]);
-
   // Helper function to get proxied image URL
   const getProxiedImageUrl = (imageUrl: string): string => {
     return `/api/proxy-image?url=${encodeURIComponent(imageUrl)}`;
@@ -140,7 +97,7 @@ export default function GalleryPage() {
         if (!url) return null;
         if (url.startsWith('http')) return url;
         if (url.startsWith('/storage')) return `${baseUrl}${url}`;
-        return `${baseUrl}/storage/${String(url).replace(/^\/+/, '')}`;
+        return `${baseUrl}/storage/product-images/${url}`;
       })
       .filter(Boolean) as string[];
 
@@ -422,24 +379,10 @@ export default function GalleryPage() {
     else await copyImageToClipboard(imagePath);
   };
 
-  const filteredProducts = useMemo(() => {
-    const idSet = Array.isArray(serverMatchedIds) ? new Set(serverMatchedIds) : null;
-
-    return products.filter((p) => {
-    const q = searchTerm.toLowerCase().trim();
-
-    // Local quick match
-    const localMatch =
-      p.product_name.toLowerCase().includes(q) ||
-      p.sku.toLowerCase().includes(q);
-
-    // If server matched IDs exist, prefer that (fixes roman->Bangla mismatch)
-    const matchesSearch = !q
-      ? true
-      : Array.isArray(serverMatchedIds)
-      ? ((idSet?.has(p.product_id) ?? false) || localMatch)
-      : localMatch;
-
+  const filteredProducts = useMemo(() => products.filter((p) => {
+    const matchesSearch = p.product_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         p.sku.toLowerCase().includes(searchTerm.toLowerCase());
+    
     if (!matchesSearch) return false;
 
     const min = minPrice ? Number(String(minPrice).replace(/[^0-9.-]/g, '')) : null;
@@ -459,8 +402,7 @@ export default function GalleryPage() {
       default:
         return true;
     }
-    });
-  }, [products, searchTerm, minPrice, maxPrice, filterMode, serverMatchedIds]);
+  }), [products, searchTerm, minPrice, maxPrice, filterMode]);
 
   const totalUnits = useMemo(
     () => filteredProducts.reduce((sum, p) => sum + p.total_quantity, 0),
@@ -485,9 +427,6 @@ export default function GalleryPage() {
                 </h1>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
                   Showing {filteredProducts.length} products • Total: {totalUnits} units
-                  {serverSearching ? (
-                    <span className="ml-2">• Searching…</span>
-                  ) : null}
                   {imagesPending > 0 ? (
                     <span className="ml-2">• Loading images… ({imagesPending})</span>
                   ) : null}

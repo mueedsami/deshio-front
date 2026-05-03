@@ -1,7 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, Suspense } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, Edit, Trash2, Archive, Package, Tag, Calendar, User, ChevronLeft, ChevronRight } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -15,16 +16,41 @@ interface ProductDetailPageProps {
   params: { id: string };
 }
 
-export default function ProductDetailPage({ params }: ProductDetailPageProps) {
+export default function ProductDetailPage(props: ProductDetailPageProps) {
+  return (
+    <Suspense fallback={
+      <div className="flex h-screen bg-gray-50 dark:bg-gray-900 items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-gray-200 dark:border-gray-700 border-t-gray-900 dark:border-t-white rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600 dark:text-gray-400">Loading product view...</p>
+        </div>
+      </div>
+    }>
+      <ProductDetailPageContent {...props} />
+    </Suspense>
+  );
+}
+
+function ProductDetailPageContent({ params }: ProductDetailPageProps) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const productId = parseInt(params.id);
 
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+
+  const goBackSafely = () => {
+    const returnTo = searchParams.get('returnTo');
+    if (returnTo && returnTo.startsWith('/')) {
+      router.push(returnTo);
+      return;
+    }
+    router.back();
+  };
 
   useEffect(() => {
     fetchProduct();
@@ -67,7 +93,11 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     try {
       await productService.delete(productId);
       setToast({ message: 'Product deleted successfully', type: 'success' });
-      setTimeout(() => router.push('/product/list'), 1500);
+      setTimeout(() => {
+        const returnTo = searchParams.get('returnTo');
+        if (returnTo && returnTo.startsWith('/')) router.push(returnTo);
+        else router.push('/product/list');
+      }, 1500);
     } catch (error) {
       console.error('Failed to delete product:', error);
       setToast({ message: 'Failed to delete product', type: 'error' });
@@ -80,7 +110,11 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     try {
       await productService.archive(productId);
       setToast({ message: 'Product archived successfully', type: 'success' });
-      setTimeout(() => router.push('/product/list'), 1500);
+      setTimeout(() => {
+        const returnTo = searchParams.get('returnTo');
+        if (returnTo && returnTo.startsWith('/')) router.push(returnTo);
+        else router.push('/product/list');
+      }, 1500);
     } catch (error) {
       console.error('Failed to archive product:', error);
       setToast({ message: 'Failed to archive product', type: 'error' });
@@ -93,16 +127,53 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
     return `${process.env.NEXT_PUBLIC_API_URL?.replace('/api', '')}/storage/${imagePath}`;
   };
 
-  const images = product?.images || [];
-  const activeImages = images.filter(img => img.is_active);
-  const displayImages = activeImages.length > 0 ? activeImages : images;
-  const selectedImage = displayImages[selectedImageIndex];
+  // ─── Image display ───────────────────────────────────────────────────────────
+  // Backend's ProductController::show() populates `display_images` via
+  // ProductImageFallback::mergedActiveImages().  That method now:
+  //   • Returns only the variant's own images when it has them.
+  //   • Falls back to the base-product images when the variant has none.
+  //   • Trusts is_primary / sort_order verbatim from the DB.
+  //   • Marks the first image as primary only when NO image has is_primary=true.
+  //
+  // We prefer display_images; fall back to product.images (already ordered
+  // by the backend: is_primary DESC → sort_order → id).
+
+  const rawDisplayImages: any[] =
+    (product as any)?.display_images?.length > 0
+      ? (product as any).display_images
+      : (product?.images || [])
+          .filter((img: any) => img.is_active !== false)
+          .sort((a: any, b: any) => {
+            if (a.is_primary && !b.is_primary) return -1;
+            if (!a.is_primary && b.is_primary) return 1;
+            return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+          });
+
+  // Normalise URL field: display_images uses image_path; raw images also use
+  // image_path. The getImageUrl helper below handles path → full URL.
+  const normalizeImage = (img: any) => ({
+    ...img,
+    image_path:
+      img.image_path ||
+      (img.url ? img.url.replace(/^\/storage\//, '') : ''),
+  });
+
+  const displayImages = (rawDisplayImages.length > 0 ? rawDisplayImages : [{
+    id: 0,
+    image_path: '',
+    is_primary: true,
+    is_active: true,
+    sort_order: 0,
+  } as any]).map(normalizeImage);
+  const selectedImage = displayImages[selectedImageIndex] || displayImages[0];
 
   const nextImage = () => {
+    if (displayImages.length <= 1) return;
     setSelectedImageIndex((prev) => (prev + 1) % displayImages.length);
   };
 
   const prevImage = () => {
+    if (displayImages.length <= 1) return;
     setSelectedImageIndex((prev) => (prev - 1 + displayImages.length) % displayImages.length);
   };
 
@@ -133,7 +204,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
             <div className="text-center">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Product Not Found</h2>
               <button
-                onClick={() => router.push('/product/list')}
+                onClick={goBackSafely}
                 className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
               >
                 Back to Products
@@ -157,7 +228,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-4">
                 <button
-                  onClick={() => router.back()}
+                  onClick={goBackSafely}
                   className="p-2.5 hover:bg-white dark:hover:bg-gray-800 rounded-lg transition-colors border border-gray-200 dark:border-gray-700 shadow-sm"
                 >
                   <ArrowLeft className="w-5 h-5 text-gray-600 dark:text-gray-400" />
@@ -210,7 +281,7 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                         e.currentTarget.src = ERROR_IMG_SRC;
                       }}
                     />
-                    
+
                     {/* Image Navigation */}
                     {displayImages.length > 1 && (
                       <>
@@ -226,14 +297,14 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                         >
                           <ChevronRight className="w-5 h-5 text-gray-900 dark:text-white" />
                         </button>
-                        
+
                         {/* Image Counter */}
                         <div className="absolute bottom-4 right-4 bg-black/70 text-white px-3 py-1 rounded-full text-sm font-medium">
                           {selectedImageIndex + 1} / {displayImages.length}
                         </div>
                       </>
                     )}
-                    
+
                     {/* Primary Badge */}
                     {selectedImage?.is_primary && (
                       <div className="absolute top-4 left-4 bg-yellow-400 text-yellow-900 px-3 py-1 rounded-lg text-xs font-bold shadow-lg">
@@ -250,11 +321,10 @@ export default function ProductDetailPage({ params }: ProductDetailPageProps) {
                       <button
                         key={img.id}
                         onClick={() => setSelectedImageIndex(index)}
-                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${
-                          index === selectedImageIndex
+                        className={`relative aspect-square rounded-lg overflow-hidden border-2 transition-all ${index === selectedImageIndex
                             ? 'border-gray-900 dark:border-white ring-2 ring-gray-900 dark:ring-white'
                             : 'border-gray-200 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500'
-                        }`}
+                          }`}
                       >
                         <img
                           src={getImageUrl(img.image_path)}

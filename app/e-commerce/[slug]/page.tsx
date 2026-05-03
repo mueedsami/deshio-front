@@ -1,496 +1,750 @@
-'use client';
+"use client";
 
-import React, { useEffect, useState, useMemo } from 'react';
-import { useRouter, usePathname } from 'next/navigation';
-import catalogService, { Product, PaginationMeta, CatalogCategory } from '@/services/catalogService';
-import { ShoppingCart, Heart, Eye, ArrowLeft } from 'lucide-react';
-import CategorySidebar from '@/components/ecommerce/category/CategorySidebar';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import Navigation from '@/components/ecommerce/Navigation';
-import { getBaseProductName, getColorLabel } from '@/lib/productNameUtils';
+import CategorySidebar from '@/components/ecommerce/category/CategorySidebar';
+import { useCart } from '@/app/e-commerce/CartContext';
+import catalogService, {
+  CatalogCategory,
+  Product,
+  SimpleProduct,
+  GetProductsParams,
+} from '@/services/catalogService';
+import PremiumProductCard from '@/components/ecommerce/ui/PremiumProductCard';
+import { groupProductsByMother } from '@/lib/ecommerceProductGrouping';
+import { X } from 'lucide-react';
 
-// Types for product grouping
-interface ProductVariant {
-  id: number;
-  name: string;
-  sku: string;
-  color?: string;
-  size?: string;
-  image: string | null;
-  selling_price: string;
-  in_stock: boolean;
-  stock_quantity: number;
-}
+/**
+ * Normalizes keys for comparison (slugs, names, etc.)
+ */
+const normalizeKey = (value: string) =>
+  decodeURIComponent(value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ');
 
-interface ProductGroup {
-  sku: string;
-  baseName: string;
-  totalVariants: number;
-  variants: ProductVariant[];
-  primaryImage: string | null;
-  category?: {
-    id: number;
-    name: string;
+/**
+ * Flattens nested category tree into a flat list
+ */
+const flattenCategories = (cats: CatalogCategory[]): CatalogCategory[] => {
+  const result: CatalogCategory[] = [];
+
+  const walk = (items: CatalogCategory[]) => {
+    items.forEach((cat) => {
+      result.push(cat);
+      if (Array.isArray(cat.children) && cat.children.length > 0) {
+        walk(cat.children);
+      }
+    });
   };
-  hasVariations: boolean;
-  lowestPrice: number;
-  highestPrice: number;
-}
 
-export default function CategoryProductsPage() {
+  walk(cats);
+  return result;
+};
+
+/**
+ * Gets all descendant category nodes including the root
+ */
+const getDescendantCategoryNodes = (category: CatalogCategory | null | undefined): CatalogCategory[] => {
+  if (!category) return [];
+  const nodes: CatalogCategory[] = [];
+  const walk = (node: CatalogCategory) => {
+    nodes.push(node);
+    if (Array.isArray(node.children)) node.children.forEach(walk);
+  };
+  walk(category);
+  return nodes;
+};
+
+/**
+ * Builds a set of allowed category IDs and normalized keys for a given category
+ */
+const buildAllowedCategoryKeys = (category: CatalogCategory | null, slugFallback: string) => {
+  const ids = new Set<number>();
+  const keys = new Set<string>();
+
+  const addKey = (v: string | undefined | null) => {
+    const k = normalizeKey(String(v || ''));
+    if (k) keys.add(k);
+  };
+
+  if (category) {
+    for (const node of getDescendantCategoryNodes(category)) {
+      const id = Number((node as any)?.id || 0);
+      if (id > 0) ids.add(id);
+      addKey(node.name);
+      addKey(node.slug);
+    }
+  }
+
+  addKey(slugFallback);
+
+  return { ids, keys };
+};
+
+/**
+ * Verifies if a product belongs to the allowed categories
+ */
+const productMatchesAllowedCategory = (
+  product: Product | SimpleProduct,
+  allowed: { ids: Set<number>; keys: Set<string> }
+) => {
+  if ((!allowed.ids || allowed.ids.size === 0) && (!allowed.keys || allowed.keys.size === 0)) return true;
+
+  const cat: any = (product as any)?.category;
+  const catId = Number(cat?.id || 0);
+  if (catId > 0 && allowed.ids.has(catId)) return true;
+
+  const candidateKeys = [
+    cat?.slug,
+    cat?.name,
+    (product as any)?.category_slug,
+    (product as any)?.category_name,
+  ]
+    .map((v) => normalizeKey(String(v || '')))
+    .filter(Boolean);
+
+  return candidateKeys.some((k) => allowed.keys.has(k));
+};
+
+const UI_CARDS_PER_PAGE = 20;
+const MAX_API_PAGES = 50;
+const API_PER_PAGE = 60;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+/**
+ * Fetches products from the service without noisy error logging
+ */
+const getProductsSilent = (params: GetProductsParams) =>
+  catalogService.getProducts({ ...(params as any), _suppressErrorLog: true } as GetProductsParams);
+
+/**
+ * Groups flat products into representative mother products for display
+ */
+const buildCardProductsFromFlatCatalog = (rawProducts: (Product | SimpleProduct)[]): SimpleProduct[] => {
+  const grouped = groupProductsByMother(rawProducts as any[], {
+    useCategoryInKey: true,
+    preferSkuGrouping: true,
+  });
+
+  return grouped.map((group) => {
+    const rawVariants = (group.variants || [])
+      .map((variant) => variant.raw)
+      .filter(Boolean) as SimpleProduct[];
+
+    const uniqueVariants = new Map<number, SimpleProduct>();
+    rawVariants.forEach((variant) => {
+      const id = Number((variant as any)?.id) || 0;
+      if (!id) return;
+      if (!uniqueVariants.has(id)) uniqueVariants.set(id, variant);
+    });
+
+    const all = Array.from(uniqueVariants.values());
+
+    // Propagate images across variants
+    const fallbackImages =
+      all.find((v) => (v as any).images?.some((img: any) => img?.is_primary))?.images ||
+      all.find((v) => Array.isArray((v as any).images) && (v as any).images.length > 0)?.images ||
+      [];
+    const allWithImages = fallbackImages.length
+      ? all.map((v) =>
+        Array.isArray((v as any).images) && (v as any).images.length > 0
+          ? v
+          : { ...(v as any), images: fallbackImages }
+      )
+      : all;
+
+    const representative =
+      (allWithImages.find((v) => Number(v.id) === Number((group.representative as any)?.id)) as SimpleProduct) ||
+      (group.representative as SimpleProduct) ||
+      allWithImages.find((variant) => Number(variant.stock_quantity || 0) > 0) ||
+      allWithImages[0];
+
+    if (!representative) {
+      return {
+        id: Number(group.representativeId || 0),
+        name: group.baseName || 'Product',
+        display_name: group.baseName || 'Product',
+        base_name: group.baseName || 'Product',
+        sku: '',
+        selling_price: 0,
+        stock_quantity: 0,
+        description: '',
+        images: [],
+        in_stock: false,
+        has_variants: false,
+        total_variants: 0,
+        variants: [],
+      } as SimpleProduct;
+    }
+
+    const variantsWithoutRepresentative = allWithImages.filter(
+      (variant) => Number(variant.id) !== Number(representative.id)
+    );
+
+    return {
+      ...representative,
+      name: group.baseName || (representative as any).base_name || representative.name,
+      display_name: group.baseName || (representative as any).display_name || (representative as any).base_name || representative.name,
+      base_name: group.baseName || (representative as any).base_name || representative.name,
+      has_variants: all.length > 1,
+      total_variants: all.length,
+      variants: variantsWithoutRepresentative,
+    } as SimpleProduct;
+  });
+};
+
+/**
+ * Category feed page component
+ */
+export default function CategoryPage() {
+  const params = useParams() as any;
   const router = useRouter();
-  const pathname = usePathname();
-  
-  // Extract category from pathname (e.g., /category/electronics -> electronics)
-  const categorySlug = pathname?.split('/').pop() || '';
-  const categoryName = decodeURIComponent(categorySlug);
-  
-  const [products, setProducts] = useState<Product[]>([]);
-  const [pagination, setPagination] = useState<PaginationMeta | null>(null);
-  const [categories, setCategories] = useState<CatalogCategory[]>([]);
-  const [expandedCategories, setExpandedCategories] = useState<Set<number>>(new Set());
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  
-  // Filter states
-  const [sortBy, setSortBy] = useState<string>('created_at');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [currentPage, setCurrentPage] = useState(1);
+  const { addToCart, setIsCartOpen } = useCart();
 
-  // Fetch categories on mount
+  const categorySlug = params.slug || '';
+
+  const [products, setProducts] = useState<(Product | SimpleProduct)[]>([]);
+  const [categories, setCategories] = useState<CatalogCategory[]>([]);
+  const [activeCategoryName, setActiveCategoryName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [partialLoadWarning, setPartialLoadWarning] = useState<string | null>(null);
+
+  const [selectedSort, setSelectedSort] = useState<GetProductsParams['sort_by']>('newest');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState(0);
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isClosingFilters, setIsClosingFilters] = useState(false);
+  
+  // Notify navigation about mobile sidebar state
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('mobile-sidebar-toggle', { detail: { open: isFiltersOpen } }));
+    return () => {
+      window.dispatchEvent(new CustomEvent('mobile-sidebar-toggle', { detail: { open: false } }));
+    };
+  }, [isFiltersOpen]);
+
+  const [selectedPriceRange, setSelectedPriceRange] = useState<string>('all');
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
+  const fetchProductsIdRef = useRef(0);
+
+  type CacheEntry = {
+    key: string;
+    attemptParams: Record<string, any>;
+    fetchedApiPages: number;
+    apiLastPage: number | null;
+    hasMore: boolean;
+    rawById: Map<number, Product | SimpleProduct>;
+    rawOrdered: Array<Product | SimpleProduct>;
+    cards: SimpleProduct[];
+    partialWarning: string | null;
+  };
+
+  const cacheRef = useRef<Record<string, CacheEntry>>({});
+
+  const normalizedSlug = useMemo(() => normalizeKey(categorySlug), [categorySlug]);
+  const flatCategories = useMemo(() => flattenCategories(categories), [categories]);
+
+  /**
+   * Identifies the current active category from the flat list
+   */
+  const activeCategory = useMemo(() => {
+    return (
+      flatCategories.find((cat) => {
+        const slugKey = normalizeKey(cat.slug || '');
+        const nameKey = normalizeKey(cat.name || '');
+        return slugKey === normalizedSlug || nameKey === normalizedSlug;
+      }) || null
+    );
+  }, [flatCategories, normalizedSlug]);
+
+  /**
+   * Fetches the category tree for the sidebar
+   */
+  const fetchCategories = async () => {
+    try {
+      setCategoriesLoading(true);
+      const categoryData = await catalogService.getCategories();
+      setCategories(Array.isArray(categoryData) ? categoryData : []);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching categories:', err);
+      setError('Failed to load categories');
+    } finally {
+      setCategoriesLoading(false);
+    }
+  };
+
+  /**
+   * Builds the API parameters for the catalog request
+   */
+  const buildAttemptParams = (): Record<string, any> => {
+    const baseParams: GetProductsParams & Record<string, any> = {
+      page: 1,
+      per_page: API_PER_PAGE,
+      sort_by: selectedSort,
+      search: searchQuery || undefined,
+    };
+
+    if (selectedPriceRange !== 'all') {
+      const [min, max] = selectedPriceRange.split('-').map(Number);
+      if (!Number.isNaN(min)) baseParams.min_price = min;
+      if (!Number.isNaN(max)) baseParams.max_price = max;
+    }
+
+    if (activeCategory?.id || activeCategory?.slug) {
+      return {
+        ...baseParams,
+        category_id: activeCategory?.id,
+        category_slug: activeCategory?.slug,
+      };
+    }
+    if (categorySlug) {
+      return {
+        ...baseParams,
+        category_slug: categorySlug,
+      };
+    }
+    return { ...baseParams };
+  };
+
+  /**
+   * Generates a unique key for caching product results
+   */
+  const getCacheKey = () => {
+    const slugKey = normalizeKey(categorySlug || '');
+    return [
+      'cat',
+      slugKey,
+      String(activeCategory?.id || ''),
+      selectedSort || '',
+      selectedPriceRange,
+      searchQuery,
+    ].join('::');
+  };
+
+  /**
+   * Ensures enough cards are loaded/grouped to fill the requested UI page
+   */
+  const ensureCardsForUiPage = async (entry: CacheEntry, uiPage: number) => {
+    const targetCards = uiPage * UI_CARDS_PER_PAGE;
+    const allowedCategory = buildAllowedCategoryKeys(activeCategory || null, categorySlug);
+    const serverSideCategoryFiltered = Boolean(
+      (entry.attemptParams as any)?.category_slug || (entry.attemptParams as any)?.category_id
+    );
+
+    const appendFilteredUniqueProducts = (items: (Product | SimpleProduct)[] | undefined | null) => {
+      if (!Array.isArray(items) || items.length === 0) return 0;
+      let added = 0;
+      for (const rawItem of items) {
+        if (!rawItem) continue;
+        if (!serverSideCategoryFiltered) {
+          if (!productMatchesAllowedCategory(rawItem, allowedCategory)) continue;
+        }
+
+        const itemId = Number((rawItem as any).id || 0);
+        if (itemId > 0) {
+          if (entry.rawById.has(itemId)) continue;
+          entry.rawById.set(itemId, rawItem);
+        }
+
+        entry.rawOrdered.push(rawItem);
+        added += 1;
+      }
+      return added;
+    };
+
+    while (entry.cards.length < targetCards && entry.hasMore && entry.fetchedApiPages < MAX_API_PAGES) {
+      const nextApiPage = entry.fetchedApiPages + 1;
+
+      try {
+        const res = await getProductsSilent({ ...(entry.attemptParams as any), page: nextApiPage } as GetProductsParams);
+        entry.fetchedApiPages = nextApiPage;
+
+        const nextProducts = Array.isArray(res?.products) ? (res.products as any[]) : [];
+        const lastPage = Number(res?.pagination?.last_page || 0);
+        if (Number.isFinite(lastPage) && lastPage > 0) entry.apiLastPage = lastPage;
+
+        appendFilteredUniqueProducts(nextProducts);
+
+        if (nextProducts.length === 0) {
+          entry.hasMore = false;
+        } else if (res?.pagination?.has_more_pages === false) {
+          entry.hasMore = false;
+        } else if (entry.apiLastPage && entry.fetchedApiPages >= entry.apiLastPage) {
+          entry.hasMore = false;
+        }
+
+        entry.cards = buildCardProductsFromFlatCatalog(entry.rawOrdered);
+      } catch (err) {
+        console.warn(`Error fetching products api page ${nextApiPage}`, err);
+        entry.hasMore = false;
+        entry.partialWarning = 'Some products could not be loaded due to a server data issue.';
+        break;
+      }
+    }
+  };
+
+  /**
+   * Main function to fetch products for the display
+   */
+  const fetchProducts = async (uiPage = 1) => {
+    if (categoriesLoading) return;
+
+    const currentFetchId = ++fetchProductsIdRef.current;
+    setLoading(true);
+    setPartialLoadWarning(null);
+    try {
+      const key = getCacheKey();
+      let entry = cacheRef.current[key];
+      if (!entry) {
+        entry = {
+          key,
+          attemptParams: buildAttemptParams(),
+          fetchedApiPages: 0,
+          apiLastPage: null,
+          hasMore: true,
+          rawById: new Map(),
+          rawOrdered: [],
+          cards: [],
+          partialWarning: null,
+        };
+        cacheRef.current[key] = entry;
+      }
+
+      await ensureCardsForUiPage(entry, uiPage);
+
+      // Check if this is still the latest request before state updates
+      if (currentFetchId !== fetchProductsIdRef.current) return;
+
+      const computedTotalPages = Math.max(1, Math.ceil(entry.cards.length / UI_CARDS_PER_PAGE));
+      const safeUiPage = clamp(uiPage, 1, Math.max(computedTotalPages, entry.hasMore ? uiPage : computedTotalPages));
+      const startIndex = (safeUiPage - 1) * UI_CARDS_PER_PAGE;
+      const pageCards = entry.cards.slice(startIndex, startIndex + UI_CARDS_PER_PAGE);
+
+      setProducts(pageCards);
+      setTotalResults(entry.cards.length);
+      setCurrentPage(safeUiPage);
+      setTotalPages(entry.hasMore ? Math.max(computedTotalPages, safeUiPage + 1) : computedTotalPages);
+      setError(null);
+      setPartialLoadWarning(entry.partialWarning);
+    } catch (err) {
+      if (currentFetchId === fetchProductsIdRef.current) {
+        console.error('Error fetching products:', err);
+        setError('Failed to load products');
+        setPartialLoadWarning(null);
+        setProducts([]);
+        setTotalResults(0);
+      }
+    } finally {
+      if (currentFetchId === fetchProductsIdRef.current) {
+        setLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     fetchCategories();
   }, []);
 
-  // Fetch products when category or filters change
   useEffect(() => {
-    if (categoryName) {
-      fetchProducts();
-    }
-  }, [categoryName, sortBy, sortOrder, currentPage]);
+    setCurrentPage(1);
+    setImageErrors(new Set());
+    cacheRef.current = {};
+    fetchProducts(1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeCategory?.id, categoriesLoading, selectedPriceRange, selectedSort, searchQuery]);
 
-  const fetchCategories = async () => {
-    try {
-      const categoriesData = await catalogService.getCategories();
-      setCategories(categoriesData);
-    } catch (err: any) {
-      console.error('Failed to fetch categories:', err);
-    }
-  };
-
-  const fetchProducts = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-
-      const response = await catalogService.getProducts({
-        category: categoryName,
-        sort_by: sortBy as any,
-        sort_order: sortOrder,
-        page: currentPage,
-        per_page: 100, // Fetch more to properly group
-      });
-
-      setProducts(response.products);
-      setPagination(response.pagination);
-      
-    } catch (err: any) {
-      console.error('❌ Error fetching products:', err);
-      setError(err.message || 'Failed to load products');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Helper functions
-      // Group products with variation logic
-  const productGroups = useMemo((): ProductGroup[] => {
-    const groups = new Map<string, ProductGroup>();
-
-    products.forEach((product) => {
-      const sku = product.sku || `product-${product.id}`;
-      const baseName = getBaseProductName(product.name || '');
-      const extractedColor = getColorLabel(product.name || '');
-      
-      // Find primary image or use first image
-      const images = product.images || [];
-      const primaryImage = images.find(img => img.is_primary) || images[0];
-      const imageUrl = primaryImage?.url || null;
-
-      // Group by SKU only - products with same SKU are variations
-      const groupKey = sku;
-
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, {
-          sku: sku,
-          baseName,
-          totalVariants: 0,
-          variants: [],
-          primaryImage: imageUrl,
-          category: product.category ? {
-            id: product.category.id,
-            name: product.category.name
-          } : undefined,
-          hasVariations: false,
-          lowestPrice: Number(product.selling_price) || 0,
-          highestPrice: Number(product.selling_price) || 0,
-        });
-      }
-
-      const group = groups.get(groupKey)!;
-      
-      // Get variant-specific image
-      const variantPrimaryImage = images.find(img => img.is_primary) || images[0];
-      const variantImageUrl = variantPrimaryImage?.url || null;
-
-      const price = Number(product.selling_price) || 0;
-      group.lowestPrice = Math.min(group.lowestPrice, price);
-      group.highestPrice = Math.max(group.highestPrice, price);
-
-      group.variants.push({
-        id: product.id,
-        name: product.name,
-        sku: product.sku || `product-${product.id}`,
-        color: extractedColor,
-        size: undefined,
-        image: variantImageUrl,
-        selling_price: String(product.selling_price || 0),
-        in_stock: product.in_stock || false,
-        stock_quantity: product.stock_quantity || 0,
-      });
-    });
-
-    // Calculate variants and mark groups with variations
-    groups.forEach(group => {
-      const uniqueColors = new Set(group.variants.map(v => v.color).filter(Boolean));
-      
-      // If we have colors, count unique colors
-      if (uniqueColors.size > 0) {
-        group.totalVariants = uniqueColors.size;
-        group.hasVariations = uniqueColors.size > 1;
-      }
-      // Otherwise just count total variants
-      else {
-        group.totalVariants = group.variants.length;
-        group.hasVariations = group.variants.length > 1;
-      }
-    });
-
-    return Array.from(groups.values());
-  }, [products]);
-
-  const handleToggleCategory = (categoryId: number) => {
-    setExpandedCategories((prev) => {
+  const handleImageError = (productId: number) => {
+    setImageErrors((prev) => {
+      if (prev.has(productId)) return prev;
       const next = new Set(prev);
-      if (next.has(categoryId)) {
-        next.delete(categoryId);
-      } else {
-        next.add(categoryId);
-      }
+      next.add(productId);
       return next;
     });
   };
 
-  const handleSortChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const value = e.target.value;
-    const [newSortBy, newSortOrder] = value.split('-');
-    setSortBy(newSortBy);
-    setSortOrder(newSortOrder as 'asc' | 'desc');
-    setCurrentPage(1);
+  /**
+   * Handles adding a product to the cart
+   */
+  const handleAddToCart = async (product: SimpleProduct, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (product.has_variants) {
+        router.push(`/e-commerce/product/${product.id}`);
+        return;
+      }
+      await addToCart(product.id, 1);
+      setIsCartOpen(true);
+    } catch (err) {
+      console.error('Error adding to cart:', err);
+    }
   };
 
-  const handlePageChange = (page: number) => {
-    setCurrentPage(page);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+  /**
+   * Navigates to the product detail page
+   */
+  const handleProductClick = (product: SimpleProduct) => {
+    router.push(`/e-commerce/product/${product.id}`);
   };
 
-  const handleProductClick = (productId: number) => {
-    router.push(`/e-commerce/product/${productId}`);
+  /**
+   * Handles category selection change
+   */
+  const handleCategoryChange = (categoryNameOrSlug: string) => {
+    if (categoryNameOrSlug === 'all') {
+      router.push('/e-commerce/products');
+      return;
+    }
+    router.push(`/e-commerce/${encodeURIComponent(categoryNameOrSlug)}`);
   };
 
-  if (loading) {
+  const closeFilters = () => {
+    setIsClosingFilters(true);
+    setTimeout(() => {
+      setIsFiltersOpen(false);
+      setIsClosingFilters(false);
+    }, 450);
+  };
+
+  /**
+   * Handles pagination page change
+   */
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= totalPages) {
+      fetchProducts(newPage);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  if (loading && products.length === 0) {
     return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-800 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Loading products...</p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-50 py-12">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <p className="text-red-600">Error: {error}</p>
-            <button
-              onClick={() => router.back()}
-              className="mt-4 text-red-800 hover:text-red-1000"
-            >
-              Go Back
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (    
-    <div className="min-h-screen bg-gray-50">
-      <Navigation />
-      {/* Header */}
-      <div className="bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <button
-            onClick={() => router.push('/')}
-            className="flex items-center text-gray-600 hover:text-gray-900 mb-4"
-          >
-            <ArrowLeft className="h-5 w-5 mr-2" />
-            Back to Home
-          </button>
-          
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between">
-            <div>
-              <h1 className="text-3xl font-bold text-gray-900">
-                {categoryName}
-              </h1>
-              <p className="mt-2 text-gray-600">
-                {productGroups.length} product {productGroups.length === 1 ? 'group' : 'groups'} found
-                {products.length !== productGroups.length && ` (${products.length} total variants)`}
-              </p>
-            </div>
-
-            {/* Sort Dropdown */}
-            <div className="mt-4 md:mt-0">
-              <label htmlFor="sort" className="mr-2 text-sm text-gray-600">
-                Sort by:
-              </label>
-              <select
-                id="sort"
-                value={`${sortBy}-${sortOrder}`}
-                onChange={handleSortChange}
-                className="border border-gray-300 rounded-md px-4 py-2 focus:outline-none focus:ring-2 focus:ring-red-800"
-              >
-                <option value="created_at-desc">Newest First</option>
-                <option value="created_at-asc">Oldest First</option>
-                <option value="name-asc">Name: A to Z</option>
-                <option value="name-desc">Name: Z to A</option>
-              </select>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content with Sidebar */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <div className="flex gap-8">
-          {/* Sidebar */}
-          <CategorySidebar
-            categories={categories}
-            expandedCategories={expandedCategories}
-            onToggleCategory={handleToggleCategory}
-            activeCategoryName={categoryName}
-          />
-
-          {/* Products Grid */}
-          <div className="flex-1">
-            {productGroups.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-gray-600 text-lg mb-2">No products found in this category</p>
-                <p className="text-sm text-gray-500 mb-4">
-                  Category searched: "{categoryName}"
-                </p>
-                <button
-                  onClick={() => router.push('/')}
-                  className="mt-4 text-red-800 hover:text-red-900 font-medium"
-                >
-                  Browse All Categories
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {productGroups.map((group) => {
-                    // Get the first variant for display
-                    const firstVariant = group.variants[0];
-                    
-                    return (
-                      <div
-                        key={`${group.sku}-${firstVariant.id}`}
-                        className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer group"
-                        onClick={() => {
-                          // Find first variant that's in stock, or fall back to first variant
-                          const availableVariant = group.variants.find(v => v.in_stock) || firstVariant;
-                          handleProductClick(availableVariant.id);
-                        }}
-                      >
-                        {/* Product Image */}
-                        <div className="relative aspect-square overflow-hidden bg-gray-100">
-                          <img
-                            src={group.primaryImage || '/placeholder-product.png'}
-                            alt={group.baseName}
-                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                          />
-
-                          {/* Variation Badge */}
-                          {group.hasVariations && (
-                            <div className="absolute top-2 left-2 bg-red-800 text-white px-2 py-1 rounded-md text-xs font-semibold">
-                              {group.totalVariants} Colors
-                            </div>
-                          )}
-                          {/* Color Swatches for variations */}
-                          {group.hasVariations && group.variants.length > 1 && (
-                            <div className="absolute bottom-2 left-2 flex gap-1">
-                              {group.variants.slice(0, 5).map((variant, idx) => (
-                                <div
-                                  key={idx}
-                                  className="w-6 h-6 rounded-full border-2 border-white shadow-sm overflow-hidden"
-                                  title={variant.color}
-                                >
-                                  {variant.image ? (
-                                    <img 
-                                      src={variant.image} 
-                                      alt={variant.color || ''} 
-                                      className="w-full h-full object-cover"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full bg-gray-300"></div>
-                                  )}
-                                </div>
-                              ))}
-                              {group.variants.length > 5 && (
-                                <div className="w-6 h-6 rounded-full border-2 border-white shadow-sm bg-gray-200 flex items-center justify-center text-xs font-semibold text-gray-600">
-                                  +{group.variants.length - 5}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                  {/* Product Info */}
-                  <div className="p-4">
-                    {/* Product Title */}
-                    <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[1rem]">
-                      {group.baseName}
-                    </h3>
-                    
-                    {/* Category */}
-                    {group.category && (
-                      <p className="text-xs text-gray-500 mb-2">
-                        {group.category.name}
-                      </p>
-                    )}
-                    
-                    {/* Price */}
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="flex items-center space-x-3">
-                        {group.hasVariations && group.lowestPrice !== group.highestPrice ? (
-                          <span className="text-lg font-bold text-gray-900">
-                            ৳{group.lowestPrice.toFixed(2)} - ৳{group.highestPrice.toFixed(2)}
-                          </span>
-                        ) : (
-                          <span className="text-lg font-bold text-gray-900">
-                            ৳{Number(firstVariant.selling_price).toFixed(2)}
-                          </span>
-                        )}
-
-                        {group.hasVariations && (
-                          <span className="text-xs font-medium text-blue-600">
-                            {group.totalVariants} variations available
-                          </span>
-                        )}
-                      </div>
-
-                      {!group.hasVariations && (
-                        <span className={`text-xs font-medium ${
-                          group.variants.some(v => v.in_stock) ? 'text-green-600' : 'text-red-600'
-                        }`}>
-                          {group.variants.some(v => v.in_stock) 
-                            ? `In Stock (${group.variants.reduce((sum, v) => sum + v.stock_quantity, 0)})` 
-                            : 'Out of Stock'}
-                        </span>
-                      )}
-                    </div>
-                    {/* View Details Button */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Find first variant that's in stock, or fall back to first variant
-                        const availableVariant = group.variants.find(v => v.in_stock) || firstVariant;
-                        handleProductClick(availableVariant.id);
-                      }}
-                      disabled={group.variants.every(v => !v.in_stock)}
-                      className={`w-full text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors duration-200 ${
-                        group.variants.every(v => !v.in_stock)
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-red-800 hover:bg-red-900'
-                      }`}
-                    >
-                      {group.variants.every(v => !v.in_stock) ? 'Out of Stock' : 'Go To Product Details'}
-                    </button>
-                  </div>
-                      </div>
-                    );
-                  })}
+      <>
+        <Navigation />
+        <div className="ec-root bg-[var(--bg-root)] min-h-screen">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div className="animate-pulse">
+              <div className="h-8 rounded w-1/4 mb-8 animate-pulse" style={{ background: 'var(--ivory-ghost)' }}></div>
+              <div className="flex gap-8">
+                <div className="w-64 h-96 rounded-lg animate-pulse" style={{ background: 'var(--bg-surface)' }}></div>
+                <div className="flex-1 grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {[...Array(10)].map((_, i) => (
+                    <div key={i} className="aspect-[2/3] rounded-lg animate-pulse bg-gray-100" />
+                  ))}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
-                {/* Pagination */}
-                {pagination && pagination.last_page > 1 && (
-                  <div className="mt-12 flex justify-center">
-                    <nav className="flex items-center space-x-2">
+  return (
+    <>
+      <Navigation />
+
+      <div className="ec-root bg-[var(--bg-root)] min-h-screen">
+        <div className="bg-[var(--bg-surface)] border-b border-[var(--border-default)] mb-8">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+            <h1 className="text-4xl font-light text-[var(--text-primary)] mb-2" style={{ fontFamily: "'Poppins', sans-serif" }}>{activeCategory?.name || 'Products'}</h1>
+            <p className="text-[var(--text-muted)] font-medium tracking-wide ec-eyebrow uppercase text-xs">
+              {totalResults} {totalResults === 1 ? 'item' : 'items'} found
+            </p>
+          </div>
+        </div>
+
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-20">
+          <div className="flex flex-col lg:flex-row gap-8">
+            {/* Desktop sidebar */}
+            <aside className="hidden xl:block w-64 flex-shrink-0">
+              <CategorySidebar
+                categories={categories}
+                activeCategory={categorySlug}
+                onCategoryChange={handleCategoryChange}
+                selectedPriceRange={selectedPriceRange}
+                onPriceRangeChange={setSelectedPriceRange}
+                selectedStock="all"
+                onStockChange={() => { }}
+                selectedSort={selectedSort}
+                onSortChange={setSelectedSort}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+              />
+            </aside>
+
+            <main className="flex-1">
+              {/* Mobile: Filters button placeholder (removed in favor of bottom pill) */}
+
+              {partialLoadWarning && !error && (
+                <div className="mb-4 rounded-lg border border-amber-200/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+                  {partialLoadWarning}
+                </div>
+              )}
+
+              {error ? (
+                <div className="text-center py-24 bg-[var(--bg-surface)] rounded-3xl border border-[var(--border-default)]">
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-rose-50 mx-auto mb-6">
+                    <X className="h-8 w-8 text-rose-500" />
+                  </div>
+                  <h3 className="text-xl font-medium text-[var(--text-primary)] mb-2">Failed to load products</h3>
+                  <p className="text-[var(--text-secondary)] mb-8 max-w-xs mx-auto">We encountered an issue while reaching our catalog servers. Please check your connection and try again.</p>
+                  <button
+                    onClick={() => fetchProducts(currentPage)}
+                    className="px-10 py-3.5 bg-[var(--text-primary)] text-[var(--bg-root)] rounded-xl hover:opacity-90 font-bold transition-all"
+                  >
+                    Try Again
+                  </button>
+                </div>
+              ) : products.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-32 text-center bg-[var(--bg-surface)] rounded-3xl border border-dashed border-[var(--border-default)] ec-anim-fade-up">
+                  <div className="h-20 w-20 rounded-full bg-[var(--bg-root)] flex items-center justify-center mb-6">
+                    <X className="h-8 w-8 text-[var(--text-muted)] opacity-40" />
+                  </div>
+                  <h3 className="text-2xl font-light text-[var(--text-primary)] mb-2" style={{ fontFamily: "'Poppins', sans-serif" }}>Nothing here yet</h3>
+                  <p className="text-[var(--text-secondary)] mb-8 max-w-xs mx-auto text-sm">We couldn't find any products matching your current filters. Try adjusting them or browse our full collection.</p>
+                  <button 
+                    onClick={() => {
+                      setSelectedPriceRange('all');
+                      handleCategoryChange('all');
+                    }}
+                    className="ec-btn bg-[var(--text-primary)] text-[var(--bg-root)] hover:opacity-90 px-10"
+                  >
+                    Browse All Products
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-y-12 gap-x-4 md:gap-6">
+                    {products.map((product, index) => (
+                      <PremiumProductCard
+                        key={product.id}
+                        product={product as SimpleProduct}
+                        animDelay={Math.min(index, 9) * 60}
+                        imageErrored={imageErrors.has(product.id)}
+                        onImageError={handleImageError}
+                        onOpen={handleProductClick}
+                        onAddToCart={handleAddToCart}
+                      />
+                    ))}
+                  </div>
+
+                  {totalPages > 1 && (
+                    <div className="flex justify-center items-center mt-12 gap-1.5 sm:gap-3">
                       <button
                         onClick={() => handlePageChange(currentPage - 1)}
                         disabled={currentPage === 1}
-                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="px-3 py-2 sm:px-5 sm:py-2.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-2)] disabled:opacity-20 transition-all text-xs sm:text-sm"
                       >
                         Previous
                       </button>
 
-                      {Array.from({ length: Math.min(pagination.last_page, 5) }, (_, i) => {
-                        let page;
-                        if (pagination.last_page <= 5) {
-                          page = i + 1;
-                        } else if (currentPage <= 3) {
-                          page = i + 1;
-                        } else if (currentPage >= pagination.last_page - 2) {
-                          page = pagination.last_page - 4 + i;
-                        } else {
-                          page = currentPage - 2 + i;
-                        }
-                        
-                        return (
-                          <button
-                            key={page}
-                            onClick={() => handlePageChange(page)}
-                            className={`px-4 py-2 border rounded-md text-sm font-medium ${
-                              currentPage === page
-                                ? 'bg-red-800 text-white border-red-1000'
-                                : 'border-gray-300 text-gray-700 hover:bg-gray-50'
-                            }`}
-                          >
-                            {page}
-                          </button>
-                        );
-                      })}
+                      <div className="flex items-center gap-1 sm:gap-1.5 mx-1 sm:mx-2">
+                        {[...Array(Math.min(totalPages, 5))].map((_, i) => {
+                          const pageNum = i + 1;
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => handlePageChange(pageNum)}
+                              className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl text-xs sm:text-sm font-medium transition-all ${currentPage === pageNum
+                                  ? 'bg-[var(--cyan)] text-[var(--text-on-accent)] shadow-lg shadow-cyan/20'
+                                  : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border border-[var(--border-default)] hover:border-[var(--cyan)] hover:text-[var(--cyan)]'
+                                }`}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
+                      </div>
 
                       <button
                         onClick={() => handlePageChange(currentPage + 1)}
-                        disabled={currentPage === pagination.last_page}
-                        className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={currentPage === totalPages}
+                        className="px-3 py-2 sm:px-5 sm:py-2.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-default)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface-2)] disabled:opacity-20 transition-all text-xs sm:text-sm"
                       >
                         Next
                       </button>
-                    </nav>
-                  </div>
-                )}
-              </>
-            )}
+                    </div>
+                  )}
+                </>
+              )}
+            </main>
           </div>
         </div>
       </div>
-    </div>
+
+
+
+      {/* Mobile filter drawer (Bottom Sheet) */}
+      {isFiltersOpen && (
+        <div className="fixed inset-0 z-[100] xl:hidden flex items-end">
+          <div 
+            className={`fixed inset-0 bg-black/60 backdrop-blur-md ${isClosingFilters ? 'ec-anim-backdrop-out' : 'ec-anim-backdrop'}`}
+            onClick={closeFilters}
+          />
+          <div className={`relative z-[101] w-full bg-[var(--bg-lifted)] rounded-t-3xl shadow-[var(--shadow-lifted)] flex flex-col max-h-[90vh] ${isClosingFilters ? 'ec-anim-slide-out-down' : 'ec-anim-slide-in-up'}`}>
+            {/* Handle bar */}
+            <div className="w-12 h-1.5 bg-[var(--border-strong)] rounded-full mx-auto my-3" />
+            
+            <div className="flex items-center justify-between p-6 pt-2 border-b border-[var(--border-default)]">
+              <h2 className="text-xl font-bold text-[var(--text-primary)] uppercase tracking-tight" style={{ fontFamily: "'Poppins', sans-serif" }}>Filters & Sort</h2>
+              <button 
+                onClick={closeFilters} 
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-[var(--bg-surface)] transition-all"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto ec-scrollbar p-6 space-y-8 pb-32 focus-within:pb-80">
+              <CategorySidebar
+                categories={categories}
+                activeCategory={categorySlug}
+                onCategoryChange={(v) => {
+                  closeFilters();
+                  handleCategoryChange(v);
+                }}
+                selectedPriceRange={selectedPriceRange}
+                onPriceRangeChange={setSelectedPriceRange}
+                selectedStock="all"
+                onStockChange={() => { }}
+                selectedSort={selectedSort}
+                onSortChange={setSelectedSort}
+                searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
+              />
+            </div>
+
+            <div className="absolute bottom-0 left-0 right-0 p-6 bg-gradient-to-t from-[var(--bg-lifted)] via-[var(--bg-lifted)] to-transparent pt-10">
+              <button 
+                onClick={closeFilters}
+                className="w-full py-4 rounded-2xl bg-[var(--text-primary)] text-[var(--bg-root)] font-bold shadow-[var(--shadow-lifted)] hover:scale-[1.02] active:scale-[0.98] transition-all"
+              >
+                Show Results
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2.4 — Mobile Filter Pill */}
+      <div className="xl:hidden fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-full px-6 max-w-[320px]">
+        <button
+          onClick={() => setIsFiltersOpen(true)}
+          className="w-full py-4 bg-[var(--bg-lifted)] text-[var(--text-primary)] rounded-full font-bold shadow-[var(--shadow-lifted)] flex items-center justify-center gap-3 active:scale-95 transition-all text-sm uppercase tracking-widest border border-[var(--border-strong)]"
+          style={{ fontFamily: "'Poppins', sans-serif" }}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
+          Filter & Sort
+        </button>
+      </div>
+    </>
   );
 }

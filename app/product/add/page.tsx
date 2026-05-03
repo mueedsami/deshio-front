@@ -3,24 +3,28 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; 
 import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
-import Header from '../../../components/Header';
-import Sidebar from '../../../components/Sidebar';
-import Toast from '../../../components/Toast';
-import FieldsSidebar from '../../../components/product/FieldsSidebar';
-import DynamicFieldInput from '../../../components/product/DynamicFieldInput';
-import VariationCard from '../../../components/product/VariationCard';
-import ImageGalleryManager from '../../../components/product/ImageGalleryManager';
-import CategoryTreeSelector from '../../../components/product/CategoryTreeSelector';
-import { productService, Field, Product } from '../../../services/productService';
-import productImageService from '../../../services/productImageService';
-import categoryService, { Category, CategoryTree } from '../../../services/categoryService';
-import { vendorService, Vendor } from '../../../services/vendorService';
+import Header from '@/components/Header';
+import Sidebar from '@/components/Sidebar';
+import Toast from '@/components/Toast';
+import AccessDenied from '@/components/AccessDenied';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
+import FieldsSidebar from '@/components/product/FieldsSidebar';
+import DynamicFieldInput from '@/components/product/DynamicFieldInput';
+import VariationCard from '@/components/product/VariationCard';
+import ImageGalleryManager from '@/components/product/ImageGalleryManager';
+import CategoryTreeSelector from '@/components/product/CategoryTreeSelector';
+import { productService, Field, Product } from '@/services/productService';
+import productImageService from '@/services/productImageService';
+import categoryService, { Category, CategoryTree } from '@/services/categoryService';
+import { vendorService, Vendor } from '@/services/vendorService';
 import {
   FieldValue,
   CategorySelectionState,
   VariationData,
   FALLBACK_IMAGE_URL,
-} from '../../../types/product';
+} from '@/types/product';
+import { SIZE_PRESETS, getPresetLabel, type SizePresetKey } from '@/data/sizePresets';
 
 interface AddEditProductPageProps {
   productId?: string;
@@ -42,6 +46,9 @@ export default function AddEditProductPage({
   onSuccess,
 }: AddEditProductPageProps) {
   const router = useRouter();
+  const { permissionsResolved, isRole } = useAuth();
+  const canAccess = isRole(['super-admin', 'admin', 'online-moderator']);
+  const [modeResolved, setModeResolved] = useState(false);
   
   // Read from sessionStorage if props not provided
   const [productId, setProductId] = useState<string | undefined>(propProductId);
@@ -90,12 +97,13 @@ export default function AddEditProductPage({
         sessionStorage.removeItem('vendorId');
       }
     }
+    setModeResolved(true);
   }, [propProductId]);
 
   const isEditMode = mode === 'edit';
   const addVariationMode = mode === 'addVariation';
   
-  const [darkMode, setDarkMode] = useState<boolean>(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<'general' | 'variations'>('general');
   const [loading, setLoading] = useState<boolean>(false);
@@ -106,13 +114,29 @@ export default function AddEditProductPage({
   const [skuGroupProducts, setSkuGroupProducts] = useState<Product[]>([]);
   const [skuGroupLoading, setSkuGroupLoading] = useState<boolean>(false);
 
-  // Bulk update helpers for SKU group (frontend-only: loops update requests)
-  const [bulkSelectedIds, setBulkSelectedIds] = useState<number[]>([]);
-  const [bulkApplyName, setBulkApplyName] = useState<boolean>(true);
-  const [bulkApplyDescription, setBulkApplyDescription] = useState<boolean>(true);
-  const [bulkApplyCategory, setBulkApplyCategory] = useState<boolean>(true);
-  const [bulkApplyVendor, setBulkApplyVendor] = useState<boolean>(true);
-  const [bulkUpdating, setBulkUpdating] = useState<boolean>(false);
+  // Current product being edited (single variant)
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  // Edit-mode helpers (for single variant name editing with new schema)
+  const [editVariationSuffix, setEditVariationSuffix] = useState<string>('');
+
+  // Variations tab quick edit (edit multiple variants from one view)
+  const [quickEditMode, setQuickEditMode] = useState<boolean>(false);
+  const [rowEdits, setRowEdits] = useState<Record<number, {
+    variation_suffix: string;
+    description: string;
+  }>>({});
+  const [savingRowIds, setSavingRowIds] = useState<Record<number, boolean>>({});
+  const [savingAll, setSavingAll] = useState<boolean>(false);
+
+  // Common Edit (SKU group) state
+  const [commonBaseName, setCommonBaseName] = useState<string>('');
+  const [commonBrand, setCommonBrand] = useState<string>('');
+  const [applyCommonDescription, setApplyCommonDescription] = useState<boolean>(false);
+  const [applyCommonCategory, setApplyCommonCategory] = useState<boolean>(false);
+  const [applyCommonVendor, setApplyCommonVendor] = useState<boolean>(false);
+  const [applyCommonBrand, setApplyCommonBrand] = useState<boolean>(false);
+  const [commonSaving, setCommonSaving] = useState<boolean>(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -130,70 +154,175 @@ export default function AddEditProductPage({
   const [categories, setCategories] = useState<CategoryTree[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
 
+
+  // --- Size presets (Errum): quickly select full size chart for a category ---
+  const findCategoryNameById = (nodes: CategoryTree[], id: string): string => {
+    const target = String(id || '').trim();
+    if (!target) return '';
+    const stack: any[] = Array.isArray(nodes) ? [...nodes] : [];
+    while (stack.length) {
+      const node: any = stack.pop();
+      if (!node) continue;
+      if (String(node.id) === target) return String(node.name || '');
+      const children = (node.children || node.all_children || []) as any[];
+      if (Array.isArray(children) && children.length) stack.push(...children);
+    }
+    return '';
+  };
+
+  const selectedCategoryName = (() => {
+    const id = categorySelection.level0 ? String(categorySelection.level0) : '';
+    return id ? findCategoryNameById(categories, id) : '';
+  })();
+
+  const sizeContext = (() => {
+    const name = String(selectedCategoryName || '').toLowerCase();
+
+    const footwearKeywords = [
+      'shoe',
+      'shoes',
+      'sneaker',
+      'sneakers',
+      'footwear',
+      'boot',
+      'boots',
+      'sandal',
+      'sandals',
+      'loafer',
+      'loafers',
+      'heel',
+      'heels',
+    ];
+
+    const apparelKeywords = [
+      'dress',
+      'dresses',
+      'apparel',
+      'clothing',
+      't-shirt',
+      'tshirt',
+      'shirt',
+      'tops',
+      'top',
+      'pant',
+      'pants',
+      'trouser',
+      'trousers',
+      'jeans',
+      'kurti',
+      'kameez',
+      'salwar',
+      'saree',
+      'sari',
+      'jacket',
+      'hoodie',
+      'sweater',
+      'blouse',
+      'skirt',
+      'abaya',
+    ];
+
+    const isFootwear = footwearKeywords.some((k) => name.includes(k));
+    const isApparel = apparelKeywords.some((k) => name.includes(k));
+
+    if (isFootwear) return { options: SIZE_PRESETS.sneakers as readonly string[] };
+    if (isApparel) return { options: SIZE_PRESETS.dresses as readonly string[] };
+    return { options: null as readonly string[] | null };
+  })();
+
+  const getSizeOptionsForVariation = (sizes: string[]): string[] | undefined => {
+    if (!sizeContext.options) return undefined;
+    const existing = (Array.isArray(sizes) ? sizes : [])
+      .map((s) => String(s || '').trim())
+      .filter(Boolean);
+
+    return Array.from(new Set([...(sizeContext.options || []), ...existing]));
+  };
+
+  const sizePresetButtons = [
+    { key: 'sneakers', label: getPresetLabel('sneakers') },
+    { key: 'dresses', label: getPresetLabel('dresses') },
+  ];
+
+  const applySizePreset = (variationId: string, presetKey: SizePresetKey) => {
+    const preset = Array.isArray(SIZE_PRESETS[presetKey]) ? Array.from(SIZE_PRESETS[presetKey]) : [];
+    if (preset.length === 0) return;
+
+    setVariations((prev) =>
+      prev.map((v) => {
+        if (v.id !== variationId) return v;
+        const existing = (Array.isArray(v.sizes) ? v.sizes : [])
+          .map((s) => String(s || '').trim())
+          .filter(Boolean);
+        const merged = Array.from(new Set([...existing, ...preset]));
+        return { ...v, sizes: merged.length > 0 ? merged : [''] };
+      })
+    );
+  };
+
   useEffect(() => {
     fetchInitialData();
   }, []);
 
   useEffect(() => {
     if (isEditMode && productId && availableFields.length > 0) {
-      fetchProduct();
-    } else if (addVariationMode) {
-      setFormData({
-        name: storedBaseName,
-        sku: storedBaseSku,
-        description: '',
-      });
-      setCategorySelection({ level0: storedCategoryId });
-      if (storedVendorId) {
-        setSelectedVendorId(String(storedVendorId));
+        fetchProduct();
+      } else if (addVariationMode) {
+        setFormData({
+          name: storedBaseName,
+          sku: storedBaseSku,
+          description: '',
+        });
+        setCategorySelection({ level0: storedCategoryId });
+        if (storedVendorId) {
+          setSelectedVendorId(String(storedVendorId));
+        }
+        setHasVariations(true);
+        setActiveTab('general');
       }
-      setHasVariations(true);
-      setActiveTab('general');
-    }
   }, [isEditMode, productId, availableFields, addVariationMode, storedBaseName, storedBaseSku, storedCategoryId, storedVendorId]);
 
   useEffect(() => {
-    if (hasVariations && !isEditMode) {
-      setActiveTab('variations');
-    }
-  }, [hasVariations, isEditMode]);
+      if (hasVariations && !isEditMode) {
+        setActiveTab('variations');
+      }
+    }, [hasVariations, isEditMode]);
 
-  // In edit mode, fetch all products that share the same SKU so the user can manage variations
-  useEffect(() => {
-    if (!isEditMode) return;
-    const sku = String(formData.sku || '').trim();
-    if (!sku) return;
-    fetchSkuGroupProducts(sku);
-  }, [isEditMode, formData.sku]);
+    // In edit mode, fetch SKU group by product id (backend provides /sku-group)
+    useEffect(() => {
+      if (!isEditMode) return;
+      if (!productId) return;
+      fetchSkuGroupByProductId(productId);
+    }, [isEditMode, productId]);
 
-  /**
-   * Normalize category tree so sub-categories always render.
-   *
-   * Some API responses return nested nodes in `all_children` (and may omit `children`).
-   * Our UI (CategoryTreeSelector) prefers `children`, so we unify both into `children`.
-   */
-  const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
-    const getChildren = (cat: CategoryTree): CategoryTree[] => {
-      const rawChildren = (cat as any)?.children;
-      const rawAllChildren = (cat as any)?.all_children;
+    /**
+     * Normalize category tree so sub-categories always render.
+     *
+     * Some API responses return nested nodes in `all_children` (and may omit `children`).
+     * Our UI (CategoryTreeSelector) prefers `children`, so we unify both into `children`.
+     */
+    const filterActiveCategories = (cats: CategoryTree[]): CategoryTree[] => {
+      const getChildren = (cat: CategoryTree): CategoryTree[] => {
+        const rawChildren = (cat as any)?.children;
+        const rawAllChildren = (cat as any)?.all_children;
 
-      if (Array.isArray(rawChildren) && rawChildren.length > 0) return rawChildren;
-      if (Array.isArray(rawAllChildren) && rawAllChildren.length > 0) return rawAllChildren;
-      return [];
+        if (Array.isArray(rawChildren) && rawChildren.length > 0) return rawChildren;
+        if (Array.isArray(rawAllChildren) && rawAllChildren.length > 0) return rawAllChildren;
+        return [];
+      };
+
+      return (Array.isArray(cats) ? cats : [])
+        .filter((cat) => Boolean(cat) && Boolean((cat as any).is_active))
+        .map((cat) => {
+          const nested = filterActiveCategories(getChildren(cat));
+          return {
+            ...cat,
+            children: nested,
+            // keep for backward-compatibility, but ensure it doesn't shadow children
+            all_children: nested,
+          } as CategoryTree;
+        });
     };
-
-    return (Array.isArray(cats) ? cats : [])
-      .filter((cat) => Boolean(cat) && Boolean((cat as any).is_active))
-      .map((cat) => {
-        const nested = filterActiveCategories(getChildren(cat));
-        return {
-          ...cat,
-          children: nested,
-          // keep for backward-compatibility, but ensure it doesn't shadow children
-          all_children: nested,
-        } as CategoryTree;
-      });
-  };
 
   const fetchInitialData = async () => {
     try {
@@ -229,11 +358,16 @@ export default function AddEditProductPage({
 
       console.log('Fetched product:', product);
 
+      setEditingProduct(product);
       setFormData({
-        name: product.name,
+        // In the new schema, UI field represents base_name.
+        name: (product as any).base_name || product.name,
         sku: product.sku,
         description: product.description || '',
       });
+
+      // Keep suffix editable in edit mode (so user can update a single variant's name)
+      setEditVariationSuffix(String((product as any).variation_suffix || '').trim());
 
       setSelectedVendorId(String(product.vendor_id));
       setCategorySelection({ level0: String(product.category_id) });
@@ -250,8 +384,7 @@ export default function AddEditProductPage({
         .map(cf => ({
           fieldId: cf.field_id,
           fieldName: cf.field_title,
-          // Backend can omit field_type in some cases; keep our FieldValue strict by falling back.
-          fieldType: (cf.field_type as any) || 'text',
+          fieldType: cf.field_type,
           value: cf.value,
           instanceId: `field-${cf.field_id}-${Date.now()}`,
         }));
@@ -269,7 +402,7 @@ export default function AddEditProductPage({
           enhancedFields.unshift({
             fieldId: sizeDef.id,
             fieldName: sizeDef.title,
-            fieldType: (sizeDef.type as any) || 'text',
+            fieldType: sizeDef.type,
             value: '',
             instanceId: `field-${sizeDef.id}-${Date.now()}-auto`,
           });
@@ -284,7 +417,7 @@ export default function AddEditProductPage({
           enhancedFields.unshift({
             fieldId: colorDef.id,
             fieldName: colorDef.title,
-            fieldType: (colorDef.type as any) || 'text',
+            fieldType: colorDef.type,
             value: '',
             instanceId: `field-${colorDef.id}-${Date.now()}-auto`,
           });
@@ -301,35 +434,11 @@ export default function AddEditProductPage({
     }
   };
 
-  const splitVariantNameParts = (name: string): string[] => {
-    const raw = String(name || '').trim();
-    if (!raw) return [];
-
-    // Important: only split on separator hyphens, not internal hyphens inside a
-    // variant token such as "de-1". Otherwise "XYZ - de-1" gets misread as
-    // base="XYZ - de" and size="1", which then freezes the old suffix into the
-    // next variation name.
-    const separator = raw.includes(' - ')
-      ? ' - '
-      : raw.includes(' -')
-        ? ' -'
-        : raw.includes('- ')
-          ? '- '
-          : null;
-
-    if (!separator) return [raw];
-
-    return raw
-      .split(separator)
-      .map((part) => part.trim())
-      .filter(Boolean);
-  };
-
   const parseVariantFromName = (name: string): { base?: string; color?: string; size?: string } => {
     const raw = (name || '').trim();
     if (!raw) return {};
 
-    const parts = splitVariantNameParts(raw);
+    const parts = raw.split(/\s*-\s*/).map(p => p.trim()).filter(Boolean);
     if (parts.length >= 3) {
       const size = parts[parts.length - 1];
       const color = parts[parts.length - 2];
@@ -353,18 +462,30 @@ export default function AddEditProductPage({
     const color = colorField?.value;
     const size = sizeField?.value;
     if (color || size) return { color, size };
+    // Prefer backend-provided variation_suffix (e.g. "-red-30") when custom fields are missing
+    const suffix = String((p as any).variation_suffix || '').trim();
+    if (suffix) {
+      const parts = suffix.split('-').map(s => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        return { color: parts[parts.length - 2], size: parts[parts.length - 1] };
+      }
+      if (parts.length === 1) return { color: parts[0] };
+    }
     const parsed = parseVariantFromName(p.name);
     return { color: parsed.color, size: parsed.size };
   };
 
   const getGroupBaseName = (items: Product[], fallback: string) => {
-    const fallbackBase = (parseVariantFromName(fallback).base || fallback || '').trim();
-
+    // Prefer backend-provided base_name
     const bases = items
-      .map(v => (parseVariantFromName(v.name).base || '').trim())
-      .filter(Boolean);
-
-    if (bases.length === 0) return fallbackBase;
+      .map(v => String((v as any).base_name || '').trim())
+      .filter(Boolean)
+      .concat(
+        items
+          .map(v => (parseVariantFromName(v.name).base || '').trim())
+          .filter(Boolean)
+      );
+    if (bases.length === 0) return fallback;
 
     const counts = new Map<string, number>();
     const originalMap = new Map<string, string>();
@@ -386,7 +507,7 @@ export default function AddEditProductPage({
         bestLen = len;
       }
     }
-    return (originalMap.get(bestKey) || fallbackBase).trim();
+    return (originalMap.get(bestKey) || fallback).trim();
   };
 
   const getImageUrl = (imagePath: string | null | undefined): string | null => {
@@ -396,31 +517,21 @@ export default function AddEditProductPage({
     return `${baseUrl}/storage/${imagePath}`;
   };
 
-  const fetchSkuGroupProducts = async (sku: string) => {
-    const cleanedSku = String(sku || '').trim();
-    if (!cleanedSku) {
+  const fetchSkuGroupByProductId = async (id: string | number) => {
+    const pid = String(id || '').trim();
+    if (!pid) {
       setSkuGroupProducts([]);
       return;
     }
 
     try {
       setSkuGroupLoading(true);
-      // Backend doesn't have a dedicated "sku" filter in this front; we use search then exact-filter client-side.
-      const result = await productService.advancedSearchAll(
-        {
-          query: cleanedSku,
-          is_archived: false,
-          enable_fuzzy: false,
-          fuzzy_threshold: 100,
-          search_fields: ['sku'],
-          per_page: 200,
-        },
-        { max_items: 5000 }
-      );
-      const exact = (result || []).filter(p => String(p.sku || '').trim() === cleanedSku);
+      const group = await productService.getSkuGroup(pid);
+
+      const list = Array.isArray(group.products) ? [...group.products] : [];
 
       // Sort by color then size (for nicer display)
-      exact.sort((a, b) => {
+      list.sort((a, b) => {
         const av = getVariantAttr(a);
         const bv = getVariantAttr(b);
         const c1 = String(av.color || '').localeCompare(String(bv.color || ''));
@@ -428,87 +539,152 @@ export default function AddEditProductPage({
         return String(av.size || '').localeCompare(String(bv.size || ''));
       });
 
-      setSkuGroupProducts(exact);
-      setBulkSelectedIds(exact.map(p => p.id));
+      setSkuGroupProducts(list);
+      setCommonBaseName(String(group.base_name || ''));
+
+      // Initialize quick-edit rows so the "old" edit style (edit within variations view) works
+      const initialEdits: Record<number, { variation_suffix: string; description: string }> = {};
+      for (const p of list) {
+        initialEdits[p.id] = {
+          variation_suffix: String((p as any).variation_suffix || '').trim(),
+          description: String((p as any).description || ''),
+        };
+      }
+      setRowEdits(initialEdits);
+
+      // Keep UI SKU in sync
+      if (String(group.sku || '').trim()) {
+        setFormData(prev => ({ ...prev, sku: String(group.sku || '').trim() }));
+      }
     } catch (error) {
       console.error('Failed to fetch SKU group products:', error);
       setSkuGroupProducts([]);
+      // Show a visible hint so it's not silently "empty" when the API call fails
+      setToast({
+        message:
+          'Could not load variations for this SKU group. Please check the sku-group API endpoint and permissions.',
+        type: 'warning',
+      });
     } finally {
       setSkuGroupLoading(false);
     }
   };
 
+  const saveCommonInfo = async () => {
+    if (!isEditMode || !productId) return;
 
-  const toggleBulkSelect = (id: number) => {
-    setBulkSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
-
-  const bulkSelectAll = () => setBulkSelectedIds(skuGroupProducts.map((p) => p.id));
-  const bulkSelectNone = () => setBulkSelectedIds([]);
-
-  const bulkUpdateSelected = async () => {
-    const ids = Array.from(new Set(bulkSelectedIds));
-    if (ids.length === 0) {
-      setToast({ message: 'Select at least one variation to update.', type: 'warning' });
+    const base_name = String(commonBaseName || '').trim();
+    if (!base_name) {
+      setToast({ message: 'Base name is required for Common Edit.', type: 'error' });
       return;
     }
 
-    if (!bulkApplyName && !bulkApplyDescription && !bulkApplyCategory && !bulkApplyVendor) {
-      setToast({ message: 'Choose at least one field to apply (name/description/category/vendor).', type: 'warning' });
-      return;
+    const payload: any = { base_name };
+
+    if (applyCommonDescription) {
+      payload.description = String(formData.description || '');
     }
 
-    const overrideName = String(formData.name || '').trim();
-    const overrideDescription = String(formData.description || '');
-    const overrideCategoryId = categorySelection.level0 ? Number(categorySelection.level0) : null;
-    const overrideVendorId = selectedVendorId ? Number(selectedVendorId) : null;
-
-    if (bulkApplyName && !overrideName) {
-      setToast({ message: 'Enter a product name first (General Information tab).', type: 'warning' });
-      return;
+    if (applyCommonCategory) {
+      const path = getCategoryPathArray();
+      const final = path.length ? parseInt(path[path.length - 1]) : NaN;
+      if (!final || Number.isNaN(final)) {
+        setToast({ message: 'Select a category first (General Information tab).', type: 'warning' });
+        return;
+      }
+      payload.category_id = final;
     }
 
-    if (bulkApplyCategory && !overrideCategoryId) {
-      setToast({ message: 'Select a category first (General Information tab).', type: 'warning' });
-      return;
+    if (applyCommonVendor) {
+      const vid = parseInt(String(selectedVendorId || ''));
+      if (!vid || Number.isNaN(vid)) {
+        setToast({ message: 'Select a vendor first (General Information tab).', type: 'warning' });
+        return;
+      }
+      payload.vendor_id = vid;
     }
-    if (bulkApplyVendor && !overrideVendorId) {
-      setToast({ message: 'Select a vendor first (General Information tab).', type: 'warning' });
-      return;
+
+    if (applyCommonBrand) {
+      payload.brand = String(commonBrand || '').trim();
     }
 
     try {
-      setBulkUpdating(true);
+      setCommonSaving(true);
+      const res = await productService.updateCommonInfo(productId, payload);
+      setToast({ message: res?.message || 'Common info updated for all variations.', type: 'success' });
 
-      for (const id of ids) {
-        const p = skuGroupProducts.find((x) => x.id === id);
-        if (!p) continue;
-
-        const payload: any = {
-          name: bulkApplyName ? (overrideName || p.name) : p.name,
-          sku: p.sku,
-          description: bulkApplyDescription ? overrideDescription : (p.description ?? ''),
-          category_id: bulkApplyCategory ? overrideCategoryId : (p.category_id ?? overrideCategoryId),
-          vendor_id: bulkApplyVendor ? overrideVendorId : (p.vendor_id ?? overrideVendorId),
-        };
-
-        await productService.update(id, payload);
-      }
-
-      setToast({ message: `Updated ${ids.length} variation(s) successfully.`, type: 'success' });
-
-      const sku = String(formData.sku || '').trim();
-      if (sku) {
-        await fetchSkuGroupProducts(sku);
-      }
+      // Refresh group + current product
+      await fetchSkuGroupByProductId(productId);
+      await fetchProduct();
     } catch (error: any) {
-      console.error('Bulk update failed:', error);
-      setToast({ message: error?.message || 'Bulk update failed', type: 'error' });
+      console.error('Common edit failed:', error);
+      setToast({ message: error?.message || 'Failed to update common info', type: 'error' });
     } finally {
-      setBulkUpdating(false);
+      setCommonSaving(false);
     }
   };
 
+  // -------------------- Variations tab: "old style" quick edit --------------------
+  const normalizeSuffix = (suffix: string): string => {
+    const raw = String(suffix || '').trim();
+    if (!raw) return '';
+    return raw.startsWith('-') ? raw : `-${raw}`;
+  };
+
+  const updateRowEdit = (id: number, patch: Partial<{ variation_suffix: string; description: string }>) => {
+    setRowEdits((prev) => ({
+      ...prev,
+      [id]: {
+        variation_suffix: prev[id]?.variation_suffix ?? '',
+        description: prev[id]?.description ?? '',
+        ...patch,
+      },
+    }));
+  };
+
+  const saveRow = async (id: number) => {
+    const p = skuGroupProducts.find((x) => x.id === id);
+    if (!p) return;
+
+    try {
+      setSavingRowIds((prev) => ({ ...prev, [id]: true }));
+
+      const base_name = String((p as any).base_name || commonBaseName || formData.name || '').trim();
+      const variation_suffix = normalizeSuffix(rowEdits[id]?.variation_suffix ?? String((p as any).variation_suffix || ''));
+
+      const payload: any = {
+        // keep backward compatibility: backend can compute name from base_name + variation_suffix
+        base_name,
+        variation_suffix,
+        name: variation_suffix ? `${base_name}${variation_suffix}` : base_name,
+        description: rowEdits[id]?.description ?? (p.description || ''),
+      };
+
+      await productService.update(id, payload);
+      setToast({ message: `Variation #${id} updated.`, type: 'success' });
+
+      // Refresh list so names/images remain accurate
+      if (productId) await fetchSkuGroupByProductId(productId);
+    } catch (error: any) {
+      console.error('Save row failed:', error);
+      setToast({ message: error?.message || 'Failed to update variation', type: 'error' });
+    } finally {
+      setSavingRowIds((prev) => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const saveAllRows = async () => {
+    if (!productId || skuGroupProducts.length === 0) return;
+    try {
+      setSavingAll(true);
+      for (const p of skuGroupProducts) {
+        // Save sequentially to avoid rate limits
+        await saveRow(p.id);
+      }
+    } finally {
+      setSavingAll(false);
+    }
+  };
   const openEditProduct = (id: number) => {
     // IMPORTANT: We are already on /product/add. Navigating to the same route is a no-op
     // in Next.js, so we switch modes via state instead of router.push.
@@ -624,12 +800,11 @@ export default function AddEditProductPage({
 
   const addField = (field: Field) => {
     const instanceId = `field-${field.id}-${Date.now()}-${Math.random()}`;
-    const safeType = (field.type as any) || 'text';
     const newFieldValue: FieldValue = {
       fieldId: field.id,
       fieldName: field.title,
-      fieldType: safeType,
-      value: safeType === 'file' ? [] : '',
+      fieldType: field.type,
+      value: field.type === 'file' ? [] : '',
       instanceId,
     };
     setSelectedFields([...selectedFields, newFieldValue]);
@@ -651,7 +826,9 @@ export default function AddEditProductPage({
       return false;
     }
 
-    if (!formData.sku.trim()) {
+    // SKU is optional on create (backend will auto-generate). But in edit/add-variation mode,
+    // SKU must exist because we manage & group variations by SKU.
+    if ((isEditMode || addVariationMode) && !String(formData.sku || '').trim()) {
       setToast({ message: 'SKU is required', type: 'error' });
       return false;
     }
@@ -668,11 +845,27 @@ export default function AddEditProductPage({
     // }
 
     if (!isEditMode && hasVariations && variations.length > 0) {
-      const hasValidVariation = variations.some(v => v.color.trim());
-      
-      if (!hasValidVariation) {
-        setToast({ message: 'Please add at least one color for variations', type: 'error' });
+      // Variations are generated from either a Color, a Size, or both.
+      // (Color and Size are NOT mandatory; but at least one of them must exist
+      // to generate a distinct variant.)
+      const hasAnyVariantAttr = variations.some(v =>
+        Boolean(String(v.color || '').trim()) ||
+        (Array.isArray(v.sizes) && v.sizes.some(s => Boolean(String(s || '').trim())))
+      );
+
+      if (!hasAnyVariantAttr) {
+        setToast({ message: 'Please add at least one variation attribute (color or size).', type: 'error' });
         return false;
+      }
+
+      // When there are multiple variation cards, color is mandatory on each so
+      // every variant gets a unique, identifiable name.
+      if (variations.length > 1) {
+        const missingColor = variations.some(v => !Boolean(String(v.color || '').trim()));
+        if (missingColor) {
+          setToast({ message: 'Color name is required for each variation when adding more than one variation.', type: 'error' });
+          return false;
+        }
       }
     }
 
@@ -774,6 +967,25 @@ export default function AddEditProductPage({
     ));
   };
 
+  const slugify = (val: string): string => {
+    return String(val || '')
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+  };
+
+  const buildVariationSuffix = (color?: string, size?: string): string => {
+    const parts: string[] = [];
+    const c = slugify(String(color || ''));
+    const s = slugify(String(size || ''));
+    if (c) parts.push(c);
+    if (s) parts.push(s);
+    return parts.length ? `-${parts.join('-')}` : '';
+  };
+
   const handleSubmit = async () => {
     if (!validateForm()) return;
 
@@ -788,15 +1000,31 @@ export default function AddEditProductPage({
         value: f.value,
       }));
 
+      // ✅ SKU is optional on create. If empty, send null so backend can auto-generate.
+      const normalizedSku: string | null = String(formData.sku || '').trim() || null;
+
       if (isEditMode) {
-        await productService.update(parseInt(productId!), {
-          name: formData.name,
+        const suffix = normalizeSuffix(editVariationSuffix);
+        const baseName = String(formData.name || '').trim();
+
+        const updatePayload: any = {
           sku: formData.sku,
           description: formData.description,
           category_id: finalCategoryId,
           vendor_id: parseInt(selectedVendorId),
           custom_fields: customFields,
-        });
+        };
+
+        // Backward-compatible: always provide name. If we have a suffix, also provide base_name + variation_suffix.
+        if (suffix) {
+          updatePayload.base_name = baseName;
+          updatePayload.variation_suffix = suffix;
+          updatePayload.name = `${baseName}${suffix}`;
+        } else {
+          updatePayload.name = baseName;
+        }
+
+        await productService.update(parseInt(productId!), updatePayload);
 
         setToast({ message: 'Product updated successfully!', type: 'success' });
         setTimeout(() => {
@@ -807,167 +1035,195 @@ export default function AddEditProductPage({
           }
         }, 1500);
       } else {
+        const baseName = String(formData.name || '').trim();
+
         const baseData = {
-          name: formData.name,
-          sku: formData.sku,
+          name: baseName, // used for non-variation create (backward compatible)
+          base_name: baseName, // used for variation create
+          sku: normalizedSku,
           description: formData.description,
           category_id: finalCategoryId,
           vendor_id: parseInt(selectedVendorId),
         };
 
         if (hasVariations && variations.length > 0) {
-          const colorField = availableFields.find(f => f.title === 'Color');
-          const sizeField = availableFields.find(f => f.title === 'Size');
+          const normTitle = (v: any) => String(v?.title || v?.name || '').trim().toLowerCase();
+          const colorField = availableFields.find(f => ['color', 'colour'].includes(normTitle(f)));
+          const sizeField = availableFields.find(f => normTitle(f) === 'size');
 
-          if (!colorField || !sizeField) {
-            setToast({ 
-              message: 'Color and Size fields must exist in Fields table to create variations', 
-              type: 'error' 
-            });
-            setLoading(false);
-            return;
-          }
-
-          const createdProducts = [];
-          const VARIATION_FIELD_IDS = [colorField.id, sizeField.id];
+          const createdProducts: any[] = [];
+          const VARIATION_FIELD_IDS = [
+            colorField?.id,
+            sizeField?.id,
+          ].filter(Boolean) as number[];
           const baseCustomFields = customFields.filter(
             cf => !VARIATION_FIELD_IDS.includes(cf.field_id)
           );
 
+          // If SKU is empty, we'll auto-generate ONCE from the first created variation
+          // and reuse it for all other variations so they remain grouped by SKU.
+          let sharedSku: string | null = normalizedSku;
+
           // ✅ OPTIMIZED: Prepare all variations first (no API calls)
           const variationsToCreate: Array<{
-            name: string;
+            variation_suffix: string;
+            preview_name: string;
             customFields: any[];
             images: File[];
           }> = [];
 
           for (const variation of variations) {
-            const hasColor = variation.color.trim();
-            const validSizes = variation.sizes.filter(s => s.trim());
+            const colorVal = String(variation.color || '').trim();
+            const validSizes = (variation.sizes || []).map(s => String(s || '').trim()).filter(Boolean);
+            const hasColor = Boolean(colorVal);
             const hasSizes = validSizes.length > 0;
-            
-            if (!hasColor) continue;
+
+            // If neither color nor size is provided, this variation can't produce a unique product.
+            if (!hasColor && !hasSizes) continue;
 
             const sizesToCreate = hasSizes ? validSizes : [''];
 
             for (const size of sizesToCreate) {
-              const variationName = size 
-                ? `${baseData.name} - ${variation.color} - ${size}`
-                : `${baseData.name} - ${variation.color}`;
+              const variationSuffix = buildVariationSuffix(variation.color, size);
               
-              const varCustomFields = [
-                ...baseCustomFields,
-                { field_id: colorField.id, value: variation.color }
-              ];
+              const varCustomFields = [...baseCustomFields];
 
-              if (size) {
+              // Color / Size are optional (only attach the field if both exist and value is non-empty)
+              if (colorField && hasColor) {
+                varCustomFields.push({ field_id: colorField.id, value: colorVal });
+              }
+
+              if (sizeField && size) {
                 varCustomFields.push({ field_id: sizeField.id, value: size });
               }
 
               variationsToCreate.push({
-                name: variationName,
+                variation_suffix: variationSuffix,
+                preview_name: `${baseData.base_name}${variationSuffix}`,
                 customFields: varCustomFields,
                 images: variation.images || [],
               });
             }
           }
 
-          console.log(`🔄 Creating ${variationsToCreate.length} variations in batches...`);
+          // ✅ If SKU was left empty, create ONE seed variation first so backend can
+          // generate a SKU, then reuse that SKU for all other variations.
+          if (!sharedSku && variationsToCreate.length > 0) {
+            const seed = variationsToCreate.shift()!;
+            try {
+              setToast({ message: 'Generating SKU for variations...', type: 'success' });
 
-          // ✅ OPTIMIZED: Process in batches of 5 with delays
-          const BATCH_SIZE = 5;
-          const DELAY_BETWEEN_BATCHES = 2000; // 2 seconds between batches
-          const DELAY_BETWEEN_ITEMS = 500; // 500ms between items in batch
+              const seedProduct = await productService.create({
+                base_name: baseData.base_name,
+                variation_suffix: seed.variation_suffix,
+                sku: null,
+                description: baseData.description,
+                category_id: baseData.category_id,
+                vendor_id: baseData.vendor_id,
+                custom_fields: seed.customFields,
+              } as any);
 
-          for (let i = 0; i < variationsToCreate.length; i += BATCH_SIZE) {
-            const batch = variationsToCreate.slice(i, i + BATCH_SIZE);
-            const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
-            const totalBatches = Math.ceil(variationsToCreate.length / BATCH_SIZE);
+              sharedSku = String((seedProduct as any).sku || '').trim() || null;
+              if (sharedSku) {
+                // reflect in UI so user can see the generated SKU
+                setFormData(prev => ({ ...prev, sku: sharedSku || '' }));
+              }
 
-            console.log(`📦 Processing batch ${batchNumber}/${totalBatches} (${batch.length} variations)`);
-            
-            // Update UI to show progress
-            setToast({ 
-              message: `Creating variations: ${i + 1}-${Math.min(i + BATCH_SIZE, variationsToCreate.length)} of ${variationsToCreate.length}...`, 
-              type: 'success' 
+              // Upload seed images
+              if (seed.images.length > 0 && (seedProduct as any).id) {
+                for (let imgIdx = 0; imgIdx < seed.images.length; imgIdx++) {
+                  try {
+                    await productImageService.uploadImage(
+                      (seedProduct as any).id,
+                      seed.images[imgIdx],
+                      {
+                        is_primary: imgIdx === 0,
+                        sort_order: imgIdx,
+                      }
+                    );
+                  } catch (error) {
+                    console.error(`Failed to upload seed image ${imgIdx + 1} for ${seed.preview_name}:`, error);
+                  }
+                }
+              }
+
+              createdProducts.push(seedProduct);
+              console.log(`✅ Seed variation created: ${seed.preview_name} (generated SKU: ${sharedSku || 'unknown'})`);
+            } catch (error) {
+              console.error('❌ Failed to create seed variation for SKU generation:', error);
+              setToast({ message: 'Failed to generate SKU for variations', type: 'error' });
+              setLoading(false);
+              return;
+            }
+          }
+
+          console.log(`🔄 Creating ${variationsToCreate.length} variations...`);
+
+          // Process sequentially without artificial batching/delays.
+          // We only wait if the server rate-limits (429), then retry with backoff.
+          for (let idx = 0; idx < variationsToCreate.length; idx++) {
+            const varData = variationsToCreate[idx];
+
+            setToast({
+              message: `Creating variations: ${idx + 1} of ${variationsToCreate.length}...`,
+              type: 'success'
             });
 
-            // Process batch items with small delays between each
-            for (let j = 0; j < batch.length; j++) {
-              const varData = batch[j];
-              
-              try {
-                // Create product with retry logic
-                let product;
-                let retryCount = 0;
-                const MAX_RETRIES = 3;
+            try {
+              let product;
+              let retryCount = 0;
+              const MAX_RETRIES = 3;
 
-                while (retryCount < MAX_RETRIES) {
-                  try {
-                    product = await productService.create({
-                      name: varData.name,
-                      sku: baseData.sku,
-                      description: baseData.description,
-                      category_id: baseData.category_id,
-                      vendor_id: baseData.vendor_id,
-                      custom_fields: varData.customFields,
-                    });
-                    break; // Success!
-                  } catch (err: any) {
-                    retryCount++;
-                    if (err.response?.status === 429 && retryCount < MAX_RETRIES) {
-                      console.warn(`⚠️ Rate limited, retry ${retryCount}/${MAX_RETRIES} after delay...`);
-                      await new Promise(resolve => setTimeout(resolve, 3000 * retryCount)); // Exponential backoff
-                    } else {
-                      throw err; // Give up after max retries
-                    }
+              while (retryCount < MAX_RETRIES) {
+                try {
+                  product = await productService.create({
+                    base_name: baseData.base_name,
+                    variation_suffix: varData.variation_suffix,
+                    sku: sharedSku,
+                    description: baseData.description,
+                    category_id: baseData.category_id,
+                    vendor_id: baseData.vendor_id,
+                    custom_fields: varData.customFields,
+                  } as any);
+                  break;
+                } catch (err: any) {
+                  retryCount++;
+                  if (err.response?.status === 429 && retryCount < MAX_RETRIES) {
+                    console.warn(`⚠️ Rate limited, retry ${retryCount}/${MAX_RETRIES} after delay...`);
+                    await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
+                  } else {
+                    throw err;
                   }
                 }
-
-                if (!product) {
-                  throw new Error('Failed to create product after retries');
-                }
-
-                // Upload images sequentially with delays
-                if (varData.images.length > 0 && product.id) {
-                  for (let imgIdx = 0; imgIdx < varData.images.length; imgIdx++) {
-                    try {
-                      await productImageService.uploadImage(
-                        product.id,
-                        varData.images[imgIdx],
-                        {
-                          is_primary: imgIdx === 0,
-                          sort_order: imgIdx,
-                        }
-                      );
-                      
-                      // Small delay between image uploads
-                      if (imgIdx < varData.images.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 300));
-                      }
-                    } catch (error) {
-                      console.error(`Failed to upload image ${imgIdx + 1} for ${varData.name}:`, error);
-                    }
-                  }
-                }
-
-                createdProducts.push(product);
-                console.log(`✅ Created variation ${createdProducts.length}/${variationsToCreate.length}: ${varData.name}`);
-
-                // Delay between items in same batch
-                if (j < batch.length - 1) {
-                  await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_ITEMS));
-                }
-              } catch (error: any) {
-                console.error(`❌ Failed to create variation ${varData.name}:`, error);
-                // Continue with next variation instead of failing completely
               }
-            }
 
-            // Longer delay between batches
-            if (i + BATCH_SIZE < variationsToCreate.length) {
-              console.log(`⏳ Waiting ${DELAY_BETWEEN_BATCHES}ms before next batch...`);
-              await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
+              if (!product) {
+                throw new Error('Failed to create product after retries');
+              }
+
+              // Upload images sequentially (no artificial delay)
+              if (varData.images.length > 0 && product.id) {
+                for (let imgIdx = 0; imgIdx < varData.images.length; imgIdx++) {
+                  try {
+                    await productImageService.uploadImage(
+                      product.id,
+                      varData.images[imgIdx],
+                      {
+                        is_primary: imgIdx === 0,
+                        sort_order: imgIdx,
+                      }
+                    );
+                  } catch (error) {
+                    console.error(`Failed to upload image ${imgIdx + 1} for ${varData.preview_name}:`, error);
+                  }
+                }
+              }
+
+              createdProducts.push(product);
+              console.log(`✅ Created variation ${createdProducts.length}/${variationsToCreate.length}: ${varData.preview_name}`);
+            } catch (error: any) {
+              console.error(`❌ Failed to create variation ${varData.preview_name}:`, error);
+              // Continue with next variation instead of failing completely
             }
           }
 
@@ -1080,6 +1336,29 @@ export default function AddEditProductPage({
     ? Boolean(String(formData.sku || '').trim())
     : hasVariations;
 
+  // Permission gate (UI) — backend still enforces permissions.
+  if (!modeResolved) {
+    return (
+      <div className={`${darkMode ? 'dark' : ''} flex h-screen`}>
+        <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+        <div className="flex-1 flex flex-col">
+          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+          <main className="flex-1 bg-gray-50 dark:bg-gray-900 flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-12 h-12 border-4 border-gray-200 dark:border-gray-700 border-t-gray-900 dark:border-t-white rounded-full animate-spin mx-auto mb-4"></div>
+              <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+            </div>
+          </main>
+        </div>
+      </div>
+    );
+  }
+
+  // Route-level authorization (fully synced with lib/accessMap.ts)
+  if (permissionsResolved && !canAccess) {
+    return <AccessDenied />;
+  }
+
   return (
     <div className={`${darkMode ? 'dark' : ''} flex h-screen`}>
       <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
@@ -1150,34 +1429,71 @@ export default function AddEditProductPage({
                       <div className="grid grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            Product Name <span className="text-red-500">*</span>
+                            Base Name <span className="text-red-500">*</span>
                           </label>
                           <input
                             type="text"
                             value={formData.name}
                             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                            placeholder="Enter product name"
+                            placeholder="e.g., saree"
                             disabled={addVariationMode}
                             className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
                           />
+                          {isEditMode && (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                              Editing this will change <strong>only this product</strong>. To rename across all variations, use <strong>Common Edit</strong> in the Product Variations tab.
+                            </p>
+                          )}
+
+                          {isEditMode && (
+                            <div className="mt-3">
+                              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                Variation Suffix <span className="text-gray-500 font-normal">(Optional)</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={editVariationSuffix}
+                                onChange={(e) => setEditVariationSuffix(e.target.value)}
+                                placeholder="e.g., -red-30"
+                                className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                              />
+                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                Display name will become: <span className="font-mono">{String(formData.name || '').trim()}{normalizeSuffix(editVariationSuffix)}</span>
+                              </p>
+                            </div>
+                          )}
                         </div>
 
                         <div>
                           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                            SKU <span className="text-red-500">*</span>
+                            SKU
+                            {(isEditMode || addVariationMode) && (
+                              <span className="text-red-500"> *</span>
+                            )}
                           </label>
                           <input
                             type="text"
                             value={formData.sku}
                             onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
-                            placeholder="e.g., PROD-001"
+                            placeholder={
+                              isEditMode || addVariationMode
+                                ? 'e.g., PROD-001'
+                                : 'Leave empty to auto-generate (9 digits)'
+                            }
                             // disabled={isEditMode || addVariationMode}
                             disabled={addVariationMode}
                             className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
                           />
-                          {(isEditMode || addVariationMode) && (
+                          {(isEditMode || addVariationMode) ? (
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                              {addVariationMode ? 'All variations share the same SKU' : 'SKU cannot be changed after creation'}
+                              {addVariationMode
+                                ? 'All variations share the same SKU'
+                                : 'SKU cannot be changed after creation'}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                              Leave blank and the system will auto-generate a unique 9-digit SKU.
+                              {hasVariations ? ' For variations, the first item will generate the SKU and the rest will reuse it.' : ''}
                             </p>
                           )}
                         </div>
@@ -1336,14 +1652,24 @@ export default function AddEditProductPage({
                             These are all products that share the same SKU. You can edit any variant, or add new ones.
                           </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => openAddVariation()}
-                          className="shrink-0 inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
-                        >
-                          <Plus className="w-4 h-4" />
-                          Add Variation
-                        </button>
+                        <div className="shrink-0 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setQuickEditMode((v) => !v)}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors font-medium"
+                          >
+                            {quickEditMode ? 'Close Quick Edit' : 'Quick Edit Variations'}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openAddVariation()}
+                            className="inline-flex items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-white text-white dark:text-gray-900 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-100 transition-colors font-medium shadow-sm"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add Variation
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -1360,180 +1686,320 @@ export default function AddEditProductPage({
                         </div>
                       ) : (
                         <>
-                          <div className="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="mb-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                               <div>
-                                <div className="font-semibold text-gray-900 dark:text-white">Bulk update selected variations</div>
+                                <div className="font-semibold text-gray-900 dark:text-white">Edit Product Group (Common Edit)</div>
                                 <div className="text-xs text-gray-600 dark:text-gray-400">
-                                  Frontend-only: updates each selected variation one-by-one (no backend change needed).
+                                  Updates base_name (and optional common fields) for <strong>ALL</strong> products in this SKU group.
                                 </div>
                               </div>
 
-                              <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={bulkSelectAll}
-                                  className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
-                                >
-                                  Select all
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={bulkSelectNone}
-                                  className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 text-gray-800 dark:text-gray-200 transition-colors"
-                                >
-                                  Select none
-                                </button>
+                              <button
+                                type="button"
+                                onClick={saveCommonInfo}
+                                disabled={commonSaving}
+                                className="shrink-0 px-4 py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              >
+                                {commonSaving ? (
+                                  <span className="inline-flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Saving...
+                                  </span>
+                                ) : (
+                                  'Save Common Info'
+                                )}
+                              </button>
+                            </div>
 
-                                <button
-                                  type="button"
-                                  onClick={bulkUpdateSelected}
-                                  disabled={bulkUpdating || bulkSelectedIds.length === 0}
-                                  className="px-3 py-1.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                >
-                                  {bulkUpdating ? (
-                                    <span className="inline-flex items-center gap-2">
-                                      <Loader2 className="w-4 h-4 animate-spin" />
-                                      Updating...
-                                    </span>
-                                  ) : (
-                                    `Apply to ${bulkSelectedIds.length} selected`
-                                  )}
-                                </button>
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  Base Name <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={commonBaseName}
+                                  onChange={(e) => setCommonBaseName(e.target.value)}
+                                  placeholder="e.g., saree"
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                                />
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  Name formula: <span className="font-mono">name = base_name + variation_suffix</span>
+                                </p>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  Brand <span className="text-gray-500 font-normal">(optional)</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={commonBrand}
+                                  onChange={(e) => setCommonBrand(e.target.value)}
+                                  disabled={!applyCommonBrand}
+                                  placeholder="New Brand"
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                />
+                                <label className="mt-2 inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                                  <input
+                                    type="checkbox"
+                                    checked={applyCommonBrand}
+                                    onChange={(e) => setApplyCommonBrand(e.target.checked)}
+                                    className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                  />
+                                  Apply brand to all
+                                </label>
                               </div>
                             </div>
 
-                            <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-gray-800 dark:text-gray-200">
+                            <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-gray-800 dark:text-gray-200">
                               <label className="inline-flex items-center gap-2">
                                 <input
                                   type="checkbox"
-                                  checked={bulkApplyName}
-                                  onChange={(e) => setBulkApplyName(e.target.checked)}
+                                  checked={applyCommonDescription}
+                                  onChange={(e) => setApplyCommonDescription(e.target.checked)}
                                   className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                 />
-                                Name
+                                Apply Description (from General tab)
                               </label>
 
                               <label className="inline-flex items-center gap-2">
                                 <input
                                   type="checkbox"
-                                  checked={bulkApplyDescription}
-                                  onChange={(e) => setBulkApplyDescription(e.target.checked)}
+                                  checked={applyCommonCategory}
+                                  onChange={(e) => setApplyCommonCategory(e.target.checked)}
                                   className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                 />
-                                Description
+                                Apply Category (from General tab)
                               </label>
 
                               <label className="inline-flex items-center gap-2">
                                 <input
                                   type="checkbox"
-                                  checked={bulkApplyCategory}
-                                  onChange={(e) => setBulkApplyCategory(e.target.checked)}
+                                  checked={applyCommonVendor}
+                                  onChange={(e) => setApplyCommonVendor(e.target.checked)}
                                   className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                 />
-                                Category
-                              </label>
-
-                              <label className="inline-flex items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={bulkApplyVendor}
-                                  onChange={(e) => setBulkApplyVendor(e.target.checked)}
-                                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
-                                />
-                                Vendor
+                                Apply Vendor (from General tab)
                               </label>
                             </div>
+
+                            {skuGroupProducts.length > 0 && (
+                              <div className="mt-4">
+                                <div className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Preview</div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                  {skuGroupProducts.slice(0, 6).map((p) => (
+                                    <div key={p.id} className="text-xs text-gray-700 dark:text-gray-300 bg-white/80 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700 rounded-md px-2 py-1">
+                                      {String(commonBaseName || p.base_name || '').trim() || 'base'}{String((p as any).variation_suffix || '')}
+                                    </div>
+                                  ))}
+                                </div>
+                                {skuGroupProducts.length > 6 && (
+                                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-2">and {skuGroupProducts.length - 6} more…</div>
+                                )}
+                              </div>
+                            )}
                           </div>
 
-                          <div className="overflow-x-auto">
-                            <table className="min-w-full text-sm">
-                              <thead>
-                                <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
-                                  <th className="py-3 pr-4">Select</th>
-                                  <th className="py-3 pr-4">Image</th>
-                                  <th className="py-3 pr-4">Product</th>
-                                  <th className="py-3 pr-4">Color</th>
-                                  <th className="py-3 pr-4">Size</th>
-                                  <th className="py-3">Actions</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {skuGroupProducts.map((p) => {
-                                  const v = getVariantAttr(p);
-                                  const primary = p.images?.find(img => img.is_primary && img.is_active) ||
-                                    p.images?.find(img => img.is_active) ||
-                                    p.images?.[0];
-                                  const imgUrl = primary ? getImageUrl(primary.image_path) : null;
+                          {quickEditMode ? (
+                            <div className="overflow-x-auto">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="text-sm text-gray-700 dark:text-gray-300">
+                                  Quick edit lets you change <strong>variation suffix</strong> and <strong>description</strong> for each variant from one screen.
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={saveAllRows}
+                                  disabled={savingAll}
+                                  className="px-4 py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {savingAll ? 'Saving...' : 'Save All'}
+                                </button>
+                              </div>
 
-                                  return (
-                                    <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
-                                      <td className="py-3 pr-4">
-                                        <input
-                                          type="checkbox"
-                                          checked={bulkSelectedIds.includes(p.id)}
-                                          onChange={() => toggleBulkSelect(p.id)}
-                                          className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
-                                        />
-                                      </td>
-                                      <td className="py-3 pr-4">
-                                        <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
-                                          <img
-                                            src={imgUrl || FALLBACK_IMAGE_URL}
-                                            alt={p.name}
-                                            className="w-full h-full object-cover"
-                                            onError={(e) => {
-                                              e.currentTarget.src = FALLBACK_IMAGE_URL;
-                                            }}
+                              <table className="min-w-full text-sm">
+                                <thead>
+                                  <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th className="py-3 pr-4">Image</th>
+                                    <th className="py-3 pr-4">Name</th>
+                                    <th className="py-3 pr-4">Suffix</th>
+                                    <th className="py-3 pr-4">Description</th>
+                                    <th className="py-3 pr-4">Color</th>
+                                    <th className="py-3 pr-4">Size</th>
+                                    <th className="py-3">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {skuGroupProducts.map((p) => {
+                                    const v = getVariantAttr(p);
+                                    const primary = p.images?.find(img => img.is_primary && img.is_active) ||
+                                      p.images?.find(img => img.is_active) ||
+                                      p.images?.[0];
+                                    const imgUrl = primary ? getImageUrl(primary.image_path) : null;
+
+                                    const edit = rowEdits[p.id] || { variation_suffix: String((p as any).variation_suffix || ''), description: String(p.description || '') };
+                                    const basePreview = String(commonBaseName || (p as any).base_name || '').trim();
+                                    const suffixPreview = normalizeSuffix(edit.variation_suffix);
+                                    const namePreview = suffixPreview ? `${basePreview}${suffixPreview}` : basePreview;
+
+                                    return (
+                                      <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60 align-top">
+                                        <td className="py-3 pr-4">
+                                          <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
+                                            <img
+                                              src={imgUrl || FALLBACK_IMAGE_URL}
+                                              alt={p.name}
+                                              className="w-full h-full object-cover"
+                                              onError={(e) => {
+                                                e.currentTarget.src = FALLBACK_IMAGE_URL;
+                                              }}
+                                            />
+                                          </div>
+                                        </td>
+                                        <td className="py-3 pr-4">
+                                          <div className="font-medium text-gray-900 dark:text-white">{namePreview || p.name}</div>
+                                          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">ID: {p.id}</div>
+                                        </td>
+                                        <td className="py-3 pr-4 min-w-[180px]">
+                                          <input
+                                            value={edit.variation_suffix}
+                                            onChange={(e) => updateRowEdit(p.id, { variation_suffix: e.target.value })}
+                                            placeholder="-red-30"
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                                           />
-                                        </div>
-                                      </td>
-                                      <td className="py-3 pr-4">
-                                        <div className="font-medium text-gray-900 dark:text-white">
-                                          {p.name}
-                                        </div>
-                                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                          ID: {p.id}
-                                        </div>
-                                      </td>
-                                      <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
-                                        {v.color ? String(v.color) : '-'}
-                                      </td>
-                                      <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
-                                        {v.size ? String(v.size) : 'One Size'}
-                                      </td>
-                                      <td className="py-3">
-                                        <div className="flex gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => openEditProduct(p.id)}
-                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
-                                          >
-                                            Edit
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => openAddVariation(v.color ? String(v.color) : undefined)}
-                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
-                                            title="Create new size variants for this color"
-                                          >
-                                            Add Sizes
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => router.push(`/product/${p.id}`)}
-                                            className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
-                                          >
-                                            View
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
+                                        </td>
+                                        <td className="py-3 pr-4 min-w-[280px]">
+                                          <input
+                                            value={edit.description}
+                                            onChange={(e) => updateRowEdit(p.id, { description: e.target.value })}
+                                            placeholder="(optional)"
+                                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                          />
+                                        </td>
+                                        <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">{v.color ? String(v.color) : '-'}</td>
+                                        <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">{v.size ? String(v.size) : 'One Size'}</td>
+                                        <td className="py-3">
+                                          <div className="flex flex-wrap gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => saveRow(p.id)}
+                                              disabled={Boolean(savingRowIds[p.id])}
+                                              className="px-3 py-1.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                              {savingRowIds[p.id] ? 'Saving...' : 'Save'}
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openEditProduct(p.id)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
+                                            >
+                                              Full Edit
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openAddVariation(v.color ? String(v.color) : undefined)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                              title="Create new size variants for this color"
+                                            >
+                                              Add Sizes
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => router.push(`/product/${p.id}`)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                            >
+                                              View
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="min-w-full text-sm">
+                                <thead>
+                                  <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th className="py-3 pr-4">Image</th>
+                                    <th className="py-3 pr-4">Product</th>
+                                    <th className="py-3 pr-4">Color</th>
+                                    <th className="py-3 pr-4">Size</th>
+                                    <th className="py-3">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {skuGroupProducts.map((p) => {
+                                    const v = getVariantAttr(p);
+                                    const primary = p.images?.find(img => img.is_primary && img.is_active) ||
+                                      p.images?.find(img => img.is_active) ||
+                                      p.images?.[0];
+                                    const imgUrl = primary ? getImageUrl(primary.image_path) : null;
+
+                                    return (
+                                      <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
+                                        <td className="py-3 pr-4">
+                                          <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
+                                            <img
+                                              src={imgUrl || FALLBACK_IMAGE_URL}
+                                              alt={p.name}
+                                              className="w-full h-full object-cover"
+                                              onError={(e) => {
+                                                e.currentTarget.src = FALLBACK_IMAGE_URL;
+                                              }}
+                                            />
+                                          </div>
+                                        </td>
+                                        <td className="py-3 pr-4">
+                                          <div className="font-medium text-gray-900 dark:text-white">
+                                            {p.name}
+                                          </div>
+                                          <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                            ID: {p.id}
+                                          </div>
+                                        </td>
+                                        <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
+                                          {v.color ? String(v.color) : '-'}
+                                        </td>
+                                        <td className="py-3 pr-4 text-gray-800 dark:text-gray-200">
+                                          {v.size ? String(v.size) : 'One Size'}
+                                        </td>
+                                        <td className="py-3">
+                                          <div className="flex gap-2">
+                                            <button
+                                              type="button"
+                                              onClick={() => openEditProduct(p.id)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-900 dark:text-white transition-colors"
+                                            >
+                                              Edit
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openAddVariation(v.color ? String(v.color) : undefined)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                              title="Create new size variants for this color"
+                                            >
+                                              Add Sizes
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => router.push(`/product/${p.id}`)}
+                                              className="px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 transition-colors"
+                                            >
+                                              View
+                                            </button>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </>
                       )}
 
@@ -1553,7 +2019,7 @@ export default function AddEditProductPage({
                         Product Variations
                       </h2>
                       <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                        Create variations with different colors and sizes. Color is required, sizes are optional.
+                        Create variations with different colors and/or sizes. Both are optional — add at least one of them to generate a unique variant.
                       </p>
 
                       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
@@ -1561,11 +2027,11 @@ export default function AddEditProductPage({
                           How Variations Work:
                         </h4>
                         <ul className="text-sm text-blue-800 dark:text-blue-400 space-y-1">
-                          <li>• All variations use the same SKU: "<strong>{formData.sku || 'Enter SKU in General tab'}</strong>"</li>
-                          <li>• Each <strong>color is required</strong> for a variation</li>
-                          <li>• Sizes are optional - leave empty for "One Size" products</li>
-                          <li>• Each color gets one set of images (shared across all sizes)</li>
-                          <li>• Products named: "<strong>{formData.name || 'Product'} - Blue - M</strong>"</li>
+                          <li>• All variations use the same SKU: "<strong>{formData.sku || 'Leave empty to auto-generate'}</strong>"</li>
+                          <li>• <strong>Color is optional</strong> — you can create size-only variants</li>
+                          <li>• <strong>Size is optional</strong> — you can create color-only variants</li>
+                          <li>• Each variation card gets one set of images (shared across all sizes in that card)</li>
+                          <li>• Name format: "<strong>{formData.name || 'base'}-blue-m</strong>" (base_name + variation_suffix)</li>
                         </ul>
                       </div>
                     </div>
@@ -1591,6 +2057,7 @@ export default function AddEditProductPage({
                             key={variation.id}
                             variation={variation}
                             index={varIdx}
+                            colorRequired={variations.length > 1}
                             onUpdate={(color) => updateVariationColor(variation.id, color)}
                             onRemove={() => removeVariation(variation.id)}
                             onImageUpload={(e) => handleVariationImageChange(variation.id, e)}
@@ -1598,6 +2065,9 @@ export default function AddEditProductPage({
                             onSizeAdd={() => addSize(variation.id)}
                             onSizeUpdate={(sizeIdx, value) => updateSizeValue(variation.id, sizeIdx, value)}
                             onSizeRemove={(sizeIdx) => removeSize(variation.id, sizeIdx)}
+                            sizeOptions={getSizeOptionsForVariation(variation.sizes)}
+                            sizePresetButtons={sizePresetButtons}
+                            onApplySizePreset={(key) => applySizePreset(variation.id, key as SizePresetKey)}
                           />
                         ))}
                       </div>

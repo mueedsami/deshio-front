@@ -64,10 +64,8 @@ export interface ShipmentStatistics {
 }
 
 export interface BulkSendImmediateFailure {
-  shipment_id?: number | null;
-  shipment_number?: string | null;
-  order_id?: number | null;
-  order_number?: string | null;
+  shipment_id: number;
+  shipment_number: string;
   reason: string;
 }
 
@@ -118,23 +116,6 @@ export interface BulkBatchDetailedResult {
 export interface BulkBatchDetails {
   summary: BulkBatchSummary;
   results: BulkBatchDetailedResult[];
-}
-
-export interface PathaoQueueTickResult {
-  pending_before: number;
-  pending_after: number;
-  processed: number;
-  already_running?: boolean;
-  output?: string;
-}
-
-export interface PathaoRetryFailedResult {
-  batch_code: string;
-  queued_count: number;
-  shipment_ids?: number[];
-  skipped?: Array<{ shipment_id?: number; reason: string }>;
-  already_running?: boolean;
-  summary?: BulkBatchSummary;
 }
 
 class ShipmentService {
@@ -205,96 +186,6 @@ class ShipmentService {
     } catch (error: any) {
       console.error('Start bulk send to Pathao error:', error);
       throw new Error(error.response?.data?.message || 'Failed to bulk send to Pathao');
-    }
-  }
-
-  async startBulkSendOrdersToPathao(
-    orderIds: number[],
-    options?: {
-      delivery_type?: 'home_delivery' | 'express';
-      package_weight?: number;
-      special_instructions?: string;
-    }
-  ): Promise<BulkSendQueuedResult> {
-    try {
-      const response = await axiosInstance.post('/shipments/bulk-send-orders-to-pathao', {
-        order_ids: orderIds,
-        delivery_type: options?.delivery_type ?? 'home_delivery',
-        package_weight: options?.package_weight ?? 1.0,
-        ...(options?.special_instructions ? { special_instructions: options.special_instructions } : {}),
-      });
-      const result = response.data;
-
-      if (!result.success) {
-        const failures = result.data?.immediate_failures;
-        const failureText = Array.isArray(failures) && failures.length > 0
-          ? `: ${failures.map((f: any) => f.reason).join(', ')}`
-          : '';
-        throw new Error((result.message || 'Failed to bulk send orders to Pathao') + failureText);
-      }
-
-      return result.data;
-    } catch (error: any) {
-      console.error('Start bulk order send to Pathao error:', error);
-      throw new Error(error.response?.data?.message || error.message || 'Failed to bulk send orders to Pathao');
-    }
-  }
-
-  /**
-   * Run one safe Pathao queue processing tick from the frontend.
-   * This processes a few DB queue jobs without relying on cPanel exec().
-   */
-  async runPathaoQueueTick(options?: { max_jobs?: number; max_time?: number }): Promise<PathaoQueueTickResult> {
-    try {
-      const response = await axiosInstance.post('/shipments/pathao-queue-tick', {
-        max_jobs: options?.max_jobs ?? 5,
-        max_time: options?.max_time ?? 25,
-      });
-      const result = response.data;
-
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to run Pathao queue tick');
-      }
-
-      return result.data;
-    } catch (error: any) {
-      console.error('Pathao queue tick error:', error);
-      throw new Error(
-        error.response?.data?.message ||
-        error.message ||
-        'Failed to run Pathao queue tick'
-      );
-    }
-  }
-
-
-  /**
-   * Re-queue failed Pathao shipments for a specific batch.
-   * Failed shipments are retried only up to the backend max_retries limit.
-   */
-  async retryFailedPathaoBatch(
-    batchCode: string,
-    options?: { max_retries?: number; wave_size?: number }
-  ): Promise<PathaoRetryFailedResult> {
-    try {
-      const response = await axiosInstance.post(`/shipments/bulk-status/${batchCode}/retry-failed`, {
-        max_retries: options?.max_retries ?? 3,
-        wave_size: options?.wave_size ?? 5,
-      });
-      const result = response.data;
-
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to retry failed Pathao shipments');
-      }
-
-      return result.data;
-    } catch (error: any) {
-      console.error('Pathao retry failed batch error:', error);
-      throw new Error(
-        error.response?.data?.message ||
-        error.message ||
-        'Failed to retry failed Pathao shipments'
-      );
     }
   }
 

@@ -19,7 +19,12 @@ import {
   TrendingUp,
   Eye
 } from 'lucide-react';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from "@/contexts/ThemeContext";
+import AccessDenied from '@/components/AccessDenied';
 import employeeService, { Employee, EmployeeFilters } from '@/services/employeeService2';
+import storeService, { Store } from '@/services/storeService';
+import roleService, { Role } from '@/services/roleService';
 import CreateEmployeeModal from '@/components/employees/CreateEmployeeModal';
 import EditEmployeeModal from '@/components/employees/EditEmployeeModal';
 import Sidebar from '@/components/Sidebar';
@@ -27,6 +32,15 @@ import Header from '@/components/Header';
 
 export default function EmployeeManagement() {
   const router = useRouter();
+  const { user, isSuperAdmin } = useAuth();
+  const { darkMode, setDarkMode } = useTheme();
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  
+  // Authorization check
+  const isGlobal = isSuperAdmin || (user?.role?.slug === 'admin');
+  const isBranchManager = user?.role?.slug === 'branch-manager';
+  const isAuthorized = isGlobal || isBranchManager;
+
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
@@ -35,10 +49,7 @@ export default function EmployeeManagement() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedEmployees, setSelectedEmployees] = useState<number[]>([]);
   const [showFilters, setShowFilters] = useState(false);
-  
-  // Layout states
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
+  const [allStores, setAllStores] = useState<Store[]>([]);
   
   // Filters
   const [filters, setFilters] = useState<EmployeeFilters>({
@@ -46,6 +57,7 @@ export default function EmployeeManagement() {
     page: 1,
     sort_by: 'created_at',
     sort_direction: 'desc',
+    store_id: isBranchManager ? Number(user?.store_id) : undefined,
   });
 
   // Stats
@@ -61,9 +73,25 @@ export default function EmployeeManagement() {
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
 
   useEffect(() => {
-    fetchEmployees();
-    fetchStats();
-  }, [filters]);
+    if (isAuthorized) {
+      if (isGlobal && allStores.length === 0) {
+        fetchStores();
+      }
+      fetchEmployees();
+      fetchStats();
+    }
+  }, [filters, isAuthorized]);
+
+  const fetchStores = async () => {
+    try {
+      const response = await storeService.getStores({ is_active: true });
+      if (response.success) {
+        setAllStores(response.data.data || []);
+      }
+    } catch (error) {
+      console.error('Failed to fetch stores:', error);
+    }
+  };
 
   const fetchEmployees = async () => {
     try {
@@ -85,8 +113,11 @@ export default function EmployeeManagement() {
 
   const fetchStats = async () => {
     try {
+      // If branch manager, pass store_id to stats too (if backend supports it, else it will just show global stats)
       const response = await employeeService.getEmployeeStats();
       if (response.success) {
+        // If branch manager, we might need to filter stats manually if backend doesn't support store-scoped stats result
+        // But for now we use what the API gives
         setStats({
           total: response.data.total_employees,
           active: response.data.active_employees,
@@ -209,6 +240,9 @@ export default function EmployeeManagement() {
 
           {/* Page Content */}
           <main className="flex-1 overflow-y-auto">
+            {!isAuthorized ? (
+              <AccessDenied />
+            ) : (
             <div className="p-6 space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -313,10 +347,22 @@ export default function EmployeeManagement() {
               onChange={(e) => handleFilterChange('is_active', e.target.value === '' ? undefined : e.target.value === 'true')}
               className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
             >
-              <option value="">All Status</option>
               <option value="true">Active</option>
               <option value="false">Inactive</option>
             </select>
+
+            {isGlobal && (
+              <select
+                value={filters.store_id || ''}
+                onChange={(e) => handleFilterChange('store_id', e.target.value === '' ? undefined : Number(e.target.value))}
+                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg dark:bg-gray-700 dark:text-white"
+              >
+                <option value="">All Stores</option>
+                {allStores.map(store => (
+                  <option key={store.id} value={store.id}>{store.name}</option>
+                ))}
+              </select>
+            )}
 
             <input
               type="text"
@@ -558,6 +604,7 @@ export default function EmployeeManagement() {
         )}
       </div>
             </div>
+            )}
           </main>
         </div>
       </div>

@@ -143,10 +143,10 @@ export default function ServiceSelector({ onAddService, darkMode, allowManualPri
         <button
           type="button"
           onClick={handleOpenModal}
-          className="px-3 py-2 rounded-lg text-xs font-semibold bg-black text-white dark:bg-white dark:text-black hover:opacity-90 flex items-center gap-2"
+          className="px-6 py-3 rounded-xl text-xs font-bold bg-[#1a1f2c] text-white hover:bg-black transition-all flex items-center gap-3 shadow-sm"
         >
-          <Plus size={16} />
-          Add Service
+          <Plus size={18} strokeWidth={3} />
+          <span>Add Service</span>
         </button>
       </div>
 

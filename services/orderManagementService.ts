@@ -49,6 +49,10 @@ export interface AvailableStore {
   store_id: number;
   store_name: string;
   store_address: string;
+  // Optional because some APIs return only one of these keys
+  store_type?: 'store' | 'warehouse' | string;
+  type?: 'store' | 'warehouse' | string;
+  is_warehouse?: boolean;
   inventory_details: StoreInventoryDetail[];
   total_items_available: number;
   total_items_required: number;
@@ -81,7 +85,7 @@ class OrderManagementService {
   /**
    * Get orders pending store assignment
    */
-  async getPendingAssignment(params?: { per_page?: number }): Promise<{
+  async getPendingAssignment(params?: { per_page?: number, status?: string, sort_order?: 'asc' | 'desc' }): Promise<{
     orders: PendingAssignmentOrder[];
     pagination: {
       current_page: number;
@@ -94,7 +98,7 @@ class OrderManagementService {
       console.log('📦 Fetching pending assignment orders...');
       
       const response = await axiosInstance.get('/order-management/pending-assignment', {
-        params: params || { per_page: 15 }
+        params: params || { per_page: 15, sort_order: 'asc' }
       });
 
       console.log('✅ Pending assignment orders loaded:', response.data.data);
@@ -136,36 +140,114 @@ class OrderManagementService {
    * Assign order to a specific store
    */
   async assignOrderToStore(orderId: number, payload: AssignStorePayload): Promise<any> {
-    try {
-      console.log('📍 Assigning order to store:', { orderId, ...payload });
-      
-      const response = await axiosInstance.post(
-        `/order-management/orders/${orderId}/assign-store`,
-        payload
-      );
+    const normalizedOrderId = Number(orderId);
+    const normalizedStoreId = Number(payload?.store_id);
 
-      console.log('✅ Order assigned successfully:', response.data.data);
+    if (!normalizedOrderId || !normalizedStoreId) {
+      throw new Error('Invalid order/store selection');
+    }
 
-      return response.data.data.order;
-    } catch (error: any) {
-      console.error('❌ Failed to assign order:', error);
-      
-      // Handle specific error cases
-      if (error.response?.status === 400) {
-        throw new Error(error.response.data.message || 'Order cannot be assigned');
-      }
-      
-      if (error.response?.data?.data) {
-        // Insufficient inventory error
-        const { product, required, available } = error.response.data.data;
-        throw new Error(
-          `Insufficient inventory for ${product}: Required ${required}, Available ${available}`
+    // Try canonical payload first, then a couple of common backend variants.
+    const payloadVariants: Array<Record<string, any>> = [
+      { store_id: normalizedStoreId, notes: payload?.notes },
+      { assigned_store_id: normalizedStoreId, notes: payload?.notes },
+      { storeId: normalizedStoreId, notes: payload?.notes },
+    ];
+
+    let lastError: any = null;
+
+    for (const body of payloadVariants) {
+      try {
+        console.log('📍 Assigning order to store:', { orderId: normalizedOrderId, body });
+
+        const response = await axiosInstance.post(
+          `/order-management/orders/${normalizedOrderId}/assign-store`,
+          body
         );
+
+        console.log('✅ Order assigned successfully:', response.data?.data || response.data);
+
+        return response.data?.data?.order || response.data?.data || response.data;
+      } catch (error: any) {
+        lastError = error;
+        const status = error?.response?.status;
+        const serverMessage = error?.response?.data?.message;
+        console.error('❌ Assign attempt failed:', {
+          status,
+          serverMessage,
+          responseData: error?.response?.data,
+        });
+
+        // For clear client errors, no need to retry variants.
+        if (status === 400 || status === 404 || status === 422) {
+          if (error.response?.data?.data) {
+            const { product, required, available } = error.response.data.data;
+            if (product && required != null && available != null) {
+              throw new Error(
+                `Insufficient inventory for ${product}: Required ${required}, Available ${available}`
+              );
+            }
+          }
+          throw new Error(serverMessage || 'Order cannot be assigned');
+        }
       }
-      
-      throw new Error(error.response?.data?.message || 'Failed to assign order to store');
+    }
+
+    // If all variants fail, bubble up most useful server message.
+    throw new Error(
+      lastError?.response?.data?.message ||
+      lastError?.message ||
+      'Failed to assign order to store'
+    );
+  }
+
+  /**
+   * Revert order assignment back to pending_assignment
+   */
+  async revertAssignment(orderId: number): Promise<any> {
+    try {
+      console.log('🔄 Reverting order assignment for:', orderId);
+      const response = await axiosInstance.post(`/order-management/orders/${orderId}/revert-assignment`);
+      console.log('✅ Order assignment reverted successfully');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to revert order assignment:', error);
+      throw new Error(error.response?.data?.message || 'Failed to revert order assignment');
+    }
+  }
+
+  /**
+   * Mark order as delivered manually
+   */
+  async markAsDelivered(orderId: number): Promise<any> {
+    try {
+      console.log('📦 Marking order as delivered:', orderId);
+      const response = await axiosInstance.post(`/order-management/orders/${orderId}/mark-as-delivered`);
+      console.log('✅ Order marked as delivered successfully');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to mark order as delivered:', error);
+      throw new Error(error.response?.data?.message || 'Failed to mark order as delivered');
+    }
+  }
+
+  /**
+   * Mark multiple orders as delivered in bulk
+   */
+  async bulkMarkAsDelivered(orderIds: number[]): Promise<any> {
+    try {
+      console.log('📦 Bulk marking orders as delivered:', orderIds);
+      const response = await axiosInstance.post('/order-management/orders/bulk-mark-as-delivered', {
+        order_ids: orderIds
+      });
+      console.log('✅ Bulk delivery request completed:', response.data);
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to process bulk delivery:', error);
+      throw new Error(error.response?.data?.message || 'Failed to process bulk delivery');
     }
   }
 }
+
 
 export default new OrderManagementService();

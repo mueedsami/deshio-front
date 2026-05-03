@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   Plus,
   Edit2,
@@ -21,7 +22,7 @@ interface Toast {
 }
 
 export default function ServiceManagementPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [services, setServices] = useState<Service[]>([]);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -204,16 +205,15 @@ export default function ServiceManagementPage() {
   return (
     <div className={`flex h-screen ${darkMode ? 'dark' : ''}`}>
       <Sidebar
-        sidebarOpen={sidebarOpen}
-        setSidebarOpen={setSidebarOpen}
-        darkMode={darkMode}
+        isOpen={sidebarOpen}
+        setIsOpen={setSidebarOpen}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">
         <Header
           darkMode={darkMode}
           setDarkMode={setDarkMode}
-          setSidebarOpen={setSidebarOpen}
+          toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         />
 
         <main className="flex-1 overflow-y-auto bg-gray-50 dark:bg-gray-900 p-6">

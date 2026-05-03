@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import { Plus } from 'lucide-react';
@@ -11,9 +12,10 @@ import AddItemModal from '@/components/AddItemModal';
 import { fieldService, Field } from '@/services/fieldService';
 
 export default function FieldPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [fields, setFields] = useState<Field[]>([]);
+  const [activeTab, setActiveTab] = useState<'active' | 'archived'>('active');
   const [showForm, setShowForm] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -24,13 +26,15 @@ export default function FieldPage() {
 
   useEffect(() => {
     fetchFields();
-  }, []);
+  }, [activeTab]);
 
   const fetchFields = async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const data = await fieldService.getFields();
+      const data = activeTab === 'active' 
+        ? await fieldService.getFields() 
+        : await fieldService.getArchivedFields();
       setFields(Array.isArray(data) ? data : []);
     } catch (error: any) {
       console.error('Error fetching fields:', error);
@@ -58,8 +62,6 @@ export default function FieldPage() {
 
   const handleAddField = async (data: Record<string, string | number>) => {
     try {
-      console.log('Form data received:', data);
-      
       if (!data.name || !data.type) {
         alert('Please fill in all required fields (Name and Type)');
         return;
@@ -72,20 +74,16 @@ export default function FieldPage() {
         is_active: true,
       };
 
-      console.log('Sending to API:', newFieldData);
-
       const savedField = await fieldService.createField(newFieldData);
-      console.log('API response:', savedField);
       
-      setFields((prev) => [...prev, savedField]);
+      if (activeTab === 'active') {
+        setFields((prev) => [...prev, savedField]);
+      }
       setShowForm(false);
       setError(null);
     } catch (error: any) {
       console.error('Error saving field:', error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.message ||
-                          'Failed to save field';
+      const errorMessage = error.response?.data?.message || 'Failed to save field';
       setError(errorMessage);
       alert(errorMessage);
     }
@@ -95,8 +93,6 @@ export default function FieldPage() {
     if (!editingField) return;
 
     try {
-      console.log('Form data received:', data);
-      
       if (!data.name || !data.type) {
         alert('Please fill in all required fields (Name and Type)');
         return;
@@ -109,10 +105,7 @@ export default function FieldPage() {
         type: data.type as string,
       };
 
-      console.log('Updating with data:', updatedFieldData);
-
       const savedField = await fieldService.updateField(editingField.id, updatedFieldData);
-      console.log('API response:', savedField);
       
       setFields((prev) => 
         prev.map((f) => (f.id === editingField.id ? savedField : f))
@@ -122,33 +115,51 @@ export default function FieldPage() {
       setError(null);
     } catch (error: any) {
       console.error('Error updating field:', error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          error.message ||
-                          'Failed to update field';
+      const errorMessage = error.response?.data?.message || 'Failed to update field';
       setError(errorMessage);
       alert(errorMessage);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Are you sure you want to delete this field?')) return;
+    const isArchived = activeTab === 'archived';
+    const message = isArchived 
+      ? 'Are you sure you want to PERMANENTLY delete this field? This action cannot be undone.' 
+      : 'Are you sure you want to archive this field?';
+    
+    if (!confirm(message)) return;
 
     try {
-      await fieldService.deleteField(id);
+      if (isArchived) {
+        await fieldService.permanentDeleteField(id);
+      } else {
+        await fieldService.deleteField(id);
+      }
       setFields(fields.filter((f) => f.id !== id));
       setError(null);
     } catch (error: any) {
       console.error('Error deleting field:', error);
-      const errorMessage = error.response?.data?.message || 
-                          error.response?.data?.error || 
-                          'Failed to delete field';
+      const errorMessage = error.response?.data?.message || 'Failed to delete field';
+      setError(errorMessage);
+      alert(errorMessage);
+    }
+  };
+
+  const handleRestore = async (id: number) => {
+    try {
+      await fieldService.restoreField(id);
+      setFields(fields.filter((f) => f.id !== id));
+      setError(null);
+    } catch (error: any) {
+      console.error('Error restoring field:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to restore field';
       setError(errorMessage);
       alert(errorMessage);
     }
   };
 
   const handleEdit = (field: Field) => {
+    if (activeTab === 'archived') return;
     setEditingField(field);
     setShowForm(true);
   };
@@ -167,13 +178,42 @@ export default function FieldPage() {
         <main className="flex-1 bg-gray-50 dark:bg-gray-900 p-6">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-              Fields
+              Product Fields
             </h2>
             <button
               onClick={() => setShowForm(true)}
-              className="flex items-center gap-2 px-3 py-2 bg-gray-900 hover:bg-gray-800 text-white text-sm rounded-lg transition-colors"
+              className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors"
             >
               <Plus className="w-4 h-4" /> Add Field
+            </button>
+          </div>
+
+          <div className="flex gap-4 mb-6 border-b border-gray-200 dark:border-gray-700">
+            <button
+              onClick={() => { setActiveTab('active'); setCurrentPage(1); }}
+              className={`pb-2 px-1 text-sm font-medium transition-colors relative ${
+                activeTab === 'active' 
+                  ? 'text-indigo-600 dark:text-indigo-400' 
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              }`}
+            >
+              Active Fields
+              {activeTab === 'active' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
+              )}
+            </button>
+            <button
+              onClick={() => { setActiveTab('archived'); setCurrentPage(1); }}
+              className={`pb-2 px-1 text-sm font-medium transition-colors relative ${
+                activeTab === 'archived' 
+                  ? 'text-indigo-600 dark:text-indigo-400' 
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              }`}
+            >
+              Archived Fields
+              {activeTab === 'archived' && (
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
+              )}
             </button>
           </div>
 
@@ -194,7 +234,9 @@ export default function FieldPage() {
               <FieldTable 
                 fields={currentFields} 
                 onDelete={handleDelete}
-                onEdit={handleEdit}
+                onEdit={activeTab === 'active' ? handleEdit : undefined}
+                onRestore={activeTab === 'archived' ? handleRestore : undefined}
+                isArchived={activeTab === 'archived'}
               />
               <PaginationControls
                 currentPage={currentPage}

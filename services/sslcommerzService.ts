@@ -29,23 +29,52 @@ class SSLCommerzService {
     notes?: string;
     coupon_code?: string;
   }): Promise<SSLCommerzInitResponse> {
-    try {
-      const response = await axiosInstance.post(
-        '/customer/orders/create-from-cart',
-        {
-          ...orderData,
-          payment_method: 'sslcommerz',
-        }
-      );
+    const basePayload = {
+      ...orderData,
+      payment_method: 'sslcommerz',
+      // Keep order unassigned for manual store assignment
+      store_id: null,
+      assigned_store_id: null,
+    };
 
-      return response.data as SSLCommerzInitResponse;
-    } catch (error: any) {
-      console.error('SSLCommerz initialization failed:', error);
-      throw {
-        message: error.response?.data?.message || 'Failed to initialize payment',
-        errors: error.response?.data?.errors || {},
-      };
+    const payloadVariants = [
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+        order_status: 'pending_assignment',
+        assignment_status: 'unassigned',
+        auto_assign_store: false,
+        requires_store_assignment: true,
+      },
+      {
+        ...basePayload,
+        status: 'pending_assignment',
+      },
+      {
+        ...basePayload,
+      },
+    ];
+
+    let lastError: any = null;
+
+    for (const body of payloadVariants) {
+      try {
+        const response = await axiosInstance.post('/customer/orders/create-from-cart', body);
+        return response.data as SSLCommerzInitResponse;
+      } catch (error: any) {
+        lastError = error;
+        console.warn('⚠️ SSLCommerz init attempt failed, trying fallback payload...', {
+          status: error?.response?.status,
+          message: error?.response?.data?.message || error?.message,
+        });
+      }
     }
+
+    console.error('SSLCommerz initialization failed:', lastError);
+    throw {
+      message: lastError?.response?.data?.message || 'Failed to initialize payment',
+      errors: lastError?.response?.data?.errors || {},
+    };
   }
 
   /**

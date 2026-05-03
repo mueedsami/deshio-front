@@ -55,9 +55,16 @@ class StoreService {
     sort_by?: string;
     sort_direction?: string;
     per_page?: number;
-  }) {
-    const response = await axios.get('/stores', { params });
+  }, config?: import('axios').AxiosRequestConfig) {
+    const response = await axios.get('/stores', { ...config, params });
     return response.data;
+  }
+
+  // Get all stores without pagination (convenience for dropdowns etc)
+  async getAllStores() {
+    const response = await this.getStores({ per_page: 1000, is_active: true });
+    // response.data is the paginated object from Laravel, actual items are in .data
+    return response.data?.data || [];
   }
 
   // ✅ Get all warehouse stores

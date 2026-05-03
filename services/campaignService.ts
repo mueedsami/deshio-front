@@ -1,4 +1,10 @@
 import axiosInstance from '@/lib/axios';
+import axios from 'axios';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://backend2.errumbd.com/api';
+
+// Unauthenticated axios for public endpoints (no auth header injected)
+const publicAxios = axios.create({ baseURL: API_BASE });
 
 export interface Campaign {
   id: number;
@@ -32,6 +38,64 @@ export interface CampaignFormData {
   is_active: boolean;
   is_automatic: boolean;
   is_public: boolean;
+  code?: string;
+}
+
+/** A public promotion as returned from GET /promotions/active-public */
+export interface PublicPromotion {
+  id: number;
+  name: string;
+  description?: string;
+  type: 'percentage' | 'fixed' | 'buy_x_get_y' | 'free_shipping';
+  discount_value: number;
+  minimum_purchase?: number | null;
+  maximum_discount?: number | null;
+  applicable_products: number[] | null;
+  applicable_categories: number[] | null;
+  start_date: string;
+  end_date: string | null;
+}
+
+/** Possible error codes returned by POST /promotions/validate-coupon */
+export type CouponErrorCode =
+  | 'INVALID_CODE'
+  | 'PROMOTION_EXPIRED'
+  | 'PROMOTION_NOT_STARTED'
+  | 'PROMOTION_LIMIT_REACHED'
+  | 'PROMOTION_INACTIVE'
+  | 'CUSTOMER_LIMIT_REACHED'
+  | 'CUSTOMER_NOT_ELIGIBLE'
+  | 'MINIMUM_NOT_MET'
+  | 'NO_ELIGIBLE_ITEMS'
+  | 'LOGIN_REQUIRED';
+
+export interface CouponCartItem {
+  product_id: number;
+  category_id?: number;
+  quantity: number;
+  unit_price: number;
+}
+
+export interface CouponValidationResult {
+  success: boolean;
+  /** Present on success */
+  data?: {
+    promotion: PublicPromotion;
+    /** Gross discount before any cap */
+    calculated_amount: number;
+    /** Actual discount applied (after cap) */
+    applied_amount: number;
+    capped: boolean;
+    max_discount?: number | null;
+    eligible_product_ids: number[];
+    category_scope_name?: string | null;
+    message: string;
+  };
+  /** Present on failure */
+  error_code?: CouponErrorCode;
+  message?: string;
+  /** For MINIMUM_NOT_MET — the required threshold */
+  minimum_purchase?: number;
 }
 
 export interface ActiveCampaign {
@@ -72,7 +136,7 @@ export interface DiscountCalculationResponse {
 }
 
 const campaignService = {
-  // CRUD
+  // ─── Admin CRUD ───────────────────────────────────────────
   async getCampaigns(params?: {
     is_automatic?: boolean;
     is_active?: boolean;
@@ -103,13 +167,45 @@ const campaignService = {
   },
 
   async toggleCampaign(id: number, isActive: boolean) {
-    const response = await axiosInstance.patch(`/promotions/${id}`, {
-      is_active: isActive,
-    });
+    const response = await axiosInstance.patch(`/promotions/${id}`, { is_active: isActive });
     return response.data;
   },
 
-  // Public endpoints
+  // ─── Public (no auth) ─────────────────────────────────────
+
+  /**
+   * Fetch all currently active public promotions for the storefront.
+   * No auth required — used by PromotionContext to power SALE badges.
+   */
+  async getActivePublicPromotions(): Promise<PublicPromotion[]> {
+    const response = await publicAxios.get('/promotions/active-public');
+    return response.data.data as PublicPromotion[];
+  },
+
+  /**
+   * Validate a private coupon code against the cart.
+   * Supports guest customers (customer_id: null).
+   * All errors are returned as structured CouponValidationResult (never throws).
+   */
+  async validateCouponCode(payload: {
+    code: string;
+    customer_id: number | null;
+    cart_subtotal: number;
+    cart_items?: CouponCartItem[];
+  }): Promise<CouponValidationResult> {
+    try {
+      const response = await publicAxios.post('/promotions/validate-coupon', payload);
+      return response.data as CouponValidationResult;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error) && error.response?.data) {
+        return error.response.data as CouponValidationResult;
+      }
+      return { success: false, error_code: 'INVALID_CODE', message: 'Something went wrong. Please try again.' };
+    }
+  },
+
+  // ─── Legacy (kept for backward compat) ────────────────────
+
   async getActiveCampaigns(params?: {
     product_ids?: number[];
     category_ids?: number[];

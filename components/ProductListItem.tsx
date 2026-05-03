@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
-import { MoreVertical, Edit, Trash2, Eye, Plus, Package } from 'lucide-react';
+import { MoreVertical, Edit, Trash2, Eye, Plus, Archive } from 'lucide-react';
 import type { ProductGroup, ProductVariant } from '@/types/product';
 import ImageLightboxModal from '@/components/ImageLightboxModal';
 
@@ -12,31 +12,32 @@ const ERROR_IMG_SRC =
 
 interface ProductListItemProps {
   productGroup: ProductGroup;
-  onDelete: (id: number) => void;
+  onDelete?: (id: number) => void;
   onEdit?: (id: number) => void;
+  onArchive?: (id: number) => void;
   onView: (id: number) => void;
-  onAddVariation: (group: ProductGroup) => void;
+  onAddVariation?: (group: ProductGroup) => void;
   onSelect?: (variant: ProductVariant) => void;
   selectable?: boolean;
+  stockFilter?: string;
 }
-
 export default function ProductListItem({
   productGroup,
   onDelete,
   onEdit,
+  onArchive,
   onView,
   onAddVariation,
   onSelect,
   selectable,
+  stockFilter,
 }: ProductListItemProps) {
+  const canEdit = typeof onEdit === 'function';
+  const canDelete = typeof onDelete === 'function';
+  const canArchive = typeof onArchive === 'function';
+  const canAddVariation = typeof onAddVariation === 'function';
   const [showDropdown, setShowDropdown] = useState(false);
-  const storageKey = `expanded_group_${productGroup.sku}`;
-  const [showVariations, setShowVariations] = useState(() => {
-    if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
-      return sessionStorage.getItem(storageKey) === 'true';
-    }
-    return false;
-  });
+  const [showVariations, setShowVariations] = useState(false);
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [lightboxTitle, setLightboxTitle] = useState<string>('');
   const [isDropdownMounted, setIsDropdownMounted] = useState(false);
@@ -86,21 +87,21 @@ export default function ProductListItem({
     }
   };
 
-  const handleToggleVariations = () => {
-    const nextState = !showVariations;
-    setShowVariations(nextState);
-    if (typeof window !== 'undefined' && typeof sessionStorage !== 'undefined') {
-      if (nextState) {
-        sessionStorage.setItem(storageKey, 'true');
-      } else {
-        sessionStorage.removeItem(storageKey);
-      }
-    }
-  };
+  const filteredVariants = useMemo(() => {
+    if (!stockFilter || stockFilter === 'all') return productGroup.variants;
+    return productGroup.variants.filter(v => {
+      const stock = Number(v.stockQuantity) || 0;
+      const online = Number(v.onlineStockQuantity) || 0;
+      if (stockFilter === 'in_stock') return stock > 0;
+      if (stockFilter === 'not_in_stock') return stock <= 0;
+      if (stockFilter === 'available_online') return online > 0;
+      return true;
+    });
+  }, [productGroup.variants, stockFilter]);
 
   // Group variants by color for display
-  const variantsByColor = productGroup.variants.reduce((acc, variant) => {
-    const color = variant.color || 'No Color';
+  const variantsByColor = filteredVariants.reduce((acc, variant) => {
+    const color = variant.color || 'na';
     if (!acc[color]) {
       acc[color] = [];
     }
@@ -166,41 +167,31 @@ export default function ProductListItem({
                       ? `৳${Number(productGroup.sellingPrice).toFixed(2)}`
                       : 'Checking stock...'}
                 </span>
+                {(productGroup.stockQuantity ?? 0) > 0 && (
+                  <div className="flex items-center gap-1.5 ml-1">
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
+                      Stock: {productGroup.stockQuantity}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400">
+                      Online: {productGroup.onlineStockQuantity || 0}
+                    </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
+                      Offline: {productGroup.offlineStockQuantity || 0}
+                    </span>
+                  </div>
+                )}
               </div>
 </div>
           </div>
           
-          <div className="flex flex-wrap items-center gap-2 mt-1">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-mono">
               SKU: {productGroup.sku}
             </span>
             {hasMultipleVariants && (
               <span className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-gray-300 dark:bg-gray-900/30 text-gray-700 dark:text-gray-400">
-                {productGroup.totalVariants} Variant{productGroup.totalVariants > 1 ? 's' : ''}
+                 {productGroup.totalVariants} Variant{productGroup.totalVariants > 1 ? 's' : ''}
               </span>
-            )}
-            {/* ── Per-store stock pills ── */}
-            {productGroup.stockByStore && productGroup.stockByStore.length > 0 && (
-              <>
-                <span className="text-gray-300 dark:text-gray-600 select-none">|</span>
-                <span className="inline-flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                  <Package className="w-3 h-3" />
-                </span>
-                {productGroup.stockByStore.map((s) => (
-                  <span
-                    key={s.store_id}
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium ${
-                      s.stock > 0
-                        ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800'
-                        : 'bg-gray-100 dark:bg-gray-700/50 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700'
-                    }`}
-                    title={`${s.store_name}: ${s.stock} unit${s.stock !== 1 ? 's' : ''}`}
-                  >
-                    <span className="max-w-[80px] truncate">{s.store_name}</span>
-                    <span className="font-semibold">{s.stock}</span>
-                  </span>
-                ))}
-              </>
             )}
           </div>
         </div>
@@ -210,7 +201,7 @@ export default function ProductListItem({
           {/* View Variations Button */}
           {hasMultipleVariants && (
             <button
-              onClick={handleToggleVariations}
+              onClick={() => setShowVariations(!showVariations)}
               className="px-4 py-2 text-sm font-medium bg-gray-900 hover:bg-gray-700 text-white rounded-lg transition-colors shadow-sm"
             >
               {showVariations ? 'Hide' : 'View'} Variations
@@ -259,7 +250,7 @@ export default function ProductListItem({
                 >
                   View Details
                 </button>
-                {onEdit && (
+                {canEdit && (
                   <button
                     onClick={() => {
                       onEdit(firstVariant.id);
@@ -271,19 +262,35 @@ export default function ProductListItem({
                     Edit Product
                   </button>
                 )}
-                <div className="my-1 border-t border-gray-200 dark:border-gray-700"></div>
-                <button
-                  onClick={() => {
-                    if (confirm(`Delete ${hasMultipleVariants ? 'all variants of' : ''} "${productGroup.baseName}"?${hasMultipleVariants ? ` This will delete ${productGroup.totalVariants} products.` : ''}`)) {
-                      productGroup.variants.forEach(v => onDelete(v.id));
-                    }
-                    setShowDropdown(false);
-                    setTimeout(() => setIsDropdownMounted(false), 200);
-                  }}
-                  className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                >
-                  Delete {hasMultipleVariants ? `All (${productGroup.totalVariants})` : ''}
-                </button>
+                {canArchive && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Archive ${hasMultipleVariants ? 'all variants of' : ''} "${productGroup.baseName}"?`)) {
+                        productGroup.variants.forEach((v) => onArchive?.(v.id));
+                      }
+                      setShowDropdown(false);
+                      setTimeout(() => setIsDropdownMounted(false), 200);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+                  >
+                    Archive {hasMultipleVariants ? `All (${productGroup.totalVariants})` : ''}
+                  </button>
+                )}
+                {(canDelete) && <div className="my-1 border-t border-gray-200 dark:border-gray-700"></div>}
+                {canDelete && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Delete ${hasMultipleVariants ? 'all variants of' : ''} "${productGroup.baseName}"?${hasMultipleVariants ? ` This will delete ${productGroup.totalVariants} products.` : ''}`)) {
+                        productGroup.variants.forEach((v) => onDelete?.(v.id));
+                      }
+                      setShowDropdown(false);
+                      setTimeout(() => setIsDropdownMounted(false), 200);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  >
+                    Delete {hasMultipleVariants ? `All (${productGroup.totalVariants})` : ''}
+                  </button>
+                )}
               </div>,
               document.body
             )}
@@ -295,15 +302,17 @@ export default function ProductListItem({
         <div className="border-t border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-900/50">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-              Available Variations ({productGroup.totalVariants})
+              Available Variations ({filteredVariants.length})
             </h4>
+            {canAddVariation && (
             <button
-              onClick={() => onAddVariation(productGroup)}
+              onClick={() => onAddVariation?.(productGroup)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-white dark:hover:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
               Add Variation
             </button>
+            )}
           </div>
           
           <div className="space-y-3">
@@ -335,40 +344,48 @@ export default function ProductListItem({
                       key={variant.id}
                       className="flex items-center gap-2 bg-gray-50 dark:bg-gray-700 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500 transition-colors"
                     >
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300 min-w-[48px]">
-                        {variant.size || 'One Size'}
+                      <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {variant.variation_suffix || variant.size || 'One Size'}
                       </span>
-
-                      {/* Stock count badge */}
-                      {variant.stock !== undefined && (
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold ${
-                            variant.stock > 0
-                              ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
-                              : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
-                          }`}
-                        >
-                          {variant.stock > 0 ? `${variant.stock} pcs` : 'Out'}
-                        </span>
-                      )}
-
+                      <div className="flex items-center gap-2 ml-3">
+                        <span className="text-[11px] font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Stock: {variant.stockQuantity || 0}</span>
+                        <span className="text-[11px] font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-1.5 py-0.5 rounded">Online: {variant.onlineStockQuantity || 0}</span>
+                        <span className="text-[11px] font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded">Offline: {variant.offlineStockQuantity || 0}</span>
+                      </div>
                       <div className="flex gap-1 ml-auto">
-                        <button
-                          onClick={() => onEdit && onEdit(variant.id)}
-                          className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
-                        >
-                          <Edit className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete "${variant.name}"?`)) {
-                              onDelete(variant.id);
-                            }
-                          }}
-                          className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-medium px-2 py-0.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        {canEdit && (
+                          <button
+                            onClick={() => onEdit?.(variant.id)}
+                            className="text-xs text-gray-600 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 font-medium px-2 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-600 rounded"
+                          >
+                            <Edit className="w-3 h-3" />
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Delete "${variant.name}"?`)) {
+                                onDelete?.(variant.id);
+                              }
+                            }}
+                            className="text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-medium px-2 py-0.5 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
+                        {canArchive && (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Archive "${variant.name}"?`)) {
+                                onArchive?.(variant.id);
+                              }
+                            }}
+                            className="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 font-medium px-2 py-0.5 hover:bg-amber-50 dark:hover:bg-amber-900/20 rounded"
+                            title="Archive variation"
+                          >
+                            <Archive className="w-3 h-3" />
+                          </button>
+                        )}
                         {onSelect && (
                           <button
                             onClick={() => onSelect(variant)}
@@ -393,7 +410,6 @@ export default function ProductListItem({
         </div>
       )}
     </div>
-
       <ImageLightboxModal
         open={!!lightboxSrc}
         src={lightboxSrc}

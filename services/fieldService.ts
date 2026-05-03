@@ -193,6 +193,49 @@ class FieldService {
       throw error;
     }
   }
+
+  // Get archived fields
+  async getArchivedFields(): Promise<Field[]> {
+    try {
+      const response = await axiosInstance.get(`${this.baseUrl}?only_trashed=true`);
+      const result = response.data;
+      if (result?.data?.data) {
+        return result.data.data;
+      }
+      return result?.data || result || [];
+    } catch (error) {
+      console.error('Error fetching archived fields:', error);
+      throw error;
+    }
+  }
+
+  // Restore field
+  async restoreField(id: number): Promise<void> {
+    try {
+      await axiosInstance.post(`/recycle-bin/restore`, {
+        type: 'field',
+        id: id
+      });
+    } catch (error) {
+      console.error(`Error restoring field ${id}:`, error);
+      throw error;
+    }
+  }
+
+  // Permanent delete field
+  async permanentDeleteField(id: number): Promise<void> {
+    try {
+      await axiosInstance.delete(`/recycle-bin/permanent-delete`, {
+        data: {
+          type: 'field',
+          id: id
+        }
+      });
+    } catch (error) {
+      console.error(`Error permanently deleting field ${id}:`, error);
+      throw error;
+    }
+  }
 }
 
 export const fieldService = new FieldService();

@@ -1,58 +1,239 @@
-"use client"
+'use client';
+
+import Link from 'next/link';
+import Image from 'next/image';
+import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Search as SearchIcon, X } from 'lucide-react';
+
+import catalogService, { type CatalogCategory } from '@/services/catalogService';
+
+const HERO_IMAGE_PATH = '/e-commerce-hero.jpg';
 
 export default function HeroSection() {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const [query, setQuery] = useState('');
+  const [bgUrl, setBgUrl] = useState<string>(HERO_IMAGE_PATH);
+  const [topCategories, setTopCategories] = useState<CatalogCategory[]>([]);
+
+  useEffect(() => {
+    setBgUrl(HERO_IMAGE_PATH);
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    catalogService.getCategories().then((tree) => {
+      const flat: CatalogCategory[] = [];
+      const walk = (list: CatalogCategory[]) =>
+        list.forEach((c) => {
+          flat.push(c);
+          if (c.children?.length) walk(c.children);
+        });
+      walk(tree);
+
+      const parents = flat
+        .filter((c) => (c.parent_id === null || c.parent_id === undefined) && c.name)
+        .sort((a, b) => Number(b.product_count || 0) - Number(a.product_count || 0))
+        .slice(0, 8);
+
+      if (!alive) return;
+      setTopCategories(parents);
+    }).catch(() => { });
+    return () => { alive = false; };
+  }, []);
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const q = query.trim();
+    if (!q) return;
+    router.push(`/e-commerce/search?q=${encodeURIComponent(q)}`);
+  };
+
+  const clear = () => {
+    setQuery('');
+    inputRef.current?.focus();
+  };
+
   return (
-    <section className="relative bg-gradient-to-br from-red-50 via-white to-blue-50 overflow-hidden">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 md:py-10">
-        <div className="grid md:grid-cols-2 gap-8 items-center">
-          {/* Left Content */}
-          <div className="space-y-6">
-            <div className="inline-flex items-center gap-2 px-4 py-2 bg-red-100 rounded-full">
-              <span className="w-2 h-2 bg-red-600 rounded-full"></span>
-              <span className="text-red-700 font-semibold text-sm tracking-wide">New Collection 2025</span>
-            </div>
+    <section style={{ position: 'relative', overflow: 'hidden', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+      {/* Background image */}
+      <div style={{ position: 'absolute', inset: 0 }}>
+        {bgUrl && (
+          <Image
+            src={bgUrl}
+            alt="Hero background"
+            fill
+            className="object-cover object-center"
+            priority
+            onError={() => setBgUrl('')}
+          />
+        )}
+        {/* Dark overlay */}
+        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.30)' }} />
+      </div>
 
-            <div className="space-y-3">
-              <h1 className="text-4xl md:text-5xl font-bold text-gray-900 leading-tight text-balance">
-                Timeless Elegance 
-              </h1>
-              <p className="text-base text-gray-600 leading-relaxed max-w-lg">
-                Handcrafted sarees from Bangladesh's finest artisans. Experience the perfect blend of tradition and
-                contemporary design.
-              </p>
-            </div>
+      {/* Content */}
+      <div className="ec-container" style={{ position: 'relative', zIndex: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '80px 20px 60px' }}>
+        <div style={{ maxWidth: '700px', width: '100%', margin: '0 auto', textAlign: 'center' }}>
 
-            <div className="flex flex-col sm:flex-row gap-3 pt-2">
-              <button className="group px-6 py-3 bg-red-700 text-white font-semibold rounded-xl hover:bg-red-700 transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 flex items-center justify-center gap-2">
-                Shop Collection
-                <span className="group-hover:translate-x-1 transition-transform">→</span>
-              </button>
-              <button className="px-6 py-3 bg-white text-gray-900 font-semibold rounded-xl hover:bg-gray-50 transition-all duration-300 border-2 border-gray-200 hover:border-gray-300">
-                View Lookbook
-              </button>
-            </div>
-          </div>
-
-          {/* Right Content - Image */}
-          <div className="relative">
-            <div className="aspect-[3/4] rounded-3xl overflow-hidden shadow-2xl ring-1 ring-gray-200/50">
-              <img
-                src="/e-commerce-hero.jpg"
-                alt="Featured Collection"
-                className="w-full h-full object-cover hover:scale-105 transition-transform duration-500"
+          {/* Search bar — prominent at top like reference */}
+          <form onSubmit={onSubmit} style={{ marginBottom: '32px' }}>
+            <div style={{
+              position: 'relative',
+              background: 'rgba(255,255,255,0.95)',
+              borderRadius: '4px',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.20)',
+              display: 'flex',
+              alignItems: 'center',
+              overflow: 'hidden',
+            }}>
+              <SearchIcon style={{ position: 'absolute', left: '16px', width: '18px', height: '18px', color: '#999999', pointerEvents: 'none', flexShrink: 0 }} />
+              <input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search products, collections..."
+                style={{
+                  width: '100%',
+                  background: 'transparent',
+                  padding: '16px 120px 16px 48px',
+                  fontSize: '15px',
+                  color: '#111111',
+                  fontFamily: "'Poppins', sans-serif",
+                  outline: 'none',
+                  border: 'none',
+                }}
               />
+              {query && (
+                <button
+                  type="button"
+                  onClick={clear}
+                  style={{ position: 'absolute', right: '100px', padding: '8px', color: '#999999', background: 'none', border: 'none', cursor: 'pointer' }}
+                >
+                  <X style={{ width: '16px', height: '16px' }} />
+                </button>
+              )}
+              <button
+                type="submit"
+                disabled={!query.trim()}
+                style={{
+                  position: 'absolute',
+                  right: '8px',
+                  padding: '8px 20px',
+                  background: '#111111',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  fontFamily: "'Poppins', sans-serif",
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  cursor: query.trim() ? 'pointer' : 'not-allowed',
+                  opacity: query.trim() ? 1 : 0.5,
+                  transition: 'opacity 0.2s',
+                }}
+              >
+                Search
+              </button>
             </div>
+          </form>
 
-            <div className="absolute -bottom-4 -right-4 bg-white p-4 rounded-2xl shadow-2xl ring-1 ring-gray-200/50 backdrop-blur-sm">
-              <p className="text-xs text-gray-500 font-medium mb-1 uppercase tracking-wide">Starting from</p>
-              <p className="text-2xl font-bold text-gray-900">৳4,999</p>
+          {/* Quick category chips */}
+          {topCategories.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px', marginBottom: '40px' }}>
+              {topCategories.map((c) => (
+                <Link
+                  key={c.id}
+                  href={`/e-commerce/${encodeURIComponent(c.slug || c.name)}`}
+                  style={{
+                    borderRadius: '4px',
+                    padding: '6px 16px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                    border: '1px solid rgba(255,255,255,0.6)',
+                    color: '#ffffff',
+                    background: 'rgba(255,255,255,0.12)',
+                    backdropFilter: 'blur(4px)',
+                    textDecoration: 'none',
+                    transition: 'background 0.15s, border-color 0.15s',
+                    fontFamily: "'Poppins', sans-serif",
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.25)'; (e.currentTarget as HTMLElement).style.borderColor = '#ffffff'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.6)'; }}
+                >
+                  {c.name}
+                </Link>
+              ))}
             </div>
+          )}
+
+          {/* Hero text */}
+          <h1 style={{
+            fontFamily: "'Poppins', sans-serif",
+            fontSize: 'clamp(32px, 6vw, 64px)',
+            fontWeight: 800,
+            color: '#ffffff',
+            lineHeight: 1.1,
+            letterSpacing: '-0.02em',
+            marginBottom: '16px',
+            textShadow: '0 2px 16px rgba(0,0,0,0.3)',
+          }}>
+            Refining the Art of <em style={{ fontStyle: 'italic', fontWeight: 400 }}>Lifestyle</em>
+          </h1>
+          <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '15px', lineHeight: 1.6, maxWidth: '520px', margin: '0 auto 36px', fontFamily: "'Poppins', sans-serif" }}>
+
+          </p>
+
+          {/* CTAs */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+            <Link href="/e-commerce/products" style={{
+              padding: '14px 32px',
+              background: '#111111',
+              color: '#ffffff',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 700,
+              fontFamily: "'Poppins', sans-serif",
+              textTransform: 'uppercase',
+              letterSpacing: '0.12em',
+              textDecoration: 'none',
+              transition: 'opacity 0.2s',
+            }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+            >
+              Shop Now
+            </Link>
+            <Link
+              href="/e-commerce/categories"
+              style={{
+                padding: '14px 32px',
+                background: 'rgba(255,255,255,0.15)',
+                color: '#ffffff',
+                border: '1px solid rgba(255,255,255,0.6)',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontWeight: 700,
+                fontFamily: "'Poppins', sans-serif",
+                textTransform: 'uppercase',
+                letterSpacing: '0.12em',
+                textDecoration: 'none',
+                backdropFilter: 'blur(4px)',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.25)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.15)'}
+            >
+              Collections
+            </Link>
           </div>
         </div>
       </div>
-
-      <div className="absolute top-32 left-0 w-72 h-72 bg-red-200 rounded-full opacity-10 blur-3xl -z-10"></div>
-      <div className="absolute bottom-0 right-0 w-96 h-96 bg-blue-200 rounded-full opacity-10 blur-3xl -z-10"></div>
     </section>
-  )
+  );
 }

@@ -1,4 +1,6 @@
 import axios from 'axios';
+import { ROLES_SKIPPING_STORE_SCOPE } from './accessMap';
+import { RoleSlug } from '@/types/roles';
 
 // NOTE:
 // In local dev, NEXT_PUBLIC_API_URL is sometimes missing.
@@ -29,6 +31,8 @@ const PUBLIC_ROUTES = [
   '/guest-checkout',
   '/guest-orders/by-phone',
   '/payment-method',
+  // Public order tracking and details
+  '/customer/orders/',
 ];
 
 // Helper function to check if route is public
@@ -53,23 +57,107 @@ axiosInstance.interceptors.request.use(
       return config;
     }
 
+    const url = String(config.url || '');
+
     // Get token from localStorage for protected routes
     if (typeof window !== 'undefined') {
       // Determine which token to use based on route
-      if (isCustomerRoute(config.url)) {
+      if (isCustomerRoute(url)) {
         // E-commerce customer routes - use customer token
         const token = localStorage.getItem('auth_token');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
-          console.log('🔒 Customer route, adding customer auth:', config.url);
+          console.log('🔒 Customer route, adding customer auth:', url);
         }
       } else {
         // Admin/Store routes - use admin token
         const token = localStorage.getItem('authToken');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
-          console.log('🔒 Admin route, adding admin auth:', config.url);
+          console.log('🔒 Admin route, adding admin auth:', url);
         }
+      }
+
+      // -----------------------------
+      // Store-scoped access (Scoping Phase 1 Rollout)
+      // -----------------------------
+      try {
+        const method = String(config.method || 'get').toLowerCase();
+
+        // 1) Respect manual bypass flag or header
+        if (config.skipStoreScope || config.headers?.['X-Skip-Store-Scope']) {
+          return config;
+        }
+
+        // Only apply to admin/store routes (NOT customer routes) and non-public routes.
+        if (!isCustomerRoute(url) && !isPublicRoute(url)) {
+          const roleSlug = localStorage.getItem('userRoleSlug') || '';
+          const storeIdRaw = localStorage.getItem('storeId');
+          const storeId = storeIdRaw ? Number(storeIdRaw) : undefined;
+
+          // Canonical Global Roles (Super Admin + Admin + Online Moderator)
+          const isGlobalRole = ROLES_SKIPPING_STORE_SCOPE.includes(roleSlug as RoleSlug);
+
+          // Scoping logic: 
+          // If NOT a global role AND a storeId exists, inject it into all requests.
+          if (!isGlobalRole && storeId && Number.isFinite(storeId)) {
+            // GET/DELETE: inject via query params if not already present
+            if (method === 'get' || method === 'delete') {
+              if (config.params && !Object.prototype.hasOwnProperty.call(config.params, 'store_id')) {
+                config.params = { ...config.params, store_id: storeId };
+              } else if (!config.params) {
+                config.params = { store_id: storeId };
+              }
+            }
+
+            // POST/PATCH/PUT: inject into body
+            if (['post', 'put', 'patch'].includes(method)) {
+              let data: any = config.data || {};
+              let alreadyHasStoreId = false;
+              
+              if (data instanceof FormData) {
+                alreadyHasStoreId = data.has('store_id');
+                // If store_id not already present, append it.
+                if (!alreadyHasStoreId) {
+                  data.append('store_id', String(storeId));
+                }
+              } else if (typeof data === 'string') {
+                try {
+                  data = JSON.parse(data);
+                  if (data && typeof data === 'object') {
+                    alreadyHasStoreId = Object.prototype.hasOwnProperty.call(data, 'store_id');
+                    if (!alreadyHasStoreId) {
+                      data.store_id = storeId;
+                    }
+                  }
+                  config.data = JSON.stringify(data);
+                } catch {
+                  // Fallback for non-JSON strings
+                }
+              } else {
+                // Plane object
+                if (data && typeof data === 'object') {
+                  alreadyHasStoreId = Object.prototype.hasOwnProperty.call(data, 'store_id');
+                  if (!alreadyHasStoreId) {
+                    data.store_id = storeId;
+                  }
+                }
+                config.data = data;
+              }
+              
+              // Only inject into params for POST/PUT/PATCH if NOT already injected into body
+              if (!alreadyHasStoreId) {
+                if (config.params && !Object.prototype.hasOwnProperty.call(config.params, 'store_id')) {
+                  config.params = { ...config.params, store_id: storeId };
+                } else if (!config.params) {
+                  config.params = { store_id: storeId };
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        console.error('Interceptor scoping error:', e);
       }
     }
     return config;
@@ -101,6 +189,37 @@ axiosInstance.interceptors.response.use(
   },
   async (error) => {
     const originalRequest = error.config;
+
+    // -----------------------------
+    // 403 Forbidden (Permission denied)
+    // Backend now enforces role-based permissions.
+    // We surface a friendly toast globally and still reject for local handlers.
+    // -----------------------------
+    if (error.response?.status === 403) {
+      const message =
+        error.response?.data?.message ||
+        'You do not have permission to perform this action';
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('global-toast', {
+            detail: {
+              message,
+              type: 'error',
+              meta: {
+                required_permissions: error.response?.data?.required_permissions || [],
+              },
+            },
+          })
+        );
+      }
+
+      if (error.response?.data?.required_permissions) {
+        console.warn('Required permissions:', error.response.data.required_permissions);
+      }
+
+      return Promise.reject(error);
+    }
 
     // Don't handle public route errors
     if (isPublicRoute(originalRequest?.url)) {

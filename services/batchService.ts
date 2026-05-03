@@ -20,9 +20,6 @@ export interface Barcode {
 export interface Batch {
   id: number;
   batch_number: string;
-  /** Some APIs also include raw FK columns */
-  product_id?: number;
-  store_id?: number;
   product: Product;
   store: Store;
   quantity: number;
@@ -75,29 +72,21 @@ export interface AdjustStockData {
 }
 
 export interface BatchFilters {
-  product_id?: number;
+  product_id?: number | string;
   product_ids?: string | number[];
-  store_id?: number;
-  status?: 'available' | 'expired' | 'low_stock' | 'out_of_stock' | 'inactive';
-  barcode?: string;
-  expiring_days?: number;
+  min_sell_price?: string | number;
+  max_sell_price?: string | number;
+  exact_price?: string | number;
   search?: string;
-  min_sell_price?: number;
-  max_sell_price?: number;
-  exact_price?: number;
+  store_id?: number | string;
+  status?: 'available' | 'expired' | 'low_stock' | 'out_of_stock' | 'inactive' | string;
+  barcode?: string;
+  batch_number?: string;
+  expiring_days?: number;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
   per_page?: number;
   page?: number;
-}
-
-export interface ListAllOptions {
-  /** Safety cap to avoid loading too much into memory */
-  max_items?: number;
-  /** Override per_page (backend may still cap). Defaults to 200 */
-  per_page?: number;
-  /** Optional safety cap on number of pages to fetch */
-  max_pages?: number;
 }
 
 // Laravel Paginated Response Structure
@@ -144,36 +133,6 @@ export interface BulkBatchPriceUpdateData {
 
 class BatchService {
   /**
-   * Fetch ALL batches by paging through the backend.
-   * Many environments cap per_page (often 20/50/100), so relying on a single request
-   * can silently hide batches.
-   */
-  async getBatchesAll(filters?: BatchFilters, opts?: ListAllOptions): Promise<Batch[]> {
-    const out: Batch[] = [];
-
-    const requestedPerPage = opts?.per_page ?? filters?.per_page ?? 100;
-    // Backend validation: per_page must be <= 100
-    const per_page = Math.max(1, Math.min(100, Number(requestedPerPage) || 100));
-    const max_items = opts?.max_items ?? 200000;
-    const max_pages = opts?.max_pages ?? 5000;
-
-    let page = 1;
-    while (page <= max_pages && out.length < max_items) {
-      const resp = await this.getBatches({ ...(filters || {}), per_page, page });
-      const items = resp?.data?.data ?? [];
-      out.push(...items);
-
-      const lastPage = Number(resp?.data?.last_page || page);
-      if (page >= lastPage) break;
-      if (!items.length) break; // safety: stop if backend returns empty page
-
-      page += 1;
-    }
-
-    return out.slice(0, max_items);
-  }
-
-  /**
    * Get all batches with filters (returns full paginated response)
    */
   async getBatches(filters?: BatchFilters): Promise<PaginatedResponse<Batch>> {
@@ -183,11 +142,46 @@ class BatchService {
 
   /**
    * Get batches as array (helper method for easier data access)
-   * This extracts the array from the paginated response
+   * This extracts the array from the paginated response.
+   * Default per_page set to 2000 to avoid common pagination pitfalls in POS/Social.
    */
   async getBatchesArray(filters?: BatchFilters): Promise<Batch[]> {
-    const response = await this.getBatches(filters);
-    return response.data.data;
+    const response = await this.getBatches({ per_page: 2000, ...filters });
+    return response.data?.data || (Array.isArray(response.data) ? response.data : []);
+  }
+
+  async getBatchesAll(
+    filters: BatchFilters = {},
+    options: { max_items?: number; max_pages?: number } = {}
+  ): Promise<Batch[]> {
+    const maxItems = options.max_items ?? 2000;
+    const maxPages = options.max_pages ?? 20;
+    const all: Batch[] = [];
+    let page = Number(filters.page || 1) || 1;
+    let pagesRead = 0;
+
+    while (pagesRead < maxPages && all.length < maxItems) {
+      const response = await this.getBatches({
+        ...filters,
+        page,
+        per_page: filters.per_page || 100,
+      });
+
+      const items = Array.isArray((response as any)?.data?.data) ? (response as any).data.data : [];
+      all.push(...items);
+
+      const currentPage = Number((response as any)?.data?.current_page || page);
+      const lastPage = Number((response as any)?.data?.last_page || currentPage);
+
+      if (!items.length || currentPage >= lastPage) {
+        break;
+      }
+
+      page = currentPage + 1;
+      pagesRead += 1;
+    }
+
+    return all.slice(0, maxItems);
   }
 
   /**
@@ -345,19 +339,6 @@ class BatchService {
       status: 'available',
       store_id: storeId
     });
-  }
-
-  /**
-   * Get ALL available batches by store (paged)
-   */
-  async getAvailableBatchesAll(storeId?: number, opts?: ListAllOptions): Promise<Batch[]> {
-    return this.getBatchesAll(
-      {
-        status: 'available',
-        store_id: storeId,
-      },
-      opts
-    );
   }
 }
 

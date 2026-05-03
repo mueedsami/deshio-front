@@ -10,75 +10,6 @@ import Toast from '@/components/Toast';
 
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
 
-type SocialCommerceEditContext = {
-  editMode?: boolean;
-  editOrderId?: number | string | null;
-  editOrderNumber?: string | null;
-  source?: string;
-  ts?: number;
-};
-
-const parseEditId = (value: any): number | null => {
-  const n = Number(value || 0);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-
-const readEditContextFromBrowser = (): SocialCommerceEditContext => {
-  if (typeof window === 'undefined') return {};
-
-  const context: SocialCommerceEditContext = {};
-
-  const merge = (raw: string | null) => {
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') Object.assign(context, parsed);
-    } catch {
-      // ignore bad stored context
-    }
-  };
-
-  merge(localStorage.getItem(SC_EDIT_CONTEXT_KEY));
-  merge(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY));
-
-  const params = new URLSearchParams(window.location.search);
-  const urlEditId = parseEditId(params.get('editOrderId') || params.get('edit_order_id'));
-  if (urlEditId) {
-    context.editMode = true;
-    context.editOrderId = urlEditId;
-  }
-
-  const urlOrderNumber = params.get('editOrderNumber') || params.get('orderNumber');
-  if (urlOrderNumber) context.editOrderNumber = urlOrderNumber;
-
-  return context;
-};
-
-const persistEditContextToBrowser = (ctx: SocialCommerceEditContext) => {
-  if (typeof window === 'undefined') return;
-
-  const editOrderId = parseEditId(ctx.editOrderId);
-  if (!editOrderId) return;
-
-  const normalized: SocialCommerceEditContext = {
-    editMode: true,
-    editOrderId,
-    editOrderNumber: ctx.editOrderNumber || null,
-    source: ctx.source || 'amount-details',
-    ts: Date.now(),
-  };
-
-  const raw = JSON.stringify(normalized);
-  sessionStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
-  localStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
-};
-
-const clearEditContextFromBrowser = () => {
-  if (typeof window === 'undefined') return;
-  sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
-  localStorage.removeItem(SC_EDIT_CONTEXT_KEY);
-};
-
 interface PaymentMethod {
   id: number;
   code: string;
@@ -112,6 +43,28 @@ const normalizeKey = (item: any): string => {
   const productId = Number(item?.product_id ?? item?.productId ?? 0) || 0;
   const batchId = Number(item?.batch_id ?? item?.batchId ?? 0) || 0;
   return `${productId}::${batchId}`;
+};
+
+const normalizeShippingPayload = (addr: any) => {
+  if (!addr || typeof addr !== 'object') return {};
+  const normalized = { ...addr };
+
+  // 1. address_line1 is mandatory
+  if (!normalized.address_line1) {
+    normalized.address_line1 = normalized.street || normalized.address || normalized.address_line_1 || '';
+  }
+
+  // 2. city is mandatory
+  if (!normalized.city) {
+    normalized.city = 'Dhaka'; // Default domestic fallback
+  }
+
+  // 3. country is mandatory
+  if (!normalized.country) {
+    normalized.country = 'Bangladesh'; // Default domestic fallback
+  }
+
+  return normalized;
 };
 
 export default function AmountDetailsPage() {
@@ -156,7 +109,7 @@ export default function AmountDetailsPage() {
   };
 
   useEffect(() => {
-    const storedOrder = sessionStorage.getItem('pendingOrder') || localStorage.getItem('pendingOrder');
+    const storedOrder = sessionStorage.getItem('pendingOrder');
     if (!storedOrder) {
       window.location.href = '/social-commerce';
       return;
@@ -165,44 +118,48 @@ export default function AmountDetailsPage() {
     const parsedOrder = JSON.parse(storedOrder);
 
     // Keep social-commerce edit mode sticky across page transitions/drafts.
-    // Edit identity is read from pendingOrder, URL, sessionStorage, and localStorage.
-    // If an edit id exists anywhere, we force this page into PATCH mode.
+    // If this id is missing, the old code fell back to POST /orders and created a duplicate order.
     try {
-      const editCtx = readEditContextFromBrowser();
-      const contextEditOrderId = parseEditId(editCtx.editOrderId);
-      const pendingEditOrderId = parseEditId(parsedOrder.editOrderId || parsedOrder.edit_order_id);
-      const effectiveEditOrderId = pendingEditOrderId || contextEditOrderId;
-
-      if (effectiveEditOrderId) {
-        parsedOrder.editMode = true;
-        parsedOrder.editOrderId = effectiveEditOrderId;
-        parsedOrder.edit_order_id = effectiveEditOrderId;
-        parsedOrder.editOrderNumber =
-          parsedOrder.editOrderNumber ||
-          (typeof editCtx.editOrderNumber === 'string' ? editCtx.editOrderNumber : null);
-
-        persistEditContextToBrowser({
-          editMode: true,
-          editOrderId: effectiveEditOrderId,
-          editOrderNumber: parsedOrder.editOrderNumber || null,
-          source: 'amount-details-load',
-        });
+      const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+      const contextEditOrderId = Number(editCtx.editOrderId || 0) || null;
+      if (!parsedOrder.editOrderId && contextEditOrderId) {
+        parsedOrder.editOrderId = contextEditOrderId;
+      }
+      if (!parsedOrder.editOrderNumber && typeof editCtx.editOrderNumber === 'string') {
+        parsedOrder.editOrderNumber = editCtx.editOrderNumber;
+      }
+      if (parsedOrder.editOrderId) {
+        sessionStorage.setItem(
+          SC_EDIT_CONTEXT_KEY,
+          JSON.stringify({
+            editOrderId: Number(parsedOrder.editOrderId),
+            editOrderNumber: parsedOrder.editOrderNumber || editCtx.editOrderNumber || null,
+          })
+        );
       }
     } catch {
       // ignore bad session data
     }
 
-    if (parsedOrder.items) {
-      parsedOrder.items = parsedOrder.items.map((item: any) => ({
-        ...item,
-        amount: calculateItemAmount(item),
-      }));
+    const processedItems = (parsedOrder.items || []).map((item: any) => ({
+      ...item,
+      amount: calculateItemAmount(item),
+    }));
 
-      // Always rebuild subtotal from line totals. Product/item discounts are already
-      // deducted in calculateItemAmount(), so this is the NET item subtotal.
-      // This prevents stale/gross subtotal from making the order total wrong.
-      parsedOrder.subtotal = parsedOrder.items.reduce((sum: number, item: any) => sum + calculateItemAmount(item), 0);
-    }
+    const processedServices = (parsedOrder.services || []).map((svc: any) => ({
+      ...svc,
+      amount: calculateItemAmount(svc),
+    }));
+
+    parsedOrder.items = processedItems;
+    parsedOrder.services = processedServices;
+
+    // Always rebuild subtotal from line totals. Product/item discounts are already
+    // deducted in calculateItemAmount(), so this is the NET item subtotal.
+    // This prevents stale/gross subtotal from making the order total wrong.
+    const itemSubtotal = processedItems.reduce((sum: number, item: any) => sum + item.amount, 0);
+    const serviceSubtotal = processedServices.reduce((sum: number, svc: any) => sum + svc.amount, 0);
+    parsedOrder.subtotal = itemSubtotal + serviceSubtotal;
 
     setOrderData(parsedOrder);
     setTransportCost(String(parseNumber(parsedOrder.shipping_amount ?? parsedOrder.shippingAmount ?? 0)));
@@ -238,13 +195,21 @@ export default function AmountDetailsPage() {
   }, [orderData]);
 
   const itemDiscountTotal = useMemo(() => {
-    return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
+    const itemDisc = (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
+    const serviceDisc = (orderData?.services || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
+    return itemDisc + serviceDisc;
   }, [orderData]);
+
   const grossSubtotal = useMemo(() => {
-    return (orderData?.items || []).reduce((sum: number, it: any) => {
+    const itemGross = (orderData?.items || []).reduce((sum: number, it: any) => {
       return sum + parseNumber(it?.unit_price) * (parseNumber(it?.quantity) || 1);
     }, 0);
+    const serviceGross = (orderData?.services || []).reduce((sum: number, it: any) => {
+      return sum + parseNumber(it?.unit_price) * (parseNumber(it?.quantity) || 1);
+    }, 0);
+    return itemGross + serviceGross;
   }, [orderData]);
+
   const subtotal = useMemo(() => Math.max(0, grossSubtotal - itemDiscountTotal), [grossSubtotal, itemDiscountTotal]);
   const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
@@ -370,36 +335,28 @@ export default function AmountDetailsPage() {
     setIsProcessing(true);
 
     try {
-      const editCtx = readEditContextFromBrowser();
-      const effectiveEditOrderId =
-        parseEditId(orderData?.editOrderId) ||
-        parseEditId(orderData?.edit_order_id) ||
-        parseEditId(editCtx.editOrderId);
-      const hasEditIntent = Boolean(orderData?.editMode || orderData?.editOrderId || orderData?.edit_order_id || editCtx.editMode || editCtx.editOrderId);
+      let editContextOrderId: number | null = null;
+      let editContextOrderNumber: string | null = null;
+      try {
+        const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+        editContextOrderId = Number(editCtx.editOrderId || 0) || null;
+        editContextOrderNumber = typeof editCtx.editOrderNumber === 'string' ? editCtx.editOrderNumber : null;
+      } catch {
+        // ignore bad session data
+      }
+
+      const effectiveEditOrderId = Number(orderData?.editOrderId || editContextOrderId || 0) || null;
       const isEditMode = !!effectiveEditOrderId;
-
-      if (hasEditIntent && !effectiveEditOrderId) {
-        throw new Error('Edit mode was detected, but the edit order ID is missing. Duplicate order creation was blocked. Please go back to Orders and click Edit again.');
-      }
-
-      if (isEditMode) {
-        persistEditContextToBrowser({
-          editMode: true,
-          editOrderId: effectiveEditOrderId,
-          editOrderNumber: orderData?.editOrderNumber || editCtx.editOrderNumber || null,
-          source: 'amount-details-submit',
-        });
-      }
-
-      const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
+      const rawShipping = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
+      const shippingPayload = normalizeShippingPayload(rawShipping);
 
       const itemPayloads = (orderData.items || []).map((item: any) => ({
         id: item.id ?? null,
-        product_id: parseEditId(item.product_id) || parseEditId(item.productId) || 0,
-        batch_id: parseEditId(item.batch_id) || parseEditId(item.product_batch_id) || parseEditId(item.productBatchId) || null,
-        quantity: Math.max(1, Math.floor(parseNumber(item.quantity) || 1)),
-        unit_price: parseNumber(item.unit_price),
-        discount_amount: parseNumber(item.discount_amount),
+        product_id: item.product_id,
+        batch_id: item.batch_id ?? null,
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        discount_amount: Number(item.discount_amount) || 0,
       }));
 
       let createdOrder: any = null;
@@ -418,6 +375,7 @@ export default function AmountDetailsPage() {
           shipping_address: shippingPayload,
           discount_amount: orderDiscount,
           shipping_amount: transport,
+          services: orderData.services || [],
           ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
         };
 
@@ -745,9 +703,8 @@ export default function AmountDetailsPage() {
 
       displayToast(msg, 'success');
       sessionStorage.removeItem('pendingOrder');
-      localStorage.removeItem('pendingOrder');
       sessionStorage.removeItem('socialCommerceDraftV1');
-      if (isEditMode) clearEditContextFromBrowser();
+      if (isEditMode) sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
 
       setTimeout(() => {
         window.location.href = '/orders';
@@ -836,32 +793,64 @@ export default function AmountDetailsPage() {
                   </div>
 
                   {/* Products */}
-                  <div className="mb-4">
-                    <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
-                      Products ({orderData.items?.length || 0})
-                    </p>
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {orderData.items?.map((item: any, idx: number) => {
-                        const itemAmount = calculateItemAmount(item);
-                        return (
-                          <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-gray-50 dark:bg-gray-700">
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
-                              <p className="text-xs text-gray-600 dark:text-gray-400">
-                                Qty: {item.quantity} × ৳{parseNumber(item.unit_price).toFixed(2)}
-                              </p>
-                              {parseNumber(item.discount_amount) > 0 && (
-                                <p className="text-xs text-red-600 dark:text-red-400">
-                                  Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
+                  {Array.isArray(orderData.items) && orderData.items.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                        Products ({orderData.items.length})
+                      </p>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {orderData.items.map((item: any, idx: number) => {
+                          const itemAmount = calculateItemAmount(item);
+                          return (
+                            <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-gray-50 dark:bg-gray-700">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-400">
+                                  Qty: {item.quantity} × ৳{parseNumber(item.unit_price).toFixed(2)}
                                 </p>
-                              )}
+                                {parseNumber(item.discount_amount) > 0 && (
+                                  <p className="text-xs text-red-600 dark:text-red-400">
+                                    Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
+                                  </p>
+                                )}
+                              </div>
+                              <p className="text-sm font-medium text-gray-900 dark:text-white sm:ml-2 self-end sm:self-auto">৳{itemAmount.toFixed(2)}</p>
                             </div>
-                            <p className="text-sm font-medium text-gray-900 dark:text-white sm:ml-2 self-end sm:self-auto">৳{itemAmount.toFixed(2)}</p>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* Services */}
+                  {Array.isArray(orderData.services) && orderData.services.length > 0 && (
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                        Services ({orderData.services.length})
+                      </p>
+                      <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {orderData.services.map((svc: any, idx: number) => {
+                          const svcAmount = calculateItemAmount(svc);
+                          return (
+                            <div key={`svc-${idx}`} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
+                              <div className="min-w-0 flex-1">
+                                <p className="text-sm text-indigo-900 dark:text-indigo-100 font-medium truncate">{svc.service_name || svc.productName || 'Service'}</p>
+                                <p className="text-xs text-indigo-700 dark:text-indigo-300">
+                                  Qty: {svc.quantity} × ৳{parseNumber(svc.unit_price).toFixed(2)}
+                                </p>
+                                {parseNumber(svc.discount_amount) > 0 && (
+                                  <p className="text-xs text-red-600 dark:text-red-400">
+                                    Discount: -৳{parseNumber(svc.discount_amount).toFixed(2)}
+                                  </p>
+                                )}
+                              </div>
+                              <p className="text-sm font-medium text-indigo-900 dark:text-indigo-100 sm:ml-2 self-end sm:self-auto">৳{svcAmount.toFixed(2)}</p>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Totals */}
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-700">

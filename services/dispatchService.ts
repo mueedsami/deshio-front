@@ -113,6 +113,11 @@ export interface CreateDispatchData {
   carrier_name?: string;
   tracking_number?: string;
   notes?: string;
+  items: AddDispatchItemData[];
+  draft_scan_history?: {
+    barcode: string;
+    batch_id: number;
+  }[];
 }
 
 export interface AddDispatchItemData {
@@ -350,6 +355,18 @@ class DispatchService {
   async getReceivedBarcodes(dispatchId: number, itemId: number) {
     const response = await axiosInstance.get(
       `${this.basePath}/${dispatchId}/items/${itemId}/received-barcodes`
+    );
+    return response.data;
+  }
+
+  /**
+   * Scan barcode to automatically add an item to the dispatch (or increment existing item).
+   * Used for "scan to send" flow where items aren't pre-selected.
+   */
+  async scanToAddItem(dispatchId: number, barcode: string) {
+    const response = await axiosInstance.post(
+      `${this.basePath}/${dispatchId}/scan-to-add`,
+      { barcode }
     );
     return response.data;
   }

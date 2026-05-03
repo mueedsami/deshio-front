@@ -6,11 +6,11 @@ import axiosInstance from '@/lib/axios';
 
 export interface Permission {
   id: number;
-  name: string;
+  title: string;
   slug: string;
   description?: string;
+  module?: string;
   guard_name: string;
-  group?: string;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;

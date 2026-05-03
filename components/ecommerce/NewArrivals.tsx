@@ -1,56 +1,131 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import catalogService, { SimpleProduct } from '@/services/catalogService';
 import { useRouter } from 'next/navigation';
-import { ShoppingCart, Heart, Eye, Sparkles } from 'lucide-react';
-import { getBaseProductName } from '@/lib/productNameUtils';
 
-export default function NewArrivals() {
+import { useCart } from '@/app/e-commerce/CartContext';
+import catalogService, { SimpleProduct } from '@/services/catalogService';
+import { buildCardProductsFromResponse } from '@/lib/ecommerceCardUtils';
+import PremiumProductCard from '@/components/ecommerce/ui/PremiumProductCard';
+import { fireToast } from '@/lib/globalToast';
+
+interface NewArrivalsProps {
+  categoryId?: number;
+  limit?: number;
+}
+
+/* Parse a date string → ms timestamp, returns 0 if unparseable */
+const toMs = (v: unknown): number => {
+  if (!v) return 0;
+  const ms = Date.parse(String(v));
+  return Number.isFinite(ms) ? ms : 0;
+};
+
+/**
+ * Get the CREATION timestamp for a card product.
+ * We deliberately ignore updated_at — an old product that was recently edited
+ * should NOT reappear as a "new arrival".
+ */
+const getCreatedMs = (product: SimpleProduct): number => {
+  // The card product itself (spread from main_variant) has created_at
+  const own = toMs((product as any)?.created_at);
+  if (own > 0) return own;
+
+  // Check variants as fallback
+  const variants = Array.isArray(product.variants) ? product.variants : [];
+  let best = 0;
+  for (const v of variants) {
+    const t = toMs((v as any)?.created_at);
+    if (t > best) best = t;
+  }
+  return best;
+};
+
+const NewArrivals: React.FC<NewArrivalsProps> = ({ categoryId, limit = 8 }) => {
   const router = useRouter();
   const [products, setProducts] = useState<SimpleProduct[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
+  const { addToCart } = useCart();
 
   useEffect(() => {
-    const fetchNewArrivals = async () => {
-      try {
-        setLoading(true);
-        const data = await catalogService.getNewArrivals(8, 30);
-        console.log('New Arrivals Response:', data);
-        console.log('First Product:', data.new_arrivals[0]);
-        console.log('First Product Images:', data.new_arrivals[0]?.images);
-        setProducts(data.new_arrivals);
-      } catch (err: any) {
-        console.error('Error fetching new arrivals:', err);
-        setError(err.message || 'Failed to load new arrivals');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchNewArrivals();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categoryId, limit]);
 
-  const handleProductClick = (productId: number) => {
-    router.push(`/e-commerce/product/${productId}`);
+  const fetchNewArrivals = async () => {
+    setIsLoading(true);
+    try {
+      const response = await catalogService.getProducts({
+        page: 1,
+        per_page: limit,
+        category_id: categoryId,
+        sort_by: 'newest',
+        sort: 'created_at',
+        order: 'desc',
+        sort_order: 'desc',
+        new_arrivals: true,
+      });
+
+      const rawCards = buildCardProductsFromResponse(response);
+
+      // We maintain client side sort to ensure flawless display regardless of unstable backend default ordering.
+      const sorted = [...rawCards].sort((a, b) => getCreatedMs(b) - getCreatedMs(a));
+
+      // Always show the newest top N products available, without strict date cutoffs.
+      setProducts(sorted.slice(0, limit));
+    } catch (error) {
+      console.error('Error fetching new arrivals:', error);
+      setProducts([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  if (loading) {
+  const handleImageError = (productId: number) => {
+    setImageErrors(prev => {
+      if (prev.has(productId)) return prev;
+      const next = new Set(prev);
+      next.add(productId);
+      return next;
+    });
+  };
+
+  const handleProductClick = (product: SimpleProduct) => {
+    router.push(`/e-commerce/product/${product.id}`);
+  };
+
+  const handleAddToCart = async (product: SimpleProduct, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (product.has_variants) {
+      router.push(`/e-commerce/product/${product.id}`);
+      return;
+    }
+    try {
+      await addToCart(product.id, 1);
+
+      fireToast(`Added to cart: ${product?.name || 'Item'}`, 'success');
+    } catch (error: any) {
+      console.error('Error adding to cart:', error);
+      fireToast(error?.message || 'Failed to add to cart', 'error');
+    }
+  };
+
+  if (isLoading) {
     return (
-      <section className="py-12 px-4 bg-white">
-        <div className="max-w-7xl mx-auto">
-          <div className="mb-8">
-            <div className="h-8 w-64 bg-gray-200 rounded-lg mb-2 animate-pulse"></div>
-            <div className="h-4 w-96 bg-gray-200 rounded-lg animate-pulse"></div>
+      <section style={{ background: '#ffffff', padding: '48px 0', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+        <div className="ec-container">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '32px' }}>
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
+            <div style={{ height: '24px', width: '180px', background: '#f5f5f5', borderRadius: '4px' }} />
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
-              <div key={i} className="bg-gray-50 rounded-lg shadow-md p-4 animate-pulse">
-                <div className="aspect-square bg-gray-200 rounded-lg mb-4"></div>
-                <div className="h-4 bg-gray-200 rounded mb-2"></div>
-                <div className="h-4 bg-gray-200 rounded w-3/4 mb-2"></div>
-                <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
+            {Array.from({ length: limit }).map((_, i) => (
+              <div key={i} className="animate-pulse">
+                <div style={{ aspectRatio: '2/3', background: '#f5f5f5', borderRadius: '4px', marginBottom: '12px' }} />
+                <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '70%', marginBottom: '6px' }} />
+                <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '40%' }} />
               </div>
             ))}
           </div>
@@ -59,139 +134,66 @@ export default function NewArrivals() {
     );
   }
 
-  if (error || products.length === 0) {
-    return null;
-  }
+  // Section hides if there are no genuinely new products
+  if (products.length === 0) return null;
 
   return (
-    <section className="py-12 px-4 bg-white">
-      <div className="max-w-7xl mx-auto">
-        {/* Section Header */}
-        <div className="mb-8">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles className="h-6 w-6 text-red-800" />
-            <h2 className="text-3xl font-bold text-gray-900">
+    <section style={{ background: '#ffffff', padding: '48px 0', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+      <div className="ec-container">
+        {/* Section header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div style={{ height: '1px', flex: 1, maxWidth: '40px', background: '#111111' }} />
+            <h2 style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '18px',
+              fontWeight: 800,
+              textTransform: 'uppercase',
+              letterSpacing: '0.15em',
+              color: '#111111',
+              margin: 0,
+            }}>
               New Arrivals
             </h2>
+            <div style={{ height: '1px', flex: 1, maxWidth: '40px', background: '#111111' }} />
           </div>
-          <p className="text-gray-600">
-            Fresh products added in the last 30 days
-          </p>
+          <button
+            onClick={() => router.push('/e-commerce/products')}
+            style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '12px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+              color: '#111111',
+              background: 'none',
+              border: '1.5px solid #111111',
+              borderRadius: '4px',
+              padding: '8px 16px',
+              cursor: 'pointer',
+              textDecoration: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            View All
+          </button>
         </div>
 
-        {/* Products Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {products.map((product) => {
-            // Better image handling
-            const imagesArray = Array.isArray(product.images) ? product.images : [];
-            const primaryImage = imagesArray.find(img => img.is_primary) || imagesArray[0];
-            const imageUrl = primaryImage?.url || '/placeholder-product.png';
-            
-            const categoryName = typeof product.category === 'string' 
-              ? product.category 
-              : product.category?.name;
-            
-            return (
-              <div
-                key={product.id}
-                className="bg-gray-50 rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300 cursor-pointer group"
-                onClick={() => handleProductClick(product.id)}
-              >
-                {/* Product Image */}
-                <div className="relative aspect-square overflow-hidden bg-gray-100">
-                  <img
-                    src={imageUrl}
-                    alt={getBaseProductName(product.name)}
-                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      target.src = '/placeholder-product.png';
-                    }}
-                  />
-
-                  {/* New Badge */}
-                  <div className="absolute top-2 left-2 bg-gradient-to-r from-red-800 to-red-900 text-white px-2 py-1 rounded-md text-xs font-semibold flex items-center gap-1">
-                    <Sparkles className="h-3 w-3" />
-                    New
-                  </div>
-
-                  {/* Days Ago Badge (if available) */}
-                  {product.added_days_ago !== undefined && product.added_days_ago <= 7 && (
-                    <div className="absolute top-2 right-2 bg-white text-red-800 px-2 py-1 rounded-md text-xs font-semibold">
-                      {product.added_days_ago === 0 ? 'Today' : `${product.added_days_ago}d ago`}
-                    </div>
-                  )}
-
-                  {/* Quick Actions */}
-                  <div className="absolute bottom-2 right-2 flex space-x-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Add to wishlist logic
-                      }}
-                      className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                    >
-                      <Heart className="h-4 w-4 text-gray-700" />
-                    </button>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleProductClick(product.id);
-                      }}
-                      className="bg-white p-2 rounded-full shadow-md hover:bg-gray-100"
-                    >
-                      <Eye className="h-4 w-4 text-gray-700" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Product Info */}
-                <div className="p-4">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-2 line-clamp-2 min-h-[2.5rem]">
-                    {getBaseProductName(product.name)}
-                  </h3>
-
-                  {/* Category */}
-                  {categoryName && (
-                    <p className="text-xs text-gray-500 mb-2">
-                      {categoryName}
-                    </p>
-                  )}
-
-                  {/* Price */}
-                  <div className="flex items-center space-x-2 mb-3">
-                    <span className="text-lg font-bold text-gray-900">
-                      ৳{Number(product.selling_price).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {/* Stock Status and Cart Button */}
-                  <div className="flex items-center justify-between">
-                    <span className={`text-xs font-medium ${product.in_stock ? 'text-red-800' : 'text-red-600'}`}>
-                      {product.in_stock ? 'In Stock' : 'Out of Stock'}
-                    </span>
-                    
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        // Add to cart logic
-                      }}
-                      disabled={!product.in_stock}
-                      className={`p-2 rounded-full ${
-                        product.in_stock
-                          ? 'bg-red-800 text-white hover:bg-red-900'
-                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                      } transition-colors`}
-                    >
-                      <ShoppingCart className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
+          {products.map((product) => (
+            <PremiumProductCard
+              key={product.id}
+              product={product}
+              imageErrored={imageErrors.has(product.id)}
+              onImageError={handleImageError}
+              onOpen={handleProductClick}
+              onAddToCart={handleAddToCart}
+            />
+          ))}
         </div>
       </div>
     </section>
   );
-}
+};
+
+export default NewArrivals;

@@ -4,6 +4,7 @@ import BatchPrinter from './BatchPrinter';
 import BatchEditModal from './BatchEditModal';
 import { Batch, UpdateBatchData } from '@/services/batchService';
 import { barcodeTrackingService } from '@/services/barcodeTrackingService';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface BatchCardProps {
   batch: Batch;
@@ -18,6 +19,8 @@ export default function BatchCard({ batch, onDelete, onEdit }: BatchCardProps) {
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
   const [showAllBarcodes, setShowAllBarcodes] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const { isRole } = useAuth();
+  const isAdmin = isRole(['admin', 'super-admin']);
 
   // Fetch barcodes for THIS specific batch
   useEffect(() => {
@@ -154,27 +157,30 @@ export default function BatchCard({ batch, onDelete, onEdit }: BatchCardProps) {
           </div>
         </div>
 
-        {/* Pricing Info */}
         <div className="mb-4 pb-4 border-b border-gray-200 dark:border-gray-700">
-          <div className="grid grid-cols-3 gap-3 text-sm">
-            <div>
-              <span className="text-gray-500 dark:text-gray-400 block text-xs mb-1">Cost</span>
-              <span className="font-semibold text-gray-900 dark:text-white">
-                ৳{legacyBatch.costPrice.toLocaleString('en-BD')}
-              </span>
-            </div>
+          <div className={`grid ${isAdmin ? 'grid-cols-3' : 'grid-cols-1'} gap-3 text-sm`}>
+            {isAdmin && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 block text-xs mb-1">Cost</span>
+                <span className="font-semibold text-gray-900 dark:text-white">
+                  ৳{legacyBatch.costPrice.toLocaleString('en-BD')}
+                </span>
+              </div>
+            )}
             <div>
               <span className="text-gray-500 dark:text-gray-400 block text-xs mb-1">Selling</span>
               <span className="font-semibold text-gray-900 dark:text-white">
                 ৳{legacyBatch.sellingPrice.toLocaleString('en-BD')}
               </span>
             </div>
-            <div>
-              <span className="text-gray-500 dark:text-gray-400 block text-xs mb-1">Profit</span>
-              <span className="font-semibold text-green-600 dark:text-green-400">
-                {batch.profit_margin}
-              </span>
-            </div>
+            {isAdmin && (
+              <div>
+                <span className="text-gray-500 dark:text-gray-400 block text-xs mb-1">Profit</span>
+                <span className="font-semibold text-green-600 dark:text-green-400">
+                  {batch.profit_margin}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 

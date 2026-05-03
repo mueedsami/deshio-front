@@ -1,11 +1,15 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
-import { X, Loader2, Tag } from 'lucide-react';
+import React from 'react';
+import { X, Loader2, ShoppingCart, ShoppingBag } from 'lucide-react';
 import { useCart } from '../../../app/e-commerce/CartContext';
 import { useRouter } from 'next/navigation';
 import CartItem from './CartItem';
-import campaignService from '@/services/campaignService';
+import checkoutService from '../../../services/checkoutService';
+
+const formatBDT = (value: number) => {
+  return `৳${value.toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 
 interface CartSidebarProps {
   isOpen: boolean;
@@ -16,99 +20,174 @@ export default function CartSidebar({ isOpen, onClose }: CartSidebarProps) {
   const { cart, getTotalPrice, isLoading } = useCart();
   const router = useRouter();
 
-  const [discountData, setDiscountData] = useState<{
-    total_discount: number;
-    campaigns_applied: { id: number; name: string; type: string; value: number }[];
-  } | null>(null);
-
-  // Fetch discount preview whenever cart changes and sidebar is open
-  useEffect(() => {
-    if (!isOpen || cart.length === 0) {
-      setDiscountData(null);
-      return;
-    }
-    const items = cart.map(item => ({
-      product_id: item.productId,
-      quantity: item.quantity,
-      unit_price: Number(item.price) || 0,
-    }));
-    campaignService.calculateDiscount(items)
-      .then(data => setDiscountData(data))
-      .catch(() => setDiscountData(null));
-  }, [isOpen, cart]);
-
   const subtotal = getTotalPrice();
-  const automaticDiscount = discountData?.total_discount || 0;
-  const discountedTotal = Math.max(0, subtotal - automaticDiscount);
+  const deliveryCharge = checkoutService.calculateDeliveryCharge('Dhaka');
+  const total = subtotal + deliveryCharge;
 
-  const freeShippingThreshold = 5000;
-  const remaining = Math.max(0, freeShippingThreshold - discountedTotal);
-  const progress = Math.min(100, (discountedTotal / freeShippingThreshold) * 100);
+  const isAnyOverStock = cart.some(item => typeof item.maxQuantity === 'number' && item.quantity > item.maxQuantity);
 
   const handleCheckout = () => {
+    if (isAnyOverStock) return;
+    
+    // Set all cart items as selected for checkout
+    if (cart.length > 0) {
+      localStorage.setItem('checkout-selected-items', JSON.stringify(cart.map(i => i.id)));
+    }
+    
     router.push('/e-commerce/checkout');
     onClose();
   };
 
-  const handleViewCart = () => {
-    router.push('/e-commerce/cart');
-    onClose();
-  };
+
 
   return (
     <>
+      {/* Backdrop */}
+      {isOpen && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 100,
+            background: 'rgba(0,0,0,0.35)',
+            backdropFilter: 'blur(2px)',
+          }}
+          className="ec-anim-backdrop"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Side Drawer */}
       <div
-        className={`
-          fixed right-0 top-0 h-full w-full sm:w-96 bg-white shadow-2xl z-50 
-          flex flex-col transform transition-transform duration-300 ease-in-out
-          ${isOpen ? 'translate-x-0' : 'translate-x-full sm:translate-x-full'}
-        `}
+        style={{
+          position: 'fixed',
+          right: 0,
+          top: 0,
+          bottom: 0,
+          zIndex: 101,
+          width: '100%',
+          maxWidth: '380px',
+          background: '#ffffff',
+          borderLeft: '1px solid rgba(0,0,0,0.10)',
+          display: 'flex',
+          flexDirection: 'column',
+          transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
+          transition: 'transform 0.4s cubic-bezier(0.32, 0.72, 0, 1)',
+          boxShadow: '-8px 0 40px rgba(0,0,0,0.10)',
+        }}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b bg-white">
-          <h2 className="text-xl font-bold text-gray-900">Shopping cart</h2>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-            <X size={24} className="text-gray-700" />
+        <div style={{
+          display: 'flex',
+          height: '56px',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 20px',
+          borderBottom: '1px solid rgba(0,0,0,0.08)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <ShoppingBag style={{ width: '18px', height: '18px', color: '#111111' }} />
+            <h2 style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '14px',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.12em',
+              color: '#111111',
+              margin: 0,
+            }}>
+              Shopping Cart
+            </h2>
+            <span style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: '12px',
+              fontWeight: 700,
+              color: '#999999',
+            }}>
+              ({cart.length})
+            </span>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              display: 'flex',
+              width: '32px',
+              height: '32px',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '50%',
+              border: '1px solid rgba(0,0,0,0.15)',
+              color: '#999999',
+              background: 'none',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = '#111111'; (e.currentTarget as HTMLElement).style.color = '#111111'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(0,0,0,0.15)'; (e.currentTarget as HTMLElement).style.color = '#999999'; }}
+          >
+            <X style={{ width: '14px', height: '14px' }} />
           </button>
         </div>
 
-        {/* Active campaigns strip */}
-        {discountData && discountData.campaigns_applied.length > 0 && (
-          <div className="bg-red-50 border-b border-red-100 px-4 py-2">
-            <p className="text-xs font-semibold text-red-700 mb-1 flex items-center gap-1">
-              <Tag className="w-3 h-3" /> Active Offers
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {discountData.campaigns_applied.map(c => (
-                <span key={c.id} className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">
-                  🎁 {c.name}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* Cart Items */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px' }}>
+          {/* Loading State */}
           {isLoading && (
-            <div className="flex justify-center items-center py-12">
-              <Loader2 className="animate-spin text-gray-400" size={32} />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 0', gap: '12px' }}>
+              <Loader2 style={{ animation: 'spin 1s linear infinite', color: '#111111', width: '28px', height: '28px' }} />
+              <p style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.15em', color: '#999999', textTransform: 'uppercase', fontFamily: "'Poppins', sans-serif" }}>
+                Syncing bag...
+              </p>
             </div>
           )}
 
+          {/* Empty State */}
           {!isLoading && cart.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-gray-500">Your cart is empty</p>
-              <button onClick={onClose} className="mt-4 text-teal-600 hover:text-teal-700 font-medium">
-                Continue Shopping
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 24px', textAlign: 'center' }}>
+              <div style={{
+                width: '80px',
+                height: '80px',
+                borderRadius: '50%',
+                background: '#f5f5f5',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: '20px',
+              }}>
+                <ShoppingCart style={{ width: '32px', height: '32px', color: '#cccccc' }} />
+              </div>
+              <h3 style={{ fontFamily: "'Poppins', sans-serif", fontSize: '16px', fontWeight: 700, color: '#111111', marginBottom: '8px' }}>Your cart is empty</h3>
+              <p style={{ fontSize: '13px', color: '#999999', marginBottom: '24px', lineHeight: 1.5, fontFamily: "'Poppins', sans-serif" }}>
+                Add something to your collection to get started.
+              </p>
+              <button
+                onClick={() => { onClose(); router.push('/e-commerce/categories'); }}
+                style={{
+                  padding: '12px 28px',
+                  background: '#111111',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  fontFamily: "'Poppins', sans-serif",
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.08em',
+                  cursor: 'pointer',
+                }}
+              >
+                Start Shopping
               </button>
             </div>
           )}
 
+          {/* Cart Items */}
           {!isLoading && cart.length > 0 && (
-            <div className="space-y-4">
+            <div style={{ paddingTop: '16px', paddingBottom: '16px', display: 'flex', flexDirection: 'column', gap: '0' }}>
               {cart.map((item) => (
-                <CartItem key={item.id} item={item} />
+                <div key={`${item.id}-${item.sku}`} style={{ borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+                  <CartItem item={item} />
+                </div>
               ))}
             </div>
           )}
@@ -116,69 +195,51 @@ export default function CartSidebar({ isOpen, onClose }: CartSidebarProps) {
 
         {/* Footer */}
         {!isLoading && cart.length > 0 && (
-          <div className="border-t p-6 space-y-4 bg-white">
-            {/* Free Shipping Progress */}
-            {remaining > 0 ? (
-              <div>
-                <p className="text-sm text-gray-600 mb-2">
-                  Add <span className="font-bold text-red-700">৳{remaining.toFixed(2)}</span> to cart and get free shipping!
-                </p>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div
-                    className="bg-red-700 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
-            ) : (
-              <div className="bg-green-50 border border-green-200 rounded-lg p-3">
-                <p className="text-sm text-green-700 font-semibold">🎉 You've qualified for free shipping!</p>
-              </div>
-            )}
-
-            {/* Price breakdown */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm text-gray-600">
-                <span>Subtotal</span>
-                <span>৳{subtotal.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
-              </div>
-
-              {automaticDiscount > 0 && (
-                <div className="flex items-center justify-between text-sm text-green-700 font-medium">
-                  <span className="flex items-center gap-1">
-                    <Tag className="w-3.5 h-3.5" /> Sale Discount
-                  </span>
-                  <span>-৳{automaticDiscount.toLocaleString('en-BD', { minimumFractionDigits: 2 })}</span>
-                </div>
-              )}
-
-              <div className="flex items-center justify-between pt-2 border-t border-gray-100">
-                <span className="text-lg font-semibold text-gray-900">Total:</span>
-                <span className="text-2xl font-bold text-red-700">
-                  ৳{discountedTotal.toLocaleString('en-BD', { minimumFractionDigits: 2 })}
-                </span>
-              </div>
+          <div style={{ borderTop: '1px solid rgba(0,0,0,0.08)', padding: '16px 20px', background: '#ffffff' }}>
+            {/* Subtotal */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+              <span style={{ fontSize: '13px', color: '#555555', fontFamily: "'Poppins', sans-serif" }}>Subtotal</span>
+              <span style={{ fontSize: '16px', fontWeight: 700, color: '#111111', fontFamily: "'Poppins', sans-serif" }}>
+                {formatBDT(subtotal)}
+              </span>
             </div>
+            <p style={{ fontSize: '11px', color: '#999999', marginBottom: '16px', fontFamily: "'Poppins', sans-serif" }}>
+              Includes standard delivery
+            </p>
 
             {/* Buttons */}
-            <div className="space-y-3">
-              <button
-                onClick={handleViewCart}
-                className="w-full bg-white border-2 border-gray-900 text-gray-900 py-3 rounded font-semibold hover:bg-gray-50 transition-colors"
-              >
-                VIEW CART
-              </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <button
                 onClick={handleCheckout}
-                className="w-full bg-red-700 text-white py-3 rounded font-semibold hover:bg-red-800 transition-colors"
+                disabled={isAnyOverStock}
+                style={{
+                  width: '100%',
+                  padding: '14px',
+                  background: '#111111',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  fontFamily: "'Poppins', sans-serif",
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.10em',
+                  cursor: isAnyOverStock ? 'not-allowed' : 'pointer',
+                  opacity: isAnyOverStock ? 0.5 : 1,
+                  transition: 'opacity 0.15s',
+                }}
+                onMouseEnter={e => !isAnyOverStock && ((e.currentTarget as HTMLElement).style.opacity = '0.85')}
+                onMouseLeave={e => !isAnyOverStock && ((e.currentTarget as HTMLElement).style.opacity = '1')}
               >
-                CHECKOUT
+                Checkout
               </button>
+
             </div>
           </div>
         )}
       </div>
 
+      {/* Mobile scroll lock */}
       <style jsx>{`
         @media (max-width: 640px) {
           body {

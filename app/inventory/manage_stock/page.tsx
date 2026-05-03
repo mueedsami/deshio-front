@@ -1,19 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import { Search, Package, CheckCircle, AlertCircle } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import StoreCard from '@/components/StoreCard';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import { batchService, storeService, type Batch, type Store } from '@/services';
+import { storeService } from '@/services';
+import type { Store } from '@/services/storeService';
+import type { Batch } from '@/services/batchService';
 
-interface StoreCardData {
-  id: string;
-  name: string;
-  location: string;
-  type: 'Warehouse' | 'Store';
-  pathao_key: string;
+interface StoreCardData extends Store {
   revenue: number;
   revenueChange: number;
   products: number;
@@ -21,8 +19,28 @@ interface StoreCardData {
 }
 
 export default function ManageStockPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen bg-gray-50 dark:bg-gray-900 items-center justify-center">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 dark:border-white mx-auto mb-4" />
+            <p className="text-gray-600 dark:text-gray-400">Loading inventory page...</p>
+          </div>
+        </div>
+      }
+    >
+      <ManageStockPageContent />
+    </Suspense>
+  );
+}
+
+function ManageStockPageContent() {
   const router = useRouter();
-  const [darkMode, setDarkMode] = useState(false);
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const isUpdatingUrlRef = useRef(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [batches, setBatches] = useState<Batch[]>([]);
   const [stores, setStores] = useState<StoreCardData[]>([]);
@@ -32,15 +50,40 @@ export default function ManageStockPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
 
+  const updateQueryParams = useCallback(
+    (updates: Record<string, string | null | undefined>, historyMode: 'replace' | 'push' = 'replace') => {
+      const params = new URLSearchParams(searchParams.toString());
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === undefined || value === '') params.delete(key);
+        else params.set(key, value);
+      });
+
+      const qs = params.toString();
+      const nextUrl = qs ? `${pathname}?${qs}` : pathname;
+      isUpdatingUrlRef.current = true;
+      if (historyMode === 'push') router.push(nextUrl);
+      else router.replace(nextUrl);
+    },
+    [router, pathname, searchParams]
+  );
+
+  useEffect(() => {
+    if (isUpdatingUrlRef.current) {
+      isUpdatingUrlRef.current = false;
+      return;
+    }
+    setSearchTerm(searchParams.get('q') ?? '');
+  }, [searchParams]);
+
   useEffect(() => {
     const role = localStorage.getItem('userRole') || '';
     const storeId = localStorage.getItem('storeId') || '';
     setUserRole(role);
     setUserStoreId(storeId);
-    fetchData(role, storeId);
+    fetchData();
   }, []);
 
-  const fetchData = async (role: string, storeId: string) => {
+  const fetchData = async () => {
     setLoading(true);
     setError('');
 
@@ -48,7 +91,7 @@ export default function ManageStockPage() {
       // Fetch stores
       try {
         console.log('🏪 Fetching stores...');
-        const storesResponse = await storeService.getStores({ is_active: true });
+        const storesResponse = await storeService.getStores({ is_active: true }, { skipStoreScope: true });
         
         console.log('📦 Stores response:', storesResponse);
 
@@ -67,24 +110,14 @@ export default function ManageStockPage() {
 
         // Map stores to StoreCardData
         const mappedStores = storesArray.map((store: Store): StoreCardData => ({
-          id: String(store.id),
-          name: store.name,
-          location: store.address || '',
-          type: store.is_warehouse ? 'Warehouse' : 'Store',
-          pathao_key: store.pathao_key || '',
+          ...store,
           revenue: 0,
           revenueChange: 0,
           products: 0,
           orders: 0,
         }));
 
-        // Filter stores based on user role
-        if (role === 'store_manager' && storeId) {
-          const userStore = mappedStores.find((s) => s.id === String(storeId));
-          setStores(userStore ? [userStore] : []);
-        } else {
-          setStores(mappedStores);
-        }
+        setStores(mappedStores);
       } catch (storeError: any) {
         console.error('❌ Error fetching stores:', storeError);
         const errorMsg = storeError?.response?.data?.message || 'Failed to load stores.';
@@ -104,14 +137,16 @@ export default function ManageStockPage() {
     router.push(`/inventory/admit-batch?batchId=${batchId}`);
   };
 
-  const handleManageStock = (storeId: string) => {
-    router.push(`/inventory/outlet-stock?storeId=${storeId}`);
+  const handleManageStock = (storeId: number) => {
+    const qs = searchParams.toString();
+    const returnTo = qs ? `${pathname}?${qs}` : pathname;
+    router.push(`/inventory/outlet-stock?storeId=${storeId}&returnTo=${encodeURIComponent(returnTo)}`);
   };
 
   const filteredStores = stores.filter(
     (store) =>
       store.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (store.location && store.location.toLowerCase().includes(searchTerm.toLowerCase()))
+      (store.address && store.address.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   // Loading State
@@ -173,7 +208,11 @@ export default function ManageStockPage() {
                       type="text"
                       placeholder="Search stores..."
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setSearchTerm(next);
+                        updateQueryParams({ q: next || null });
+                      }}
                       className="pl-9 pr-4 py-2 border border-gray-200 dark:border-gray-600 rounded-lg text-sm w-64 bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500"
                     />
                   </div>

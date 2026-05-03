@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { ShoppingBag } from 'lucide-react';
 import MyAccountShell from '@/components/ecommerce/my-account/MyAccountShell';
 import checkoutService, { Order } from '@/services/checkoutService';
 
@@ -52,7 +53,7 @@ export default function MyAccountOrdersPage() {
           />
           <button
             onClick={load}
-            className="bg-red-700 text-white px-4 py-2 rounded-md text-sm hover:bg-red-800"
+            className="bg-neutral-900 text-white px-4 py-2 rounded-md text-sm hover:bg-neutral-800"
           >
             Search
           </button>
@@ -80,52 +81,148 @@ export default function MyAccountOrdersPage() {
       </button>
 
       {error ? (
-        <div className="border border-red-200 bg-red-50 text-red-700 rounded-md p-3 text-sm mb-4">
+        <div className="border border-rose-200 bg-rose-50 text-neutral-900 rounded-md p-3 text-sm mb-4">
           {error}
         </div>
       ) : null}
 
       {loading ? (
-        <div className="text-gray-600">Loading orders...</div>
+        <div className="flex flex-col gap-4">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-48 w-full bg-neutral-100 rounded-xl animate-pulse" />
+          ))}
+        </div>
       ) : (
-        <div className="overflow-x-auto border rounded-lg">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-left">
-              <tr>
-                <th className="p-3">Order</th>
-                <th className="p-3">Date</th>
-                <th className="p-3">Status</th>
-                <th className="p-3">Total</th>
-                <th className="p-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {orders.map((o) => (
-                <tr key={o.order_number} className="border-t">
-                  <td className="p-3 font-medium">#{o.order_number}</td>
-                  <td className="p-3">{new Date(o.created_at).toLocaleString()}</td>
-                  <td className="p-3">{o.status}</td>
-                  <td className="p-3">{o.total_amount}৳</td>
-                  <td className="p-3">
-                    <Link
-                      className="text-red-700 hover:underline"
-                      href={`/e-commerce/my-account/orders/${o.order_number}`}
-                    >
-                      View
-                    </Link>
-                  </td>
-                </tr>
-              ))}
+        <div className="space-y-4">
+          {orders.map((o) => {
+            const status = (o.status || 'pending').toLowerCase();
+            
+            const getStatusStyles = (s: string) => {
+              switch(s) {
+                case 'processing':
+                  return {
+                    bg: 'rgba(230, 168, 23, 0.12)',
+                    text: 'var(--status-warning)',
+                    border: '1px solid rgba(230,168,23,0.28)'
+                  };
+                case 'shipped':
+                  return {
+                    bg: 'var(--cyan-pale)',
+                    text: 'var(--cyan)',
+                    border: '1px solid var(--cyan-glow)'
+                  };
+                case 'delivered':
+                  return {
+                    bg: 'rgba(46, 204, 138, 0.12)',
+                    text: 'var(--status-success)',
+                    border: '1px solid rgba(46,204,138,0.28)'
+                  };
+                case 'cancelled':
+                  return {
+                    bg: 'rgba(224, 82, 82, 0.12)',
+                    text: 'var(--status-danger)',
+                    border: '1px solid rgba(224,82,82,0.28)'
+                  };
+                default:
+                  return {
+                    bg: 'var(--bg-lifted)',
+                    text: 'var(--text-muted)',
+                    border: '1px solid var(--border-default)'
+                  };
+              }
+            };
 
-              {!orders.length ? (
-                <tr>
-                  <td className="p-4 text-gray-600" colSpan={5}>
-                    No orders found.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+            const sStyles = getStatusStyles(status);
+            const steps = ['pending', 'processing', 'shipped', 'delivered'];
+            const currentStepIdx = steps.indexOf(status);
+
+            return (
+              <div key={o.order_number} className="bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-[var(--radius-lg)] overflow-hidden transition-all hover:bg-[var(--bg-surface-2)]">
+                <div className="p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] mb-1" style={{ fontFamily: "'Poppins', sans-serif" }}>Order #{o.order_number}</p>
+                      <p className="text-[14px] font-medium text-[var(--text-primary)]">{new Date(o.created_at).toLocaleDateString(undefined, { dateStyle: 'long' })}</p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <span 
+                        className="px-4 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest transition-all"
+                        style={{ background: sStyles.bg, color: sStyles.text, border: sStyles.border, fontFamily: "'Poppins', sans-serif" }}
+                      >
+                        {o.status}
+                      </span>
+                      <Link
+                        href={`/e-commerce/my-account/orders/${o.order_number}`}
+                        className="text-[11px] font-bold uppercase tracking-widest text-[var(--cyan)] hover:text-[var(--text-primary)] transition-colors flex items-center gap-2"
+                        style={{ fontFamily: "'Poppins', sans-serif" }}
+                      >
+                        Details <span>→</span>
+                      </Link>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between py-6 border-t border-[var(--border-default)]">
+                    <div className="space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]" style={{ fontFamily: "'Poppins', sans-serif" }}>Total Investment</p>
+                      <p className="text-2xl font-medium text-[var(--text-primary)]" style={{ fontFamily: "'Poppins', sans-serif" }}>{Number(o.total_amount).toLocaleString()} ৳</p>
+                    </div>
+                    {o.items_count && (
+                      <div className="text-right">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]" style={{ fontFamily: "'Poppins', sans-serif" }}>Item Count</p>
+                        <p className="text-lg font-medium text-[var(--text-primary)]">{o.items_count}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 8.1 — Refined Timeline Bar */}
+                  {(status === 'shipped' || status === 'processing' || status === 'delivered' || status === 'pending') && (
+                    <div className="pt-8 border-t border-[var(--border-default)]">
+                      <div className="flex justify-between relative">
+                        <div className="absolute top-[5px] left-0 right-0 h-[2px] bg-[var(--bg-lifted)] rounded-full -z-0" />
+                        
+                        {steps.map((step, idx) => {
+                          const isCompleted = idx < currentStepIdx || status === 'delivered';
+                          const isActive = idx === currentStepIdx && status !== 'delivered';
+                          
+                          return (
+                            <div key={step} className="flex flex-col items-center gap-3 relative z-10 flex-1">
+                              <div 
+                                className={`w-3 h-3 rounded-full border-2 transition-all duration-500 ${
+                                  isCompleted 
+                                    ? 'bg-[var(--status-success)] border-[var(--status-success)]' 
+                                    : isActive 
+                                      ? 'bg-[var(--cyan)] border-[var(--cyan)] shadow-[0_0_12px_var(--cyan-glow)]' 
+                                      : 'bg-[var(--bg-lifted)] border-[var(--border-strong)]'
+                                }`} 
+                              />
+                              <span 
+                                className={`text-[9px] font-bold uppercase tracking-widest transition-colors duration-300 ${
+                                  isActive ? 'text-[var(--cyan)]' : 'text-[var(--text-muted)]'
+                                }`}
+                                style={{ fontFamily: "'Poppins', sans-serif" }}
+                              >
+                                {step}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {!orders.length ? (
+            <div className="text-center py-12 bg-neutral-100/5 rounded-2xl border border-white/5">
+              <ShoppingBag className="mx-auto mb-4 text-white/20" size={48} />
+              <p className="text-white/60">No orders found.</p>
+              <Link href="/e-commerce/" className="mt-4 ec-btn ec-btn-gold">
+                Start Shopping
+              </Link>
+            </div>
+          ) : null}
         </div>
       )}
     </MyAccountShell>

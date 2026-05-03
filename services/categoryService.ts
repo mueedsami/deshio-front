@@ -108,6 +108,11 @@ private normalizeCategory<T extends Category | CategoryTree>(category: T): T {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
 
   if (category.image_url && !category.image_url.startsWith('http')) {
+    // Legacy category image paths can arrive as `category/...`.
+    // Public assets are served from `/storage/category/...`.
+    if (/^\/?category\//i.test(category.image_url) && !/\/storage\/category\//i.test(category.image_url)) {
+      category.image_url = category.image_url.replace(/^\/?category\//i, '/storage/category/');
+    }
     // Simply prepend base URL - no need to replace anything
     category.image_url = baseUrl + category.image_url;
   }

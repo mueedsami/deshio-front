@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -9,14 +10,25 @@ import customerService, { Customer, CustomerOrder } from '@/services/customerSer
 import orderService from '@/services/orderService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
-import lookupService, { LookupProductData } from '@/services/lookupService';
+import lookupService from '@/services/lookupService';
 import purchaseOrderService from '@/services/purchase-order.service';
-import ReturnExchangeFromOrder from '@/components/lookup/ReturnExchangeFromOrder';
-
 import productImageService from '@/services/productImageService';
 import storeService, { Store } from '@/services/storeService';
+import ReturnExchangeFromOrder from '@/components/lookup/ReturnExchangeFromOrder';
+import ReturnProductModal from '@/components/sales/ReturnProductModal';
+import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import productReturnService, { type CreateReturnRequest } from '@/services/productReturnService';
+import refundService, { type CreateRefundRequest } from '@/services/refundService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
 import BatchPrinter from "@/components/BatchPrinter";
+import axiosInstance from '@/lib/axios';
+import {
+  LABEL_WIDTH_MM as SHARED_LABEL_WIDTH_MM,
+  LABEL_HEIGHT_MM as SHARED_LABEL_HEIGHT_MM,
+  DEFAULT_DPI as SHARED_DEFAULT_DPI,
+  mmToIn as sharedMmToIn,
+  renderBarcodeLabelBase64,
+} from "@/lib/barcodeLabelRenderer";
 
 // -----------------------
 // QZ + barcode label rendering (same configuration as BatchPrinter)
@@ -95,38 +107,50 @@ function fitText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number) 
   return t.length ? t + ellipsis : "";
 }
 
-function wrapTwoLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): [string, string] {
-  const clean = String(text || "").trim().replace(/\s+/g, " ");
-  if (!clean) return ["", ""];
-  if (ctx.measureText(clean).width <= maxWidth) return [clean, ""];
+function wrapLines(ctx: CanvasRenderingContext2D, text: string, maxWidth: number, maxLines = 3): string[] {
+  const clean = (text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return [""];
+  if (ctx.measureText(clean).width <= maxWidth) return [clean];
 
   const words = clean.split(" ");
-  if (words.length <= 1) {
-    // No spaces; split by characters
-    let line1 = clean;
-    while (line1.length > 0 && ctx.measureText(line1).width > maxWidth) line1 = line1.slice(0, -1);
-    const rest = clean.slice(line1.length).trim();
-    if (!rest) return [fitText(ctx, clean, maxWidth), ""];
-    return [line1, fitText(ctx, rest, maxWidth)];
-  }
+  const lines: string[] = [];
+  let remaining = words;
 
-  // Build first line word-by-word
-  let line1 = "";
-  let i = 0;
-  for (; i < words.length; i++) {
-    const test = line1 ? `${line1} ${words[i]}` : words[i];
-    if (ctx.measureText(test).width <= maxWidth) {
-      line1 = test;
-    } else {
+  while (remaining.length > 0 && lines.length < maxLines) {
+    const isLastLine = lines.length === maxLines - 1;
+
+    if (remaining.length === 1) {
+      lines.push(isLastLine ? fitText(ctx, remaining[0], maxWidth) : remaining[0]);
+      remaining = [];
       break;
+    }
+
+    let line = "";
+    let i = 0;
+    for (; i < remaining.length; i++) {
+      const test = line ? `${line} ${remaining[i]}` : remaining[i];
+      if (ctx.measureText(test).width <= maxWidth) line = test;
+      else break;
+    }
+
+    if (!line) {
+      let forced = remaining[0];
+      while (forced.length > 0 && ctx.measureText(forced).width > maxWidth) forced = forced.slice(0, -1);
+      line = forced || fitText(ctx, remaining[0], maxWidth);
+      i = 1;
+    }
+
+    if (isLastLine && i < remaining.length) {
+      const restRaw = [line, ...remaining.slice(i)].join(" ");
+      lines.push(fitText(ctx, restRaw, maxWidth));
+      remaining = [];
+    } else {
+      lines.push(line);
+      remaining = remaining.slice(i);
     }
   }
 
-  if (!line1) return [fitText(ctx, clean, maxWidth), ""];
-
-  const line2Raw = words.slice(i).join(" ").trim();
-  const line2 = line2Raw ? fitText(ctx, line2Raw, maxWidth) : "";
-  return [line1, line2];
+  return lines.length > 0 ? lines : [fitText(ctx, clean, maxWidth)];
 }
 
 function normalizeLabelName(text: string) {
@@ -169,47 +193,44 @@ async function renderLabelBase64(opts: { code: string; productName: string; pric
   ctx.fillStyle = "#000";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.font = `800 ${Math.round(hPx * 0.11)}px Arial`;
+  ctx.font = `900 ${Math.round(hPx * 0.11)}px Arial`;
   ctx.fillText("Deshio", centerX, topPad);
 
-  // Product name (match BatchPrinter)
+  // Product name — up to 3 lines, shrinking font as needed
   const nameY = topPad + Math.round(hPx * 0.14);
   const nameMaxW = wPx - pad * 2;
   const lineGap = Math.max(2, Math.round(hPx * 0.01));
   const fullName = normalizeLabelName(opts.productName || "Product");
 
-  let name1 = "";
-  let name2 = "";
-  let afterNameY = 0;
-
   let nameFont = Math.round(hPx * 0.095);
   ctx.font = `700 ${nameFont}px Arial`;
+  let nameLines = wrapLines(ctx, fullName, nameMaxW, 3);
 
-  [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
-
-  // If it needs 2 lines, shrink a bit for safety
-  if (name2) {
+  if (nameLines.length > 1) {
     nameFont = Math.round(hPx * 0.082);
     ctx.font = `700 ${nameFont}px Arial`;
-    [name1, name2] = wrapTwoLines(ctx, fullName, nameMaxW);
+    nameLines = wrapLines(ctx, fullName, nameMaxW, 3);
   }
 
-  ctx.fillText(name1, centerX, nameY);
-  let afterBottom = nameY + nameFont;
-
-  if (name2) {
-    ctx.fillText(name2, centerX, nameY + nameFont + lineGap);
-    afterBottom = nameY + (nameFont + lineGap) * 2;
+  if (nameLines.length > 2) {
+    nameFont = Math.round(hPx * 0.070);
+    ctx.font = `700 ${nameFont}px Arial`;
+    nameLines = wrapLines(ctx, fullName, nameMaxW, 3);
   }
 
-  afterNameY = afterBottom + Math.round(hPx * 0.03);
+  nameLines.forEach((line, i) => {
+    ctx.fillText(line, centerX, nameY + i * (nameFont + lineGap));
+  });
 
-  // Barcode
+  const afterNameBottom = nameY + nameLines.length * (nameFont + lineGap);
+  const afterNameY = afterNameBottom + Math.round(hPx * 0.02);
+
+  // Barcode — smaller to leave room for 3-line names
   const JsBarcode = (window as any).JsBarcode;
   const maxBcW = Math.round((wPx - pad * 2) * 0.98);
   const maxBcH = Math.round(hPx * 0.56);
   const bcHeight = Math.round(hPx * 0.28);
-  const bcFontSize = Math.round(hPx * 0.09);
+  const bcFontSize = Math.round(hPx * 0.062);
 
   const renderBarcodeCanvas = (barWidth: number) => {
     const c = document.createElement("canvas");
@@ -251,7 +272,7 @@ async function renderLabelBase64(opts: { code: string; productName: string; pric
   // Price
   const priceText = `Price (VAT inc.): ৳${Number(opts.price || 0).toLocaleString("en-BD")}`;
   ctx.textBaseline = "bottom";
-  const priceFontSize = Math.round(hPx * 0.082);
+  const priceFontSize = Math.round(hPx * 0.095);
   // Use a mono-style numeric font stack for clearer digit differentiation (e.g., 6 vs 8)
   ctx.font = `700 ${priceFontSize}px "Consolas", "Lucida Console", "DejaVu Sans Mono", "Courier New", monospace`;
   const priceY = hPx - pad;
@@ -345,7 +366,7 @@ type PrinterBatch = {
 
 export default function LookupPage() {
   // Layout
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Tabs
@@ -429,11 +450,22 @@ export default function LookupPage() {
 
   // Purchase info (lookup/product + fallback): PO & vendor details for this barcode
   const [barcodePurchaseInfo, setBarcodePurchaseInfo] = useState<{ poId?: number; poNumber?: string; vendorName?: string } | null>(null);
-  const [barcodeLookupData, setBarcodeLookupData] = useState<LookupProductData | null>(null);
+  const [barcodeLookupData, setBarcodeLookupData] = useState<any | null>(null);
   const [barcodePurchaseLoading, setBarcodePurchaseLoading] = useState(false);
   const [barcodeProductImageUrl, setBarcodeProductImageUrl] = useState<string | null>(null);
   const [barcodeImagePreviewOpen, setBarcodeImagePreviewOpen] = useState(false);
   const [barcodeImagePreviewUrl, setBarcodeImagePreviewUrl] = useState<string | null>(null);
+
+  // Modal states for Return/Exchange
+  const [showReturnModal, setShowReturnModal] = useState(false);
+  const [showExchangeModal, setShowExchangeModal] = useState(false);
+  const [selectedOrderForAction, setSelectedOrderForAction] = useState<any | null>(null);
+
+  const [printStatus, setPrintStatus] = useState<{ loading: boolean; error: string | null; success: boolean }>({
+    loading: false,
+    error: null,
+    success: false,
+  });
 
   const closeBarcodeImagePreview = () => {
     setBarcodeImagePreviewOpen(false);
@@ -905,7 +937,7 @@ export default function LookupPage() {
 
   // -----------------------
   // QZ single barcode print helper (reprint)
-    // -----------------------
+  // -----------------------
   // QZ single barcode print helper (reprint) - same config as BatchPrinter
   // -----------------------
   const printSingleBarcodeLabel = async (params: { barcode: string; productName?: string; price?: string | number }) => {
@@ -919,25 +951,43 @@ export default function LookupPage() {
       // Pick default printer (fallback to first available)
       let printer: string | null = null;
       try {
-        printer = await qz.printers.getDefault();
-      } catch (_e) {
-        const list = await qz.printers.find();
-        if (Array.isArray(list) && list.length) printer = list[0];
+        const def = await qz.printers.getDefault();
+        if (def && String(def).trim()) printer = String(def);
+      } catch (_e) { }
+
+      if (!printer) {
+        try {
+          const list = await qz.printers.find();
+          if (Array.isArray(list) && list.length && list[0]) printer = String(list[0]);
+          else if (typeof list === 'string' && list.trim()) printer = list;
+        } catch (_e) { }
       }
+
+      if (!printer) {
+        try {
+          const details = await qz.printers.details?.();
+          if (Array.isArray(details) && details.length > 0) {
+            const name = details[0]?.name || details[0];
+            if (name) printer = String(name);
+          }
+        } catch (_e) { }
+      }
+
       if (!printer) throw new Error('No printer found. Set a default printer and try again.');
 
-      const dpi = DEFAULT_DPI;
+      const dpi = SHARED_DEFAULT_DPI;
 
-      const base64 = await renderLabelBase64({
+      const base64 = await renderBarcodeLabelBase64({
         code: params.barcode,
         productName: (params.productName || 'Product').trim(),
         price: safeNum(params.price),
         dpi,
+        brandName: "Deshio",
       });
 
       const config = qz.configs.create(printer, {
         units: 'in',
-        size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
+        size: { width: sharedMmToIn(SHARED_LABEL_WIDTH_MM), height: sharedMmToIn(SHARED_LABEL_HEIGHT_MM) },
         margins: { top: 0, right: 0, bottom: 0, left: 0 },
         density: dpi,
         colorType: 'blackwhite',
@@ -968,8 +1018,11 @@ export default function LookupPage() {
       id: o.id ?? payload?.id ?? 0,
       order_number: o.order_number ?? '',
       order_type: o.order_type ?? 'unknown',
+      order_type_label: o.order_type_label ?? o.order_type ?? 'Unknown',
       status: o.status ?? 'unknown',
       payment_status: o.payment_status ?? 'unknown',
+      paid_amount: o.paid_amount ?? '0',
+      outstanding_amount: o.outstanding_amount ?? '0',
       // Keep store info so UI can show "Sold From" (some lookup endpoints only include store/store_id inside order)
       store: o.store ?? payload?.store ?? null,
       store_id: o.store_id ?? payload?.store_id ?? o?.store?.id ?? payload?.store?.id ?? null,
@@ -1025,7 +1078,7 @@ export default function LookupPage() {
       try {
         const hasStore = !!(orderData as any)?.store?.name || !!(orderData as any)?.store_name || !!(orderData as any)?.store_id;
         if (!hasStore) {
-          const full = await orderService.getById(orderId);
+          const full = await orderService.getById(orderId, true);
           (orderData as any).store = (full as any)?.store ?? (orderData as any).store;
           (orderData as any).store_id = (full as any)?.store?.id ?? (full as any)?.store_id ?? (orderData as any).store_id;
           (orderData as any).store_name = (full as any)?.store?.name ?? (full as any)?.store_name ?? (orderData as any).store_name;
@@ -1070,7 +1123,11 @@ export default function LookupPage() {
     setError('');
 
     try {
-      const res: any = await orderService.getAll({ search: clean.replace(/^#/, ''), per_page: 50 });
+      const res: any = await orderService.getAll({
+        search: clean.replace(/^#/, ''),
+        per_page: 50,
+        skipStoreScope: true
+      });
       const list = res?.data || [];
       const exact = list.find((o: any) => String(o.order_number).toLowerCase() === clean.toLowerCase())
         || list.find((o: any) => String(o.order_number).toLowerCase().includes(clean.toLowerCase()))
@@ -1129,6 +1186,7 @@ export default function LookupPage() {
       const searchResults = await orderService.getAll({
         search: cleanSearch,
         per_page: 10,
+        skipStoreScope: true,
       });
 
       const matching: CustomerOrder[] = searchResults.data
@@ -1279,7 +1337,7 @@ export default function LookupPage() {
               currentLoc?.customer;
 
             try {
-              const o: any = await orderService.getById(id);
+              const o: any = await orderService.getById(id, true);
               return [
                 id,
                 {
@@ -1420,6 +1478,7 @@ export default function LookupPage() {
       const ordersResponse: any = await orderService.getAll({
         search: cleanOrderNumber,
         per_page: 50,
+        skipStoreScope: true,
       });
 
       if (!ordersResponse.data || ordersResponse.data.length === 0) {
@@ -1485,7 +1544,7 @@ export default function LookupPage() {
     return bd;
   };
 
-  
+
   const extractPurchaseOrderIdFromBarcode = (data: any): number | null => {
     const tryParse = (v: any) => {
       if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -1746,6 +1805,149 @@ export default function LookupPage() {
     setBarcodePurchaseLoading(false);
   };
 
+  const handleReturnInitiate = (order: any) => {
+    setSelectedOrderForAction(order);
+    setShowReturnModal(true);
+  };
+
+  const handleExchangeInitiate = (order: any) => {
+    setSelectedOrderForAction(order);
+    setShowExchangeModal(true);
+  };
+
+  const handleReturnSubmit = async (returnData: any) => {
+    try {
+      if (!selectedOrderForAction) return;
+      console.log('🔄 Processing return (atomic):', returnData);
+
+      const returnRequest: CreateReturnRequest = {
+        order_id: selectedOrderForAction.id,
+        return_reason: returnData.returnReason,
+        return_type: returnData.returnType,
+        received_at_store_id: returnData.receivedAtStoreId,
+        items: returnData.selectedProducts.map((item: any) => ({
+          order_item_id: item.order_item_id,
+          quantity: item.quantity,
+          product_barcode_id: item.product_barcode_id,
+        })),
+        customer_notes: returnData.customerNotes || 'Initiated from lookup page',
+      };
+
+      // Use the atomic quickComplete endpoint
+      await productReturnService.quickComplete(returnRequest);
+
+      // Handle refund if needed
+      if (returnData.refundMethods && returnData.refundMethods.total > 0) {
+        // Need return ID for refund - quickComplete returns the product return object
+        const res = await productReturnService.quickComplete(returnRequest);
+        const returnId = res.data.id;
+
+        const refundRequest: CreateRefundRequest = {
+          return_id: returnId,
+          refund_type: 'full',
+          refund_method: 'cash',
+          refund_method_details: {
+            cash: returnData.refundMethods.cash,
+            card: returnData.refundMethods.card,
+            bkash: returnData.refundMethods.bkash,
+            nagad: returnData.refundMethods.nagad,
+          },
+          internal_notes: 'Refund processed via lookup page',
+        };
+
+        const refundRes = await refundService.create(refundRequest);
+        await refundService.process(refundRes.data.id);
+        await refundService.complete(refundRes.data.id, {
+          transaction_reference: `LOOKUP-REFUND-${Date.now()}`,
+        });
+      }
+
+      alert('✅ Return processed successfully!');
+      setShowReturnModal(false);
+      // Refresh search to show updated status/quantities
+      if (activeTab === 'order' && orderNumber) {
+        handleSearchOrder();
+      }
+    } catch (error: any) {
+      console.error('❌ Return processing failed:', error);
+      alert(`Error: ${error.response?.data?.message || error.message || 'Failed to process return'}`);
+    }
+  };
+
+  const handleExchangeSubmit = async (exchangeData: any) => {
+    try {
+      if (!selectedOrderForAction) return;
+      console.log('🔄 Processing consolidated exchange:', exchangeData);
+
+      // Construct the comprehensive payload for the atomic backend transaction
+      const payload = {
+        order_id: selectedOrderForAction.id,
+        exchangeAtStoreId: exchangeData.exchangeAtStoreId,
+        customer_id: selectedOrderForAction.customer?.id,
+        removedProducts: exchangeData.removedProducts.map((item: any) => {
+          const originalItem = selectedOrderForAction.items.find((i: any) => i.id === item.order_item_id);
+          const unitPrice = parseFloat(originalItem?.unit_price || '0');
+          return {
+            order_item_id: item.order_item_id,
+            product_id: originalItem?.product_id,
+            product_batch_id: originalItem?.product_batch_id || originalItem?.batch_id,
+            quantity: item.quantity,
+            unit_price: unitPrice,
+            total_price: unitPrice * item.quantity,
+            product_barcode_id: item.product_barcode_id,
+            return_reason: 'other', // Default reason
+            quality_check_passed: true, // Defaulting for quick exchange
+          };
+        }),
+        replacementProducts: exchangeData.replacementProducts.map((p: any) => ({
+          product_id: p.product_id,
+          batch_id: p.batch_id,
+          quantity: p.quantity,
+          unit_price: p.unit_price,
+          barcode: p.barcode,
+          barcode_id: p.barcode_id,
+        })),
+        paymentRefund: {
+          type: exchangeData.paymentRefund?.type === 'payment' ? 'surplus' : (exchangeData.paymentRefund?.type === 'refund' ? 'refund' : 'even'),
+          amount: exchangeData.paymentRefund?.total || 0,
+          method: exchangeData.paymentRefund?.card > 0 ? 'card' : 
+                  (exchangeData.paymentRefund?.bkash > 0 ? 'bkash' : 
+                  (exchangeData.paymentRefund?.nagad > 0 ? 'nagad' : 'cash')),
+          details: {
+            cash: exchangeData.paymentRefund?.cash || 0,
+            card: exchangeData.paymentRefund?.card || 0,
+            bkash: exchangeData.paymentRefund?.bkash || 0,
+            nagad: exchangeData.paymentRefund?.nagad || 0,
+          }
+        },
+        notes: `Exchange transaction via Lookup Page - Original Order: ${selectedOrderForAction.order_number}`,
+      };
+
+      const response = await axiosInstance.post('/exchange/process', payload);
+      
+      console.log('✅ Exchange processed successfully:', response.data);
+      alert('Exchange processed successfully!');
+      
+      // Close modal and refresh data
+      setShowExchangeModal(false);
+      setSelectedOrderForAction(null);
+
+      if (activeTab === 'order' && orderNumber) {
+        handleSearchOrder();
+      } else if (activeTab === 'customer' && phoneNumber) {
+        handleSearchCustomer();
+      } else {
+        // Fallback refresh
+        window.location.reload();
+      }
+
+    } catch (error: any) {
+      console.error('❌ Consolidated exchange processing failed:', error);
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to process exchange';
+      alert(`Error: ${errorMessage}`);
+    }
+  };
+
   const handleSearchBarcode = async (codeOverride?: string) => {
     const code = (codeOverride ?? barcodeInput).trim();
     if (!code) {
@@ -1776,6 +1978,9 @@ export default function LookupPage() {
       setBarcodeLoading(false);
     }
   };
+
+
+  // -----------------------
 
   // -----------------------
   // Batch handlers
@@ -1855,7 +2060,7 @@ export default function LookupPage() {
     // best effort fetch customer/order_number if orderId exists
     if (orderId) {
       try {
-        const o: any = await orderService.getById(orderId);
+        const o: any = await orderService.getById(orderId, true);
         return {
           orderId,
           orderNumber: orderNo || o?.order_number || `#${orderId}`,
@@ -2045,44 +2250,40 @@ export default function LookupPage() {
                   <div className="flex gap-1 flex-wrap">
                     <button
                       onClick={() => switchTab('customer')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                        activeTab === 'customer'
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${activeTab === 'customer'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
                           : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                        }`}
                     >
                       Customer Lookup
                     </button>
 
                     <button
                       onClick={() => switchTab('order')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                        activeTab === 'order'
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${activeTab === 'order'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
                           : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                        }`}
                     >
                       Order Lookup
                     </button>
 
                     <button
                       onClick={() => switchTab('barcode')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                        activeTab === 'barcode'
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${activeTab === 'barcode'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
                           : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                        }`}
                     >
                       Barcode History
                     </button>
 
                     <button
                       onClick={() => switchTab('batch')}
-                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
-                        activeTab === 'batch'
+                      className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${activeTab === 'batch'
                           ? 'bg-black dark:bg-white text-white dark:text-black'
                           : 'bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-800'
-                      }`}
+                        }`}
                     >
                       Batch History
                     </button>
@@ -2137,9 +2338,8 @@ export default function LookupPage() {
                               <button
                                 key={s.id}
                                 onClick={() => handleSelectSuggestion(s)}
-                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
-                                  index !== suggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
-                                }`}
+                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${index !== suggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
+                                  }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
@@ -2261,16 +2461,6 @@ export default function LookupPage() {
                                       >
                                         Open in Order Lookup (Barcodes)
                                       </button>
-                                      <button
-                                        onClick={async (e) => {
-                                          e.stopPropagation();
-                                          setActiveTab('order');
-                                          await openOrderById(order.id);
-                                        }}
-                                        className="text-[10px] px-3 py-1.5 rounded bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30"
-                                      >
-                                        ↩ Return / Exchange
-                                      </button>
                                     </div>
                                   </div>
 
@@ -2355,9 +2545,8 @@ export default function LookupPage() {
                               <button
                                 key={s.id}
                                 onClick={() => handleSelectOrderSuggestion(s)}
-                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
-                                  index !== orderSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
-                                }`}
+                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${index !== orderSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
+                                  }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
@@ -2489,7 +2678,6 @@ export default function LookupPage() {
                             </tbody>
                           </table>
                         </div>
-
                         {singleOrder.notes && (
                           <div className="mt-3">
                             <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-1">Notes</p>
@@ -2497,25 +2685,10 @@ export default function LookupPage() {
                           </div>
                         )}
 
-                        {/* ── Return / Exchange from Order Lookup ── */}
                         <ReturnExchangeFromOrder
-                          order={{
-                            id: singleOrder.id,
-                            order_number: singleOrder.order_number,
-                            store: (singleOrder as any).store,
-                            store_id: (singleOrder as any).store_id,
-                            items: singleOrder.items.map((it: any) => ({
-                              id: it.id,
-                              product_id: it.product_id,
-                              product_name: it.product_name,
-                              product_sku: it.product_sku,
-                              quantity: it.quantity,
-                              unit_price: it.unit_price,
-                              total_amount: it.total_amount,
-                              barcodes: it.barcodes,
-                            })),
-                          }}
-                          stores={stores as any}
+                          order={singleOrder}
+                          onInitiateReturn={handleReturnInitiate}
+                          onInitiateExchange={handleExchangeInitiate}
                         />
                       </div>
                     </div>
@@ -2580,26 +2753,26 @@ export default function LookupPage() {
                               const finalImage = barcodeProductImageUrl || fallbackFromHistory;
 
                               return finalImage ? (
-                              <button
-                                type="button"
-                                onClick={() => openBarcodeImagePreview(finalImage)}
-                                className="group relative"
-                                title="Click to preview image"
-                              >
-                                <img
-                                  src={finalImage}
-                                  alt={barcodeData?.product?.name || 'Product image'}
-                                  className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 object-cover"
-                                  loading="lazy"
-                                />
-                                <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[8px] text-gray-500 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                                  View
-                                </span>
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openBarcodeImagePreview(finalImage)}
+                                  className="group relative"
+                                  title="Click to preview image"
+                                >
+                                  <img
+                                    src={finalImage}
+                                    alt={barcodeData?.product?.name || 'Product image'}
+                                    className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 object-cover"
+                                    loading="lazy"
+                                  />
+                                  <span className="absolute -bottom-4 left-1/2 -translate-x-1/2 text-[8px] text-gray-500 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                                    View
+                                  </span>
+                                </button>
                               ) : (
-                              <div className="w-12 h-12 rounded border border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] text-gray-400 dark:text-gray-500">
-                                No image
-                              </div>
+                                <div className="w-12 h-12 rounded border border-dashed border-gray-200 dark:border-gray-700 flex items-center justify-center text-[9px] text-gray-400 dark:text-gray-500">
+                                  No image
+                                </div>
                               );
                             })()}
                             <span className="text-[10px] px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
@@ -2790,8 +2963,8 @@ export default function LookupPage() {
                                   <span className="font-semibold">
                                     {(barcodePO?.item_details?.unit_sell_price ?? barcodePO?.itemDetails?.unit_sell_price ?? barcodePO?.itemDetails?.unitSellPrice) != null
                                       ? formatCurrency(
-                                          barcodePO?.item_details?.unit_sell_price ?? barcodePO?.itemDetails?.unit_sell_price ?? barcodePO?.itemDetails?.unitSellPrice
-                                        )
+                                        barcodePO?.item_details?.unit_sell_price ?? barcodePO?.itemDetails?.unit_sell_price ?? barcodePO?.itemDetails?.unitSellPrice
+                                      )
                                       : '—'}
                                   </span>
                                 </p>
@@ -3002,9 +3175,8 @@ export default function LookupPage() {
                               <button
                                 key={b.id}
                                 onClick={() => handleSelectBatchSuggestion(b)}
-                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${
-                                  index !== batchSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
-                                }`}
+                                className={`w-full px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-left ${index !== batchSuggestions.length - 1 ? 'border-b border-gray-100 dark:border-gray-800' : ''
+                                  }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex-1 min-w-0">
@@ -3099,14 +3271,14 @@ export default function LookupPage() {
                             id: batchData.batch.id,
                             productId: batchData.batch.product.id,
                             quantity: Number(
-                              batchData.batch.quantity ??
-                                batchData.batch.original_quantity ??
-                                batchData.summary?.total_units ??
-                                0
+                              (batchData.batch as any).quantity ??
+                              batchData.batch.original_quantity ??
+                              batchData.summary?.total_units ??
+                              0
                             ),
                             costPrice: Number(prices.cost ?? 0),
                             sellingPrice: Number(prices.sell ?? 0),
-                            baseCode: batchData.batch.base_code,
+                            baseCode: (batchData.batch as any).base_code,
                           };
 
                           const printerProduct: PrinterProduct = {
@@ -3393,6 +3565,21 @@ export default function LookupPage() {
                   </div>
                 </div>
               </div>
+            )}
+            {/* Return/Exchange Modals */}
+            {showReturnModal && selectedOrderForAction && (
+              <ReturnProductModal
+                onClose={() => setShowReturnModal(false)}
+                order={selectedOrderForAction}
+                onReturn={handleReturnSubmit}
+              />
+            )}
+            {showExchangeModal && selectedOrderForAction && (
+              <ExchangeProductModal
+                order={selectedOrderForAction}
+                onClose={() => setShowExchangeModal(false)}
+                onExchange={handleExchangeSubmit}
+              />
             )}
           </main>
         </div>

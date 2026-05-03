@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   X,
   Plus,
@@ -14,6 +15,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
+import AccessControl from '@/components/AccessControl';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -23,6 +25,7 @@ import { vendorPaymentService, CreatePaymentRequest, PaymentMethod } from '@/ser
 import storeService, { Store } from '@/services/storeService';
 import productService, { Product } from '@/services/productService';
 import categoryService, { Category, CategoryTree } from '@/services/categoryService';
+import { useAuth } from '@/contexts/AuthContext';
 import CategoryTreeSelector from '@/components/product/CategoryTreeSelector';
 
 /**
@@ -49,7 +52,6 @@ const formatCurrency = (value: any): string => {
   return isNaN(numValue) ? '0.00' : numValue.toFixed(2);
 };
 
-
 const Modal = ({
   isOpen,
   onClose,
@@ -62,7 +64,7 @@ const Modal = ({
   onClose: () => void;
   title: string;
   children: React.ReactNode;
-  size?: 'md' | 'lg' | 'xl' | 'full';
+  size?: 'md' | 'lg' | 'xl';
   /**
    * IMPORTANT: allows stacking modals (Quick Add Product over PO)
    */
@@ -70,22 +72,17 @@ const Modal = ({
 }) => {
   if (!isOpen) return null;
 
-  // ✅ wider overall; xl is now much wider; full = true fullscreen
-  const sizeClasses: Record<'md' | 'lg' | 'xl' | 'full', string> = {
+  // ✅ wider overall; xl is now much wider
+  const sizeClasses: Record<'md' | 'lg' | 'xl', string> = {
     md: 'max-w-md',
     lg: 'max-w-4xl',
-    xl: 'max-w-6xl',
-    full: 'w-screen h-screen max-w-none',
+    xl: 'max-w-[1400px]',
   };
 
-  const isFull = size === 'full';
-
   return (
-    <div
-      className={`fixed inset-0 ${zIndexClass} flex ${isFull ? 'items-stretch justify-stretch' : 'items-center justify-center'} bg-black/10 backdrop-blur-md overflow-hidden`}
-    >
+    <div className={`fixed inset-0 ${zIndexClass} flex items-center justify-center bg-black/10 backdrop-blur-md overflow-y-auto`}>
       <div
-        className={`bg-white dark:bg-gray-800 shadow-xl w-full ${sizeClasses[size]} ${isFull ? 'mx-0 rounded-none max-h-none h-full' : 'mx-4 rounded-xl max-h-[90vh]'} overflow-y-auto`}
+        className={`bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-xl shadow-xl w-full ${sizeClasses[size]} mx-4 max-h-[90vh] overflow-y-auto`}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-10">
           <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-100">{title}</h2>
@@ -101,9 +98,8 @@ const Modal = ({
 
 const Alert = ({ type, message }: { type: 'success' | 'error'; message: string }) => (
   <div
-    className={`fixed top-4 right-4 z-[9999] flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${
-      type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
-    }`}
+    className={`fixed top-4 right-4 z-[9999] flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+      }`}
   >
     <AlertCircle className="w-5 h-5" />
     <span>{message}</span>
@@ -111,8 +107,9 @@ const Alert = ({ type, message }: { type: 'success' | 'error'; message: string }
 );
 
 export default function VendorPaymentPage() {
+  const { isRole } = useAuth();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
@@ -242,7 +239,7 @@ export default function VendorPaymentPage() {
   useEffect(() => {
     loadVendors();
     loadStores();
-    loadProducts();
+    // loadProducts(); // Removed: too slow to load all products on mount
     loadCategories();
     loadPaymentMethods();
   }, []);
@@ -276,16 +273,12 @@ export default function VendorPaymentPage() {
     if (url.startsWith('/storage')) return `${baseUrl}${url}`;
     if (url.startsWith('/')) return url;
 
-    if (!baseUrl) return `/storage/${String(url).replace(/^\/+/, '')}`;
-    return `${baseUrl}/storage/${String(url).replace(/^\/+/, '')}`;
+    if (!baseUrl) return `/storage/product-images/${url}`;
+    return `${baseUrl}/storage/product-images/${url}`;
   };
 
   const getProductPrimaryImage = (p?: Product | null) => {
     if (!p) return '/placeholder-image.jpg';
-    const pi = (p as any)?.primary_image;
-    const piUrl = pi?.url || pi?.image_url || pi?.image_path;
-    if (piUrl) return normalizeImageUrl(String(piUrl));
-
     const imgs: any[] = Array.isArray((p as any).images) ? (p as any).images : [];
     if (imgs.length === 0) return '/placeholder-image.jpg';
 
@@ -315,56 +308,32 @@ export default function VendorPaymentPage() {
     ],
   });
 
-  const poVendorProductOptions = useMemo(() => {
-    const vendorId = parseInt(purchaseForm.vendor_id || '0', 10);
-    if (vendorId && !poShowAllProducts) {
-      return products.filter((p) => (p as any).vendor_id === vendorId);
-    }
-    return products;
-  }, [products, purchaseForm.vendor_id, poShowAllProducts]);
-
-  // If a parent category is chosen, include all child categories (tree-based filtering)
-  const poCategoryIdSet = useMemo(() => {
-    const cid = parseInt(poCategoryId || '0', 10);
-    if (!cid) return null;
-
-    const ids = new Set<number>();
-    const collectAll = (node: any) => {
-      if (!node) return;
-      if (typeof node.id === 'number') ids.add(node.id);
-      const children = node.children || node.all_children || [];
-      if (Array.isArray(children)) children.forEach(collectAll);
-    };
-    const findAndCollect = (nodes: any[]): boolean => {
-      for (const n of nodes) {
-        if (!n) continue;
-        if (n.id === cid) {
-          collectAll(n);
-          return true;
-        }
-        const children = n.children || n.all_children || [];
-        if (Array.isArray(children) && findAndCollect(children)) return true;
-      }
-      return false;
-    };
-
-    if (Array.isArray(categoryTree) && categoryTree.length > 0) {
-      findAndCollect(categoryTree as any);
-    }
-
-    // Fallback: if tree wasn't loaded for any reason, keep exact match
-    if (ids.size === 0) ids.add(cid);
-    return ids;
-  }, [poCategoryId, categoryTree]);
-
   const poFinderProducts = useMemo(() => {
-    let list = poVendorProductOptions;
+    let list: Product[] = products;
 
-    if (poCategoryIdSet && poCategoryIdSet.size > 0) {
+    // Category filter — include all descendant categories
+    const cid = parseInt(poCategoryId || '0', 10);
+    if (cid) {
+      const ids = new Set<number>();
+      const collectAll = (node: any) => {
+        if (!node) return;
+        if (typeof node.id === 'number') ids.add(node.id);
+        (node.children || node.all_children || []).forEach(collectAll);
+      };
+      const findAndCollect = (nodes: any[]): boolean => {
+        for (const n of nodes) {
+          if (!n) continue;
+          if (n.id === cid) { collectAll(n); return true; }
+          if (findAndCollect(n.children || n.all_children || [])) return true;
+        }
+        return false;
+      };
+      if (Array.isArray(categoryTree) && categoryTree.length > 0) findAndCollect(categoryTree as any);
+      if (ids.size === 0) ids.add(cid);
       list = list.filter((p: any) => {
         const raw = p?.category_id ?? p?.category?.id;
         const pid = typeof raw === 'string' ? parseInt(raw, 10) : raw;
-        return typeof pid === 'number' && poCategoryIdSet.has(pid);
+        return typeof pid === 'number' && ids.has(pid);
       });
     }
 
@@ -377,7 +346,7 @@ export default function VendorPaymentPage() {
       });
     }
 
-    // ✅ Show grouped rows (by SKU) so variations don't spam the list.
+    // Show grouped rows (by SKU) so variations don't spam the list.
     const keyFor = (p: any) => {
       const id = Number(p?.id ?? 0);
       const rawSku = String(p?.sku ?? '').trim().toLowerCase();
@@ -394,15 +363,15 @@ export default function VendorPaymentPage() {
         grouped.set(k, p);
         continue;
       }
-      // Prefer the "base" item if it exists (no SKU), otherwise keep first.
+      // Prefer the "base" item if it has no trailing-number SKU
       const existing = grouped.get(k);
       const existingSku = String(existing?.sku ?? '').trim();
-      const newSku = String(p?.sku ?? '').trim();
+      const newSku = String((p as any)?.sku ?? '').trim();
       if (existingSku && !newSku) grouped.set(k, p);
     }
 
-    return Array.from(grouped.values()).slice(0, 30);
-  }, [poVendorProductOptions, poSearch, poCategoryIdSet]);
+    return Array.from(grouped.values());
+  }, [products, poSearch, poCategoryId, categoryTree]);
 
   const addProductToPO = (productId: number) => {
     if (!productId) return;
@@ -504,30 +473,101 @@ export default function VendorPaymentPage() {
     return () => window.clearTimeout(t);
   }, [showAddPurchase, purchaseForm, poSearch, poCategoryId, poShowAllProducts]);
 
+  // ✅ Live search products for the PO modal (API-driven to handle large catalogs)
+  useEffect(() => {
+    if (!showAddPurchase) return;
+
+    // If no search/filter, don't trigger API call (saves resources)
+    if (!poSearch.trim() && !poCategoryId) return;
+
+    const delayDebounceFn = setTimeout(async () => {
+      try {
+        const response = await productService.getAll({
+          search: poSearch.trim(),
+          category_id: poCategoryId ? parseInt(poCategoryId) : undefined,
+          per_page: 200, // Show enough results to be useful
+          is_archived: false,
+        });
+
+        const results = response.data || [];
+        setProducts((prev) => {
+          const map = new Map(prev.map((p) => [p.id, p]));
+          results.forEach((p) => map.set(p.id, p));
+          return Array.from(map.values());
+        });
+      } catch (error) {
+        console.error('PO product search error:', error);
+      }
+    }, 450);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [poSearch, poCategoryId, showAddPurchase]);
+
+  // ✅ Pre-load product details for items in the purchase order (e.g. from draft restoration)
+  useEffect(() => {
+    if (!showAddPurchase) return;
+
+    const missingIds = purchaseForm.items
+      .map((it) => parseInt(it.product_id || '0', 10))
+      .filter((id) => id > 0 && !products.find((p) => p.id === id));
+
+    if (missingIds.length === 0) return;
+
+    const fetchMissing = async () => {
+      try {
+        const fetched = await Promise.all(missingIds.map((id) => productService.getById(id)));
+        setProducts((prev) => {
+          const map = new Map(prev.map((p) => [p.id, p]));
+          fetched.forEach((p) => {
+            if (p?.id) map.set(p.id, p);
+          });
+          return Array.from(map.values());
+        });
+      } catch (e) {
+        console.error('Failed to pre-load missing PO products:', e);
+      }
+    };
+
+    fetchMissing();
+  }, [showAddPurchase, purchaseForm.items.length]);
+
   /**
-   * Grouping rule for variations (PO screen):
-   * ✅ Group ONLY by the FULL SKU (exact match), never by name or SKU-prefix.
-   *
-   * Why: Our SKUs often end with digits (e.g. JA-84-22500). Stripping the
-   * trailing numeric part incorrectly grouped unrelated products (JA-84-*).
-   *
+   * Grouping rule for variations:
+   * Group ONLY by the FULL SKU (exact match), never by name or SKU-prefix.
    * Products without SKU are treated as standalone (no inferred variations).
    */
   const getVariantGroupKey = (p: Product): string => {
     const id = Number((p as any)?.id ?? 0);
     const rawSku = String((p as any)?.sku ?? '').trim();
     if (!rawSku) return `__no_sku_${id || 0}`;
-
-    // Normalize for safe equality (case-insensitive, ignore spaces)
+    // Normalize: case-insensitive, ignore spaces
     return rawSku.toLowerCase().replace(/\s+/g, '');
   };
 
-  const extractTrailingSize = (p: Product): number | null => {
-    const name = (p.name || '').trim();
+  const getVariationSortWeight = (p: Product): number => {
+    const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL', 'FREE SIZE', 'FREESIZE', 'ONE SIZE', 'ONESIZE'];
+
+    // 1. Try variation_suffix for standard tokens
+    const suffix = (p.variation_suffix || '').toUpperCase().replace(/^-/, '').trim();
+    const sidx = SIZE_ORDER.indexOf(suffix);
+    if (sidx !== -1) return sidx;
+
+    // 2. Try tokens in the name
+    const name = (p.name || '').toUpperCase();
+    const tokens = name.split(/[-\s]+/).map(t => t.trim());
+    for (let i = tokens.length - 1; i >= 0; i--) {
+      const idx = SIZE_ORDER.indexOf(tokens[i]);
+      if (idx !== -1) return idx;
+    }
+
+    // 3. Try numeric at the end (e.g., shoe sizes)
     const m = name.match(/(\d+(?:\.\d+)?)\s*$/);
-    if (!m) return null;
-    const n = parseFloat(m[1]);
-    return isNaN(n) ? null : n;
+    if (m) {
+      const n = parseFloat(m[1]);
+      return 100 + (isNaN(n) ? 0 : n);
+    }
+
+    return 1000; // Unrecognized
   };
 
   const getVariantGroupProducts = (p: Product): Product[] => {
@@ -535,52 +575,72 @@ export default function VendorPaymentPage() {
     if (Array.isArray((p as any).variants) && (p as any).variants.length > 0) {
       const all = [p, ...(p as any).variants].filter(Boolean) as any[];
       const map = new Map<number, Product>();
-      all.forEach((x) => {
-        if (x?.id) map.set(Number(x.id), x);
-      });
+      all.forEach((x) => { if (x?.id) map.set(Number(x.id), x); });
       return Array.from(map.values());
     }
 
-    // Fallback: infer variants from full product list using SKU-group key ONLY.
+    // Fallback: infer variants from full product list using full SKU match ONLY.
     const key = getVariantGroupKey(p);
     return products.filter((x) => getVariantGroupKey(x) === key);
   };
 
-  const openVariantPicker = (productId: string) => {
+  const openVariantPicker = async (productId: string) => {
     const pid = parseInt(productId || '0', 10);
     if (!pid) return;
 
-    const base = products.find((p) => (p as any).id === pid);
-    if (!base) return;
+    try {
+      setLoading(true);
+      // Fetch the full SKU group from API to ensure we have all variants even if not in local cache
+      const groupData = await productService.getSkuGroup(pid);
+      const options: ProductWithId[] = (groupData.products || [])
+        .filter((x): x is ProductWithId => typeof (x as any)?.id === 'number')
+        .sort((a, b) => {
+          const wa = getVariationSortWeight(a);
+          const wb = getVariationSortWeight(b);
+          if (wa !== wb) return wa - wb;
+          return (a.name || '').localeCompare(b.name || '');
+        });
 
-    const options: ProductWithId[] = getVariantGroupProducts(base)
-      .filter((x): x is ProductWithId => typeof (x as any)?.id === 'number')
-      .sort((a, b) => {
-        const sa = extractTrailingSize(a);
-        const sb = extractTrailingSize(b);
-        if (sa === null && sb === null) return (a.name || '').localeCompare(b.name || '');
-        if (sa === null) return 1;
-        if (sb === null) return -1;
-        return sa - sb;
+      if (options.length === 0) {
+        // Fallback: use the base product itself if no group found
+        const base = products.find((p) => p.id === pid);
+        if (!base) {
+          showAlert('error', 'Product not found');
+          return;
+        }
+        options.push(base as ProductWithId);
+      }
+
+      const inputs: Record<number, { quantity: string; unit_cost: string; unit_sell_price: string }> = {};
+      options.forEach((opt) => {
+        const existing = purchaseForm.items.find((it: any) => String(it.product_id) === String(opt.id));
+        inputs[opt.id] = {
+          quantity: existing?.quantity_ordered || '0',
+          unit_cost: existing?.unit_cost || '',
+          unit_sell_price: existing?.unit_sell_price || '',
+        };
       });
 
-    const inputs: Record<number, { quantity: string; unit_cost: string; unit_sell_price: string }> = {};
-    options.forEach((opt) => {
-      const existing = purchaseForm.items.find((it: any) => String(it.product_id) === String(opt.id));
-      inputs[opt.id] = {
-        quantity: existing?.quantity_ordered || '0',
-        unit_cost: existing?.unit_cost || '',
-        unit_sell_price: existing?.unit_sell_price || '',
-      };
-    });
+      // Update global products cache so these variants resolve correctly in the UI
+      setProducts((prev) => {
+        const map = new Map(prev.map((p) => [p.id, p]));
+        options.forEach((p) => map.set(p.id, p));
+        return Array.from(map.values());
+      });
 
-    setVariantBaseProduct(base);
-    setVariantOptions(options);
-    setVariantInputs(inputs);
-    setVariantBulkQty('');
-    setVariantBulkCost('');
-    setVariantBulkSell('');
-    setShowVariantPicker(true);
+      setVariantBaseProduct(options[0]);
+      setVariantOptions(options);
+      setVariantInputs(inputs);
+      setVariantBulkQty('');
+      setVariantBulkCost('');
+      setVariantBulkSell('');
+      setShowVariantPicker(true);
+    } catch (error: any) {
+      console.error('Failed to open variant picker:', error);
+      showAlert('error', 'Failed to load product variations');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const applyVariantPicker = () => {
@@ -696,15 +756,28 @@ export default function VendorPaymentPage() {
     }
   };
 
-  // Load products
+  // Load products (safe chunked fetch to avoid 10k/100k payloads that can crash backend)
   const loadProducts = async () => {
     try {
-      const productsData = await productService.getAllAll({ is_archived: false }, { max_items: 200000 });
-      setProducts(Array.isArray(productsData) ? productsData : []);
+      const chunkSize = 2000;
+      const first = await productService.getAll({ page: 1, per_page: chunkSize, is_archived: false });
+      let all: Product[] = Array.isArray((first as any)?.data) ? ((first as any).data as Product[]) : [];
+      const lastPage = Math.max(1, Number((first as any)?.last_page || 1));
+
+      if (lastPage > 1) {
+        for (let page = 2; page <= lastPage; page++) {
+          const next = await productService.getAll({ page, per_page: chunkSize, is_archived: false });
+          const list: Product[] = Array.isArray((next as any)?.data) ? ((next as any).data as Product[]) : [];
+          if (!list.length) break;
+          all = all.concat(list);
+        }
+      }
+
+      setProducts(all);
     } catch (error: any) {
       console.error('Failed to load products:', error);
       setProducts([]);
-      showAlert('error', error.message || 'Failed to load products');
+      showAlert('error', error?.message || 'Failed to load products');
     }
   };
 
@@ -788,21 +861,25 @@ export default function VendorPaymentPage() {
       showAlert('error', 'Please select a vendor first');
       return;
     }
-    if (!quickProductForm.name.trim() || !quickProductForm.sku.trim() || !quickProductForm.category_id) {
-      showAlert('error', 'Name, SKU and category are required');
+    if (!quickProductForm.name.trim() || !quickProductForm.category_id) {
+      showAlert('error', 'Name and category are required');
       return;
     }
 
     try {
       setLoading(true);
 
-      const created = await productService.create({
+      const sku = quickProductForm.sku.trim();
+      const payload: any = {
         name: quickProductForm.name.trim(),
-        sku: quickProductForm.sku.trim(),
         description: quickProductForm.description?.trim() || undefined,
         category_id: parseInt(quickProductForm.category_id, 10),
         vendor_id: parseInt(purchaseForm.vendor_id, 10),
-      } as any);
+      };
+      // SKU is optional; backend will auto-generate if omitted
+      if (sku) payload.sku = sku;
+
+      const created = await productService.create(payload);
 
       // refresh product list so it shows in finder immediately
       await loadProducts();
@@ -832,10 +909,19 @@ export default function VendorPaymentPage() {
     }
 
     // basic validation to avoid NaN
-    const bad = validItems.find((it) => !it.quantity_ordered || !it.unit_cost);
+    const bad = validItems.find((it) => !it.quantity_ordered);
     if (bad) {
-      showAlert('error', 'Please fill Quantity & Unit Cost for selected items');
+      showAlert('error', 'Please fill Quantity & Unit Cost for all items');
       return;
+    }
+
+    // Secondary validation: if moderator, they MUST fill Unit Sell Price if Cost is hidden
+    if (isRole(['online-moderator'])) {
+      const missingSell = validItems.find((it) => !it.unit_sell_price);
+      if (missingSell) {
+        showAlert('error', 'Please fill Quantity & Selling Price for all items');
+        return;
+      }
     }
 
     try {
@@ -853,7 +939,7 @@ export default function VendorPaymentPage() {
         items: validItems.map((item) => ({
           product_id: parseInt(item.product_id, 10),
           quantity_ordered: parseInt(item.quantity_ordered, 10),
-          unit_cost: parseFloat(item.unit_cost),
+          unit_cost: parseFloat(item.unit_cost || '0'),
           unit_sell_price: item.unit_sell_price ? parseFloat(item.unit_sell_price) : undefined,
           tax_amount: item.tax_amount ? parseFloat(item.tax_amount) : undefined,
           discount_amount: item.discount_amount ? parseFloat(item.discount_amount) : undefined,
@@ -918,11 +1004,11 @@ export default function VendorPaymentPage() {
 
       const pos: OutstandingPurchaseOrder[] = Array.isArray((outstanding as any)?.purchase_orders)
         ? (outstanding as any).purchase_orders
-            .filter((po: any) => typeof po?.id === 'number')
-            .map((po: any) => ({
-              ...po,
-              status: po?.status,
-            }))
+          .filter((po: any) => typeof po?.id === 'number')
+          .map((po: any) => ({
+            ...po,
+            status: po?.status,
+          }))
         : [];
 
       setPurchaseOrders(pos);
@@ -1124,29 +1210,31 @@ export default function VendorPaymentPage() {
           <div className="flex items-center justify-between mb-6">
             <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-100">Vendor Payment Management</h1>
             <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setVendorModalMode('add');
-                  setEditingVendorId(null);
-                  setVendorForm({
-                    name: '',
-                    email: '',
-                    phone: '',
-                    address: '',
-                    contact_person: '',
-                    website: '',
-                    type: 'manufacturer',
-                    credit_limit: '',
-                    payment_terms: '',
-                    notes: '',
-                  });
-                  setShowAddVendor(true);
-                }}
-                className="flex items-center gap-2 bg-gray-900 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                {vendorModalMode === 'add' ? 'Add Vendor' : 'Update Vendor'}
-              </button>
+              <AccessControl roles={['super-admin', 'admin']}>
+                <button
+                  onClick={() => {
+                    setVendorModalMode('add');
+                    setEditingVendorId(null);
+                    setVendorForm({
+                      name: '',
+                      email: '',
+                      phone: '',
+                      address: '',
+                      contact_person: '',
+                      website: '',
+                      type: 'manufacturer',
+                      credit_limit: '',
+                      payment_terms: '',
+                      notes: '',
+                    });
+                    setShowAddVendor(true);
+                  }}
+                  className="flex items-center gap-2 bg-gray-900 hover:bg-gray-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  {vendorModalMode === 'add' ? 'Add Vendor' : 'Update Vendor'}
+                </button>
+              </AccessControl>
 
               <button
                 onClick={() => setShowAddPurchase(true)}
@@ -1182,18 +1270,18 @@ export default function VendorPaymentPage() {
 
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
-                <thead className="bg-gray-100 dark:bg-gray-700">
-                  <tr>
-                    <th className="px-6 py-3">Vendor</th>
-                    <th className="px-6 py-3">Type</th>
-                    <th className="px-6 py-3">Contact</th>
-                    <th className="px-6 py-3">Credit Limit</th>
-                    <th className="px-6 py-3">Status</th>
-                    <th className="px-6 py-3 text-center">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredVendors.map((vendor) => (
+                  <thead className="bg-gray-100 dark:bg-gray-700">
+                    <tr>
+                      <th className="px-6 py-3">Vendor</th>
+                      <th className="px-6 py-3">Type</th>
+                      <th className="px-6 py-3">Contact</th>
+                      <th className="px-6 py-3">Credit Limit</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3 text-center">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredVendors.map((vendor) => (
                       <tr
                         key={vendor.id}
                         className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/30"
@@ -1213,23 +1301,24 @@ export default function VendorPaymentPage() {
                         <td className="px-6 py-3">৳{formatCurrency((vendor as any).credit_limit)}</td>
                         <td className="px-6 py-3">
                           <span
-                            className={`text-xs px-2 py-1 rounded ${
-                              (vendor as any).is_active
-                                ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
-                                : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
-                            }`}
+                            className={`text-xs px-2 py-1 rounded ${(vendor as any).is_active
+                              ? 'bg-green-100 dark:bg-green-900/30 text-green-600 dark:text-green-400'
+                              : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400'
+                              }`}
                           >
                             {(vendor as any).is_active ? 'Active' : 'Inactive'}
                           </span>
                         </td>
                         <td className="px-6 py-3">
                           <div className="flex items-center justify-center gap-2">
-                            <button
-                              onClick={() => openPaymentModal(vendor)}
-                              className="flex items-center gap-1 bg-gray-900 hover:bg-gray-700 text-white text-xs px-3 py-2 rounded-lg transition-colors"
-                            >
-                              ৳ Make Payment
-                            </button>
+                            <AccessControl roles={['super-admin', 'admin']}>
+                              <button
+                                onClick={() => openPaymentModal(vendor)}
+                                className="flex items-center gap-1 bg-gray-900 hover:bg-gray-700 text-white text-xs px-3 py-2 rounded-lg transition-colors"
+                              >
+                                ৳ Make Payment
+                              </button>
+                            </AccessControl>
 
                             <div className="relative">
                               <button
@@ -1299,9 +1388,9 @@ export default function VendorPaymentPage() {
                           </div>
                         </td>
                       </tr>
-                  ))}
-                </tbody>
-              </table>
+                    ))}
+                  </tbody>
+                </table>
               </div>
 
               {filteredVendors.length === 0 && !loading && (
@@ -1438,8 +1527,8 @@ export default function VendorPaymentPage() {
         </div>
       </Modal>
 
-      {/* ✅ Create Purchase Order Modal - FULLSCREEN */}
-      <Modal isOpen={showAddPurchase} onClose={() => setShowAddPurchase(false)} title="Create Purchase Order" size="full">
+      {/* ✅ Create Purchase Order Modal - NOW MUCH WIDER */}
+      <Modal isOpen={showAddPurchase} onClose={() => setShowAddPurchase(false)} title="Create Purchase Order" size="xl">
         <div className="space-y-4">
           {poDraftRestored && (
             <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -1504,6 +1593,7 @@ export default function VendorPaymentPage() {
                 type="date"
                 value={purchaseForm.expected_delivery_date}
                 onChange={(e) => setPurchaseForm({ ...purchaseForm, expected_delivery_date: e.target.value })}
+                min={new Date().toISOString().split('T')[0]}
                 className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               />
             </div>
@@ -1511,29 +1601,24 @@ export default function VendorPaymentPage() {
 
           {/* Search & add products */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-700/30">
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end mb-3">
               <div className="lg:col-span-5">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search & add products</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search products</label>
                 <input
                   value={poSearch}
                   onChange={(e) => setPoSearch(e.target.value)}
                   className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                  placeholder="Type product name or SKU..."
+                  placeholder="Type name or SKU…"
                 />
-                <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                  {purchaseForm.vendor_id && !poShowAllProducts
-                    ? 'Showing products for selected vendor (toggle “Show all” to see everything).'
-                    : 'Showing all products.'}
-                </p>
               </div>
 
-              <div className="lg:col-span-3">
+              <div className="lg:col-span-5">
                 <CategoryTreeSelector
                   categories={categoryTree}
                   selectedCategoryId={poCategoryId}
                   onSelect={setPoCategoryId}
                   disabled={false}
-                  label="Category"
+                  label="Filter by category"
                   required={false}
                   placeholder="All categories"
                   showSelectedInfo={false}
@@ -1542,86 +1627,85 @@ export default function VendorPaymentPage() {
                 />
               </div>
 
-              <div className="lg:col-span-2 flex items-center gap-2 pb-1">
-                <input
-                  type="checkbox"
-                  checked={poShowAllProducts}
-                  disabled={!purchaseForm.vendor_id}
-                  onChange={(e) => setPoShowAllProducts(e.target.checked)}
-                  className="w-4 h-4"
-                />
-                <span className="text-sm text-gray-700 dark:text-gray-300">Show all</span>
-              </div>
-
               <div className="lg:col-span-2">
                 <button
                   type="button"
                   onClick={() => setShowQuickProduct(true)}
                   disabled={!purchaseForm.vendor_id}
-                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-gray-900 hover:bg-gray-700 text-white disabled:opacity-50"
-                  title={!purchaseForm.vendor_id ? 'Select a vendor first' : 'Create a new product quickly'}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-sm rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-700 dark:hover:bg-gray-100 disabled:opacity-50 transition-colors"
+                  title={!purchaseForm.vendor_id ? 'Select a vendor first' : 'Quick-create a new product'}
                 >
                   <Plus className="w-4 h-4" />
-                  Quick add new product
+                  Quick add
                 </button>
               </div>
             </div>
 
-            <div className="mt-3 max-h-64 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 divide-y divide-gray-100 dark:divide-gray-700">
-              {poFinderProducts.map((p: any) => (
-                <div key={p.id} className="flex items-center gap-3 px-3 py-2">
-                  <img
-                    src={getProductPrimaryImage(p)}
-                    alt={p.name}
-                    className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 cursor-zoom-in"
-                    title="View image"
-                    onClick={() => setImagePreview({ url: getProductPrimaryImage(p), name: p.name })}
-                    onError={(e) => {
-                      (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg';
-                    }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{p.name}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {p.sku}
-                      {p.category?.title ? ` • ${p.category.title}` : ''}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={() => addProductToPO(p.id)}
-                    className="px-3 py-1.5 text-xs rounded-md bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    Add
-                  </button>
-
-                  {(() => {
-                    const count = getVariantGroupProducts(p).length;
-                    if (count <= 1) return null;
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => openVariantPicker(String(p.id))}
-                        className="px-3 py-1.5 text-xs rounded-md bg-indigo-600 hover:bg-indigo-700 text-white"
-                        title="Add variations"
-                      >
-                        Variations ({count})
-                      </button>
-                    );
-                  })()}
-                </div>
-              ))}
-
-              {poFinderProducts.length === 0 && (
+            {/* Product results — grouped by base name */}
+            <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 divide-y divide-gray-100 dark:divide-gray-700">
+              {poFinderProducts.length === 0 ? (
                 <div className="px-3 py-6 text-center text-sm text-gray-500 dark:text-gray-400">
-                  No products found. Try a different search or category.
+                  {poCategoryId || poSearch ? 'No products found. Try a different search or category.' : 'Select a category or search to browse products.'}
                 </div>
+              ) : (
+                poFinderProducts.map((p: any) => {
+                  const variantCount = getVariantGroupProducts(p).length;
+                  const baseName = (p as any).base_name || p.name;
+                  const img = getProductPrimaryImage(p);
+                  const isInPO = purchaseForm.items.some((it: any) => String(it.product_id) === String(p.id));
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+                      <img
+                        src={img}
+                        alt={baseName}
+                        className="w-10 h-10 rounded-md object-cover border border-gray-200 dark:border-gray-700 flex-shrink-0 cursor-zoom-in"
+                        onClick={() => setImagePreview({ url: img, name: baseName })}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/placeholder-image.jpg'; }}
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{baseName}</div>
+                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                          <span className="text-[11px] text-gray-400 font-mono">{p.sku}</span>
+                          {p.category?.title && <span className="text-[11px] text-gray-400">• {p.category.title}</span>}
+                          {variantCount > 1 && (
+                            <span className="text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full">
+                              {variantCount} variations
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {variantCount > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => openVariantPicker(String(p.id))}
+                          className="flex-shrink-0 px-3 py-1.5 text-xs rounded-md bg-indigo-600 hover:bg-indigo-700 text-white"
+                        >
+                          Pick variation
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => addProductToPO(p.id)}
+                          className={`flex-shrink-0 px-3 py-1.5 text-xs rounded-md ${isInPO ? 'bg-gray-200 dark:bg-gray-600 text-gray-500 dark:text-gray-300' : 'bg-green-600 hover:bg-green-700 text-white'}`}
+                        >
+                          {isInPO ? 'Added ✓' : 'Add'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
+
+            {/* Result count */}
+            {poFinderProducts.length > 0 && (
+              <p className="mt-2 text-[11px] text-gray-400 dark:text-gray-500 text-right">
+                {poFinderProducts.length} product group{poFinderProducts.length !== 1 ? 's' : ''} shown
+              </p>
+            )}
           </div>
 
-          {/* Products in PO */}
           <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Products</h3>
@@ -1642,7 +1726,7 @@ export default function VendorPaymentPage() {
                       className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
                     >
                       <option value="">Select product</option>
-                      {poVendorProductOptions.map((p: any) => (
+                      {products.map((p: any) => (
                         <option key={p.id} value={p.id}>
                           {p.name} ({p.sku})
                         </option>
@@ -1666,7 +1750,7 @@ export default function VendorPaymentPage() {
                               }}
                             />
                             <div className="min-w-0">
-                              <div className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">{base.name}</div>
+                              <div className="text-xl font-semibold text-gray-900 dark:text-white truncate">{base.name}</div>
                               <div className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
                                 {(base as any).sku}
                                 {base.category?.title ? ` • ${base.category.title}` : ''}
@@ -1708,17 +1792,19 @@ export default function VendorPaymentPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Unit Cost (৳)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.unit_cost}
-                      onChange={(e) => updateProductItem(index, 'unit_cost', e.target.value)}
-                      className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
-                      placeholder="0.00"
-                    />
-                  </div>
+                  <AccessControl roles={['super-admin', 'admin']}>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Unit Cost (৳)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={item.unit_cost}
+                        onChange={(e) => updateProductItem(index, 'unit_cost', e.target.value)}
+                        className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </AccessControl>
 
                   <div>
                     <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Sell Price (৳)</label>
@@ -1840,7 +1926,7 @@ export default function VendorPaymentPage() {
         isOpen={showVariantPicker}
         onClose={() => setShowVariantPicker(false)}
         title={`Add variations${variantBaseProduct?.name ? `: ${variantBaseProduct.name}` : ''}`}
-        size="full"
+        size="xl"
         zIndexClass="z-[70]"
       >
         <div className="space-y-4">
@@ -1856,17 +1942,19 @@ export default function VendorPaymentPage() {
               />
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Unit Cost for all (optional)</label>
-              <input
-                type="number"
-                step="0.01"
-                value={variantBulkCost}
-                onChange={(e) => setVariantBulkCost(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                placeholder="e.g., 1200"
-              />
-            </div>
+            <AccessControl roles={['super-admin', 'admin']}>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Unit Cost for all (optional)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={variantBulkCost}
+                  onChange={(e) => setVariantBulkCost(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                  placeholder="e.g., 1200"
+                />
+              </div>
+            </AccessControl>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sell Price for all (optional)</label>
@@ -1910,7 +1998,9 @@ export default function VendorPaymentPage() {
                   <tr>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Variation</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Qty</th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                    <AccessControl roles={['super-admin', 'admin']}>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Unit Cost</th>
+                    </AccessControl>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase">Sell Price</th>
                   </tr>
                 </thead>
@@ -1937,7 +2027,7 @@ export default function VendorPaymentPage() {
 
                           <div className="min-w-0">
                             <div
-                              className="font-medium truncate cursor-zoom-in"
+                              className="text-2xl font-semibold text-gray-900 dark:text-white truncate cursor-zoom-in"
                               title="Click to view image"
                               onClick={() => setImagePreview({ url: getProductPrimaryImage(v), name: v.name })}
                             >
@@ -1960,20 +2050,22 @@ export default function VendorPaymentPage() {
                           className="w-28 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
                         />
                       </td>
-                      <td className="px-4 py-3">
-                        <input
-                          type="number"
-                          step="0.01"
-                          value={variantInputs[v.id]?.unit_cost ?? ''}
-                          onChange={(e) =>
-                            setVariantInputs((prev) => ({
-                              ...prev,
-                              [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), unit_cost: e.target.value },
-                            }))
-                          }
-                          className="w-36 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                        />
-                      </td>
+                      <AccessControl roles={['super-admin', 'admin']}>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={variantInputs[v.id]?.unit_cost ?? ''}
+                            onChange={(e) =>
+                              setVariantInputs((prev) => ({
+                                ...prev,
+                                [v.id]: { ...(prev[v.id] || { quantity: '0', unit_cost: '', unit_sell_price: '' }), unit_cost: e.target.value },
+                              }))
+                            }
+                            className="w-36 px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+                          />
+                        </td>
+                      </AccessControl>
                       <td className="px-4 py-3">
                         <input
                           type="number"
@@ -2295,12 +2387,12 @@ export default function VendorPaymentPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">SKU *</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">SKU (optional)</label>
               <input
                 value={quickProductForm.sku}
                 onChange={(e) => setQuickProductForm({ ...quickProductForm, sku: e.target.value })}
                 className="w-full px-3 py-2 border rounded-lg dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                placeholder="SKU"
+                placeholder="Leave empty to auto-generate (9 digits)"
               />
             </div>
           </div>

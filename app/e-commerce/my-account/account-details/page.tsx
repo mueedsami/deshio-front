@@ -73,7 +73,7 @@ export default function MyAccountDetailsPage() {
   return (
     <MyAccountShell title="Account details" subtitle="Update your profile info and password.">
       {err ? (
-        <div className="border border-red-200 bg-red-50 text-red-700 rounded-md p-3 text-sm mb-4">
+        <div className="border border-rose-200 bg-rose-50 text-neutral-900 rounded-md p-3 text-sm mb-4">
           {err}
         </div>
       ) : null}
@@ -140,7 +140,7 @@ export default function MyAccountDetailsPage() {
 
           <button
             onClick={saveProfile}
-            className="mt-4 bg-red-700 text-white px-4 py-2 rounded-md text-sm hover:bg-red-800"
+            className="mt-4 bg-neutral-900 text-white px-4 py-2 rounded-md text-sm hover:bg-neutral-800"
           >
             Save changes
           </button>

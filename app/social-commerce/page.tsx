@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Search, X, Globe, AlertCircle, Eye, FileText } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -62,83 +62,6 @@ const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 const SC_SELECTION_QUEUE_KEY = 'socialCommerceSelectionQueueV1';
 const SC_EDIT_PREFILL_KEY = 'socialCommerceEditPrefillV1';
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
-
-type SocialCommerceEditContext = {
-  editMode?: boolean;
-  editOrderId?: number | string | null;
-  editOrderNumber?: string | null;
-  source?: string;
-  ts?: number;
-};
-
-const parseEditId = (value: any): number | null => {
-  const n = Number(value || 0);
-  return Number.isFinite(n) && n > 0 ? n : null;
-};
-
-const readEditContextFromBrowser = (): SocialCommerceEditContext => {
-  if (typeof window === 'undefined') return {};
-
-  const context: SocialCommerceEditContext = {};
-
-  const merge = (raw: string | null) => {
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') Object.assign(context, parsed);
-    } catch {
-      // ignore bad stored context
-    }
-  };
-
-  merge(localStorage.getItem(SC_EDIT_CONTEXT_KEY));
-  merge(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY));
-
-  const params = new URLSearchParams(window.location.search);
-  const urlEditId = parseEditId(params.get('editOrderId') || params.get('edit_order_id'));
-  if (urlEditId) {
-    context.editMode = true;
-    context.editOrderId = urlEditId;
-  }
-
-  const urlOrderNumber = params.get('editOrderNumber') || params.get('orderNumber');
-  if (urlOrderNumber) context.editOrderNumber = urlOrderNumber;
-
-  return context;
-};
-
-const persistEditContextToBrowser = (ctx: SocialCommerceEditContext) => {
-  if (typeof window === 'undefined') return;
-
-  const editOrderId = parseEditId(ctx.editOrderId);
-  if (!editOrderId) return;
-
-  const normalized: SocialCommerceEditContext = {
-    editMode: true,
-    editOrderId,
-    editOrderNumber: ctx.editOrderNumber || null,
-    source: ctx.source || 'social-commerce',
-    ts: Date.now(),
-  };
-
-  const raw = JSON.stringify(normalized);
-  sessionStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
-  localStorage.setItem(SC_EDIT_CONTEXT_KEY, raw);
-};
-
-const clearEditContextFromBrowser = () => {
-  if (typeof window === 'undefined') return;
-  sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
-  localStorage.removeItem(SC_EDIT_CONTEXT_KEY);
-};
-
-const buildSocialCommerceUrlWithEdit = (editOrderId?: number | null, editOrderNumber?: string | null) => {
-  if (!editOrderId) return '/social-commerce';
-  const params = new URLSearchParams();
-  params.set('editOrderId', String(editOrderId));
-  if (editOrderNumber) params.set('editOrderNumber', editOrderNumber);
-  return `/social-commerce?${params.toString()}`;
-};
 
 export default function SocialCommercePage() {
   const [darkMode, setDarkMode] = useState(false);
@@ -308,16 +231,24 @@ export default function SocialCommercePage() {
   const readQueuedSelections = () => {
     if (typeof window === 'undefined') return [];
     try {
-      const raw = sessionStorage.getItem(SC_SELECTION_QUEUE_KEY);
-      const parsed = raw ? JSON.parse(raw) : [];
-      const list = Array.isArray(parsed) ? parsed : [];
+      const rawSession = sessionStorage.getItem(SC_SELECTION_QUEUE_KEY);
+      const rawLegacyLocal = localStorage.getItem('social_commerce_queue');
+      
+      const parsedSession = rawSession ? JSON.parse(rawSession) : [];
+      const parsedLegacy = rawLegacyLocal ? JSON.parse(rawLegacyLocal) : [];
+      
+      const listSession = Array.isArray(parsedSession) ? parsedSession : [];
+      const listLegacy = Array.isArray(parsedLegacy) ? parsedLegacy : [];
+      
+      // Merge them
+      const list = [...listSession, ...listLegacy];
 
       const byId = new Map<number, any>();
       for (const item of list) {
         const id = Number(item?.id || 0);
         if (!Number.isFinite(id) || id <= 0) continue;
 
-        const qtyRaw = Number(item?.qty);
+        const qtyRaw = Number(item?.qty ?? item?.quantity);
         const qty = Number.isFinite(qtyRaw) && qtyRaw > 0 ? Math.floor(qtyRaw) : 1;
 
         const ex = byId.get(id);
@@ -326,11 +257,11 @@ export default function SocialCommercePage() {
           ex.ts = Math.max(Number(ex.ts || 0), Number(item?.ts || 0));
           if (!ex.image && item?.image) ex.image = String(item.image);
           if (!ex.sku && item?.sku) ex.sku = String(item.sku);
-          if (!ex.name && item?.name) ex.name = String(item.name);
+          if (!ex.name && (item?.name || item?.productName)) ex.name = String(item.name || item.productName);
         } else {
           byId.set(id, {
             id,
-            name: String(item?.name || ''),
+            name: String(item?.name || item?.productName || ''),
             sku: String(item?.sku || ''),
             image: item?.image ? String(item.image) : null,
             qty,
@@ -348,6 +279,56 @@ export default function SocialCommercePage() {
   const clearQueuedSelections = () => {
     if (typeof window === 'undefined') return;
     sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
+    localStorage.removeItem('social_commerce_queue');
+  };
+
+  const handleResetAll = () => {
+    if (typeof window === 'undefined') return;
+    if (!confirm('Are you sure you want to clear all data and start a new order? This will remove all items from cart and clear customer details.')) return;
+
+    // Clear all session storage related to SC
+    sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
+    sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
+    sessionStorage.removeItem(SC_EDIT_PREFILL_KEY);
+    sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+    localStorage.removeItem('social_commerce_queue'); 
+    sessionStorage.removeItem('pendingOrder');
+
+    // Reset local states
+    setEditOrderId(null);
+    setEditOrderNumber(null);
+    setStagingQueue([]);
+    setDate(getTodayDate());
+    setSalesBy('');
+    setUserName('');
+    setUserEmail('');
+    setUserPhone('');
+    setSocialId('');
+    setOrderNotes('');
+    setIsInternational(false);
+    setPathaoCityId('');
+    setPathaoZoneId('');
+    setPathaoAreaId('');
+    setStreetAddress('');
+    setPostalCode('');
+    setCountry('');
+    setState('');
+    setInternationalCity('');
+    setInternationalPostalCode('');
+    setDeliveryAddress('');
+    setCart([]);
+    setSearchQuery('');
+    setMinPrice('');
+    setMaxPrice('');
+    setExactPrice('');
+    setSearchResults([]);
+    setSelectedProduct(null);
+    setExistingCustomer(null);
+    setRecentOrders([]);
+    setLastOrderInfo(null);
+    setDefectiveProduct(null);
+
+    showToast('All data cleared. You can start a new order.', 'success');
   };
 
   const formatOrderDateTime = (v?: any) => {
@@ -831,10 +812,7 @@ export default function SocialCommercePage() {
 
   const normalizeQtyForProduct = (product: any, rawQty: any) => {
     const parsedQty = Math.max(1, Math.floor(Number(rawQty) || 1));
-    if (product?.isDefective) return parsedQty;
-    const available = Math.max(0, Number(product?.available ?? 0) || 0);
-    if (available <= 0) return 1;
-    return Math.min(parsedQty, available);
+    return parsedQty; // Remove hard-cap to allow flexible manual entry
   };
 
   const buildStagingItem = (product: any, overrides: Partial<StagingItem> = {}): StagingItem => {
@@ -871,16 +849,22 @@ export default function SocialCommercePage() {
         const baseAmount = getProductUnitPrice(item.product) * quantity;
 
         if (mode === 'finalAmount') {
-          const rawAmount = Number(String(changes.amount ?? item.amount).replace(/[^0-9.-]/g, ''));
-          const finalAmount = Number.isFinite(rawAmount) ? Math.min(baseAmount, Math.max(0, rawAmount)) : baseAmount;
-          const discountValue = Math.max(0, baseAmount - finalAmount);
+          const rawInput = changes.amount !== undefined ? String(changes.amount) : item.amount;
+          const rawAmount = Number(rawInput.replace(/[^0-9.-]/g, ''));
+          const finalAmount = Number.isFinite(rawAmount) ? Math.max(0, rawAmount) : baseAmount;
+          const discountValue = baseAmount - finalAmount;
+
+          // Reverse-calculate discountPercent so the discount persists during quantity changes
+          const calculatedDiscountPercent = (baseAmount > 0 && discountValue > 0) 
+            ? ((discountValue / baseAmount) * 100).toFixed(2) 
+            : '';
 
           return {
             ...item,
             quantity,
-            discountPercent: '',
-            discountTk: discountValue ? discountValue.toFixed(2) : '0',
-            amount: finalAmount.toFixed(2),
+            discountPercent: calculatedDiscountPercent,
+            discountTk: '',
+            amount: rawInput, // Preserve the exact string user types (to allow decimals like "100.")
           };
         }
 
@@ -994,9 +978,10 @@ export default function SocialCommercePage() {
         return;
       }
 
-      // Otherwise, treat as international if fields exist
-      const hasInternational = !!shipping?.country || !!shipping?.state || !!shipping?.city;
-      if (hasInternational) {
+      // Otherwise, check if it's explicitly international
+      const isActuallyIntl = !!(shipping?.country && String(shipping.country).toLowerCase() !== 'bangladesh');
+      
+      if (isActuallyIntl) {
         if (!isInternational) setIsInternational(true);
         if (!country && shipping?.country) setCountry(String(shipping.country));
         if (!state && shipping?.state) setState(String(shipping.state));
@@ -1007,6 +992,17 @@ export default function SocialCommercePage() {
         if (!deliveryAddress && (shipping?.street || shipping?.address)) {
           setDeliveryAddress(String(shipping?.street || shipping?.address));
         }
+        setLastPrefilledOrderId(orderId);
+      } else {
+        // It's a domestic order without Pathao IDs (auto location)
+        if (isInternational) setIsInternational(false);
+        if (!streetAddress && (shipping?.street || shipping?.address)) {
+          setStreetAddress(String(shipping?.street || shipping?.address));
+        }
+        if (!postalCode && shipping?.postal_code) {
+          setPostalCode(String(shipping.postal_code));
+        }
+        setUsePathaoAutoLocation(true);
         setLastPrefilledOrderId(orderId);
       }
     } catch (e) {
@@ -1037,8 +1033,8 @@ export default function SocialCommercePage() {
     }
 
     const lo: any = customerLookup.lastOrder;
-    const ros = Array.isArray((customerLookup as any)?.recentOrders)
-      ? ((customerLookup as any).recentOrders as RecentOrder[])
+    const ros = Array.isArray(customerLookup.recentOrders)
+      ? (customerLookup.recentOrders as RecentOrder[])
       : [];
     setRecentOrders(ros);
 
@@ -1067,7 +1063,7 @@ export default function SocialCommercePage() {
       prefillDeliveryFromOrder(Number(lo.last_order_id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerLookup.customer, customerLookup.lastOrder, (customerLookup as any).recentOrders, customerLookup.loading, customerLookup.error]);
+  }, [customerLookup.customer, customerLookup.lastOrder, customerLookup.recentOrders, customerLookup.loading, customerLookup.error]);
 
   // 🖼️ Warm cache: thumbnails for items in the recent orders list
   useEffect(() => {
@@ -1085,34 +1081,22 @@ export default function SocialCommercePage() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      const browserEditCtx = readEditContextFromBrowser();
-      const browserEditOrderId = parseEditId(browserEditCtx.editOrderId);
-      const browserEditOrderNumber =
-        typeof browserEditCtx.editOrderNumber === 'string' ? browserEditCtx.editOrderNumber : null;
-
       // ── Check for edit-order prefill first (overrides any draft) ──
       const editRaw = sessionStorage.getItem(SC_EDIT_PREFILL_KEY);
       if (editRaw) {
         sessionStorage.removeItem(SC_EDIT_PREFILL_KEY);
-        // Also clear stale draft/queue/pending order so prefill values win
+        // Also clear any stale draft so prefill values win
         sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
-        sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
-        sessionStorage.removeItem('pendingOrder');
-        localStorage.removeItem('pendingOrder');
         const ep = JSON.parse(editRaw);
         if (ep && typeof ep === 'object') {
-          const incomingEditOrderId = parseEditId(ep.editOrderId) || browserEditOrderId;
-          const incomingEditOrderNumber =
-            (typeof ep.editOrderNumber === 'string' ? ep.editOrderNumber : null) || browserEditOrderNumber;
-
+          const incomingEditOrderId = Number(ep.editOrderId || 0) || null;
+          const incomingEditOrderNumber = typeof ep.editOrderNumber === 'string' ? ep.editOrderNumber : null;
           if (incomingEditOrderId) {
             setEditOrderId(incomingEditOrderId);
-            persistEditContextToBrowser({
-              editMode: true,
-              editOrderId: incomingEditOrderId,
-              editOrderNumber: incomingEditOrderNumber,
-              source: 'social-commerce-prefill',
-            });
+            sessionStorage.setItem(
+              SC_EDIT_CONTEXT_KEY,
+              JSON.stringify({ editOrderId: incomingEditOrderId, editOrderNumber: incomingEditOrderNumber })
+            );
           }
           if (incomingEditOrderNumber) setEditOrderNumber(incomingEditOrderNumber);
           if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
@@ -1141,35 +1125,19 @@ export default function SocialCommercePage() {
 
       const raw = sessionStorage.getItem(SC_DRAFT_STORAGE_KEY);
       if (!raw) {
-        // URL/localStorage context still matters after product-list return or refresh.
-        if (browserEditOrderId) {
-          setEditOrderId(browserEditOrderId);
-          setEditOrderNumber(browserEditOrderNumber);
-          persistEditContextToBrowser({
-            editMode: true,
-            editOrderId: browserEditOrderId,
-            editOrderNumber: browserEditOrderNumber,
-            source: 'social-commerce-url-or-storage',
-          });
-        }
         draftHydratedRef.current = true;
         return;
       }
-
       const d = JSON.parse(raw);
       if (d && typeof d === 'object') {
-        const draftEditOrderId = parseEditId(d.editOrderId) || browserEditOrderId;
-        const draftEditOrderNumber =
-          (typeof d.editOrderNumber === 'string' ? d.editOrderNumber : null) || browserEditOrderNumber;
-
+        const draftEditOrderId = Number(d.editOrderId || 0) || null;
+        const draftEditOrderNumber = typeof d.editOrderNumber === 'string' ? d.editOrderNumber : null;
         if (draftEditOrderId) {
           setEditOrderId(draftEditOrderId);
-          persistEditContextToBrowser({
-            editMode: true,
-            editOrderId: draftEditOrderId,
-            editOrderNumber: draftEditOrderNumber,
-            source: 'social-commerce-draft',
-          });
+          sessionStorage.setItem(
+            SC_EDIT_CONTEXT_KEY,
+            JSON.stringify({ editOrderId: draftEditOrderId, editOrderNumber: draftEditOrderNumber })
+          );
         }
         if (draftEditOrderNumber) setEditOrderNumber(draftEditOrderNumber);
         if (typeof d.date === 'string') setDate(d.date);
@@ -1289,7 +1257,7 @@ export default function SocialCommercePage() {
         const stockLimitedNames: string[] = [];
 
         if (selectedProducts.length) {
-          setCart((prev) => {
+          setStagingQueue((prev) => {
             const next = [...prev];
             const queuedCountByPid = new Map<number, number>();
 
@@ -1299,38 +1267,38 @@ export default function SocialCommercePage() {
               const price = Number(String(p?.attributes?.Price ?? '0').replace(/[^0-9.-]/g, '')) || 0;
               const available = Math.max(0, Number(p?.available ?? 0) || 0);
 
-              const alreadyInCartQty = next
+              const alreadyInCartQty = cart
                 .filter((item) => !item.isService && !item.isDefective && Number(item.product_id) === pid)
                 .reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
 
+              const alreadyInStagingQty = next
+                .filter((item) => Number(item.product?.id || 0) === pid)
+                .reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+
               const queuedUsed = queuedCountByPid.get(pid) || 0;
-              if (alreadyInCartQty + queuedUsed + 1 > available) {
+              if (alreadyInCartQty + alreadyInStagingQty + queuedUsed + 1 > available) {
                 stockLimitedNames.push(name);
                 continue;
               }
 
-              const existingIndex = next.findIndex((item) => !item.isService && !item.isDefective && Number(item.product_id) === pid);
+              const existingIndex = next.findIndex((item) => Number(item.product?.id || 0) === pid);
               if (existingIndex >= 0) {
                 const ex = next[existingIndex];
                 const newQty = (Number(ex.quantity) || 0) + 1;
-                const exDiscount = Number(ex.discount_amount) || 0;
+                const dTk = Number(ex.discountTk) || 0;
                 next[existingIndex] = {
                   ...ex,
                   quantity: newQty,
-                  discount_amount: exDiscount,
-                  amount: Math.max(0, (price * newQty) - exDiscount),
-                  unit_price: price,
+                  amount: Math.max(0, (price * newQty) - dTk).toFixed(2),
                 };
               } else {
                 next.push({
                   id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-                  product_id: pid,
-                  batch_id: null,
-                  productName: name,
+                  product: p,
                   quantity: 1,
-                  unit_price: price,
-                  discount_amount: 0,
-                  amount: price,
+                  discountPercent: '',
+                  discountTk: '',
+                  amount: price.toFixed(2),
                 });
               }
 
@@ -1393,7 +1361,7 @@ export default function SocialCommercePage() {
             id: Date.now(),
             product_id: defect.productId,
             batch_id: defect.batchId,
-            productName: `${selectedProduct.name}`,
+            productName: `${defect.productName}`,
             quantity: 1,
             unit_price: defect.sellingPrice || 0,
             discount_amount: 0,
@@ -1532,64 +1500,17 @@ export default function SocialCommercePage() {
       setIsSearching(true);
 
       try {
-        let batches: any[] = [];
-        let productMap = new Map<number, any>();
-        let relevanceMap = new Map<number, { score: number; stage: string }>();
-
-        // ✅ If there's a search query, use advancedSearch to find products first
-        if (q) {
-          const hits = await productService.advancedSearchAll(
-            {
-              query: q,
-              is_archived: false,
-              enable_fuzzy: true,
-              fuzzy_threshold: 60,
-              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-              per_page: 80,
-            },
-            { max_items: 200, max_pages: 5 } // Fetching a reasonable max chunk of products
-          );
-
-          if (hits.length === 0) {
-            setSearchResults([]);
-            return;
-          }
-
-          for (const h of hits) {
-            if (!h?.id) continue;
-            const pid = Number(h.id);
-            productMap.set(pid, h);
-            relevanceMap.set(pid, {
-              score: Number((h as any)?.relevance_score ?? 0) || 0,
-              stage: String((h as any)?.search_stage ?? 'advanced'),
-            });
-          }
-
-          const productIds = Array.from(productMap.keys()).join(',');
-          
-          // Download batches *ONLY* for the matched product IDs
-          batches = await batchService.getBatchesAll({
-            store_id: storeId,
-            status: 'available',
-            product_ids: productIds,
-            min_sell_price: min,
-            max_sell_price: max,
-            exact_price: exact,
-          }, { max_items: 2000 }); // safety cap
-        } else {
-          // ✅ Price-only search
-          batches = await batchService.getBatchesAll({
-            store_id: storeId,
-            status: 'available',
-            min_sell_price: min,
-            max_sell_price: max,
-            exact_price: exact,
-          }, { max_items: 50 }); // cap size for price-only searches to keep UI fast
-        }
+        // Single unified search using batchService
+        const batches = await batchService.getBatchesAll({
+          store_id: storeId,
+          status: 'available',
+          search: q || undefined,
+          min_sell_price: min,
+          max_sell_price: max,
+          exact_price: exact,
+        }, { max_items: 2000 }); // Fast search with capped results
 
         const results = buildProductResultsFromBatches(batches, {
-          productOverrides: productMap,
-          relevanceOverrides: relevanceMap,
           defaultStage: q ? 'advanced' : 'price',
           defaultScore: 0,
         });
@@ -1603,10 +1524,8 @@ export default function SocialCommercePage() {
           return true;
         });
 
-        // Sort: best match first, then cheaper batches first
+        // Sort: cheaper batches first
         finalResults.sort((a: any, b: any) => {
-          const d = Number(b?.relevance_score ?? 0) - Number(a?.relevance_score ?? 0);
-          if (d !== 0) return d;
           return Number(a?.attributes?.Price ?? 0) - Number(b?.attributes?.Price ?? 0);
         });
 
@@ -1936,10 +1855,11 @@ export default function SocialCommercePage() {
         ? {
             name: userName,
             phone: cleanPhone,
+            address_line1: deliveryAddress,
             street: deliveryAddress,
             city: internationalCity,
             state: state || undefined,
-            country,
+            country: country || 'Bangladesh',
             postal_code: internationalPostalCode || undefined,
           }
         : (() => {
@@ -1947,7 +1867,10 @@ export default function SocialCommercePage() {
             const base: any = {
               name: userName,
               phone: cleanPhone,
+              address_line1: streetAddress,
               street: streetAddress,
+              city: cityObj?.city_name || 'Dhaka',
+              country: 'Bangladesh',
               postal_code: postalCode || undefined,
             };
 
@@ -1956,7 +1879,6 @@ export default function SocialCommercePage() {
               return {
                 ...base,
                 area: areaObj?.area_name || '',
-                city: cityObj?.city_name || '',
                 pathao_city_id: pathaoCityId ? Number(pathaoCityId) : undefined,
                 pathao_zone_id: pathaoZoneId ? Number(pathaoZoneId) : undefined,
                 pathao_area_id: pathaoAreaId ? Number(pathaoAreaId) : undefined,
@@ -1967,24 +1889,21 @@ export default function SocialCommercePage() {
             return base;
           })();
 
-      const browserEditCtx = readEditContextFromBrowser();
-      const effectiveEditOrderId = editOrderId || parseEditId(browserEditCtx.editOrderId);
-      const effectiveEditOrderNumber =
-        editOrderNumber || (typeof browserEditCtx.editOrderNumber === 'string' ? browserEditCtx.editOrderNumber : null);
-
-      if (effectiveEditOrderId) {
-        persistEditContextToBrowser({
-          editMode: true,
-          editOrderId: effectiveEditOrderId,
-          editOrderNumber: effectiveEditOrderNumber,
-          source: 'social-commerce-submit',
-        });
+      let effectiveEditOrderId = editOrderId;
+      let effectiveEditOrderNumber = editOrderNumber;
+      if (!effectiveEditOrderId) {
+        try {
+          const ctx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+          effectiveEditOrderId = Number(ctx.editOrderId || 0) || null;
+          effectiveEditOrderNumber = effectiveEditOrderNumber || (typeof ctx.editOrderNumber === 'string' ? ctx.editOrderNumber : null);
+        } catch {
+          // ignore bad session data
+        }
       }
 
       const orderData = {
         order_type: 'social_commerce',
-        editMode: !!effectiveEditOrderId,
-        ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId, edit_order_id: effectiveEditOrderId } : {}),
+        ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
         ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
         store_id: parseInt(selectedStore),
         customer: {
@@ -2019,38 +1938,31 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        notes: [
-          orderNotes?.trim(),
-          `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
-        ].filter(Boolean).join(' '),
+        notes: orderNotes?.trim() || '',
       };
 
-      const pendingOrderPayload = {
-        ...orderData,
-        salesBy,
-        date,
-        isInternational,
-        subtotal,
-        deliveryAddress: deliveryAddressForUi,
+      sessionStorage.setItem(
+        'pendingOrder',
+        JSON.stringify({
+          ...orderData,
+          salesBy,
+          date,
+          isInternational,
+          subtotal,
+          deliveryAddress: deliveryAddressForUi,
 
-        defectiveItems: cart
-          .filter((item) => item.isDefective)
-          .map((item) => ({
-            defectId: item.defectId,
-            price: item.unit_price,
-            productName: item.productName,
-          })),
-      };
-
-      const pendingOrderRaw = JSON.stringify(pendingOrderPayload);
-      sessionStorage.setItem('pendingOrder', pendingOrderRaw);
-      localStorage.setItem('pendingOrder', pendingOrderRaw);
+          defectiveItems: cart
+            .filter((item) => item.isDefective)
+            .map((item) => ({
+              defectId: item.defectId,
+              price: item.unit_price,
+              productName: item.productName,
+            })),
+        })
+      );
 
       console.log('✅ Order data prepared, redirecting...');
-      const amountDetailsUrl = effectiveEditOrderId
-        ? `/social-commerce/amount-details?editOrderId=${effectiveEditOrderId}${effectiveEditOrderNumber ? `&editOrderNumber=${encodeURIComponent(effectiveEditOrderNumber)}` : ''}`
-        : '/social-commerce/amount-details';
-      window.location.href = amountDetailsUrl;
+      window.location.href = '/social-commerce/amount-details';
     } catch (error) {
       console.error('❌ Error:', error);
       alert('Failed to process order');
@@ -2068,7 +1980,16 @@ export default function SocialCommercePage() {
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <div className="max-w-7xl mx-auto">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
-                <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+                  <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
+                  <button
+                    onClick={handleResetAll}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 dark:bg-red-900/10 dark:text-red-400 dark:border-red-800 transition-colors shadow-sm"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset Order / Clear All
+                  </button>
+                </div>
 
                 {editOrderId && (
                   <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
@@ -2078,7 +1999,7 @@ export default function SocialCommercePage() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => { setEditOrderId(null); setEditOrderNumber(null); clearEditContextFromBrowser(); }}
+                      onClick={() => { setEditOrderId(null); setEditOrderNumber(null); }}
                       className="ml-auto text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200"
                       title="Dismiss"
                     >
@@ -2227,7 +2148,7 @@ export default function SocialCommercePage() {
                                                 <FileText className="h-3.5 w-3.5" />
                                                 View
                                               </button>
-                                              <p className="text-[11px] text-gray-600 dark:text-gray-200">
+                                              <p className="text-[11px] font-bold text-gray-900 dark:text-white bg-amber-100/50 dark:bg-amber-900/30 px-1.5 py-0.5 rounded">
                                                 {formatOrderDateTime(o.order_date)}
                                               </p>
                                             </div>
@@ -2637,8 +2558,7 @@ export default function SocialCommercePage() {
                         type="button"
                         onClick={() => {
                           saveDraftToSession();
-                          const returnUrl = buildSocialCommerceUrlWithEdit(editOrderId, editOrderNumber);
-                          window.location.href = `/product/list?selectMode=true&redirect=${encodeURIComponent(returnUrl)}`;
+                          window.location.href = `/product/list?selectMode=true&mode=social_commerce&redirect=${encodeURIComponent('/social-commerce')}`;
                         }}
                         disabled={!selectedStore}
                         className="px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2819,12 +2739,18 @@ export default function SocialCommercePage() {
                                   <div>
                                     <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Sell At / Final Amount</label>
                                     <input
-                                      type="number"
-                                      min="0"
-                                      step="0.01"
+                                      type="text"
+                                      inputMode="decimal"
                                       value={s.amount}
                                       onChange={(e) => updateStagingItem(s.id, { amount: e.target.value }, 'finalAmount')}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                      onBlur={() => {
+                                        // Format nicely on blur
+                                        const n = parseFloat(s.amount);
+                                        if (!isNaN(n)) {
+                                          updateStagingItem(s.id, { amount: n.toFixed(2) }, 'finalAmount');
+                                        }
+                                      }}
+                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
                                     />
                                   </div>
                                 </div>

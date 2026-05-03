@@ -1,159 +1,234 @@
-'use client';
+"use client";
 
-import Image from 'next/image';
-import Link from 'next/link';
-import React from 'react';
-import { Facebook, Instagram, Youtube, Mail, Phone, MapPin, Clock, Heart } from 'lucide-react';
+import React from "react";
+import Link from "next/link";
+import { Facebook, Instagram, Youtube, MapPin, Phone, MessageCircle } from "lucide-react";
 
-import {
-  CLIENT_NAME,
-  CLIENT_EMAIL,
-  CLIENT_PHONE,
-  CLIENT_MOBILE,
-  CLIENT_ADDRESS,
-  CLIENT_SUPPORT_HOURS,
-  CLIENT_FACEBOOK,
-} from '@/lib/constants';
+const BRAND = "Errum";
+
+const stores = [
+  { name: "Mirpur 12", address: "Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12", phone: "01942565664" },
+  { name: "Jamuna Future Park", address: "3C-17A, Level 3, Jamuna Future Park", phone: "01307130535" },
+  { name: "Bashundhara City", address: "38, 39, 40, Block D, Level 5, Bashundhara City", phone: "01336041064" },
+];
+
+const LINK_STYLE: React.CSSProperties = {
+  fontSize: '13px',
+  color: '#555555',
+  textDecoration: 'none',
+  lineHeight: 2,
+  display: 'block',
+  transition: 'color 0.15s',
+  fontFamily: "'Poppins', sans-serif",
+};
+
+const COL_HEADER_STYLE: React.CSSProperties = {
+  fontSize: '13px',
+  fontWeight: 700,
+  color: '#111111',
+  textTransform: 'uppercase',
+  letterSpacing: '0.10em',
+  marginBottom: '16px',
+  fontFamily: "'Poppins', sans-serif",
+};
 
 export default function Footer() {
-  return (
-    <footer className="bg-gray-900 text-gray-300">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-        {/* Main */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-12 mb-12">
-          {/* Column 1: Logo + text + social */}
-          <div>
-            <div className="flex items-center gap-3 mb-5">
-              <div className="relative w-12 h-12 rounded-xl bg-white/10 overflow-hidden border border-white/10">
-                <Image
-                  src="/logo.png"
-                  alt={`${CLIENT_NAME} logo`}
-                  fill
-                  className="object-contain p-2"
-                  priority
-                />
-              </div>
-              <div>
-                <p className="text-white text-xl font-bold leading-none">{CLIENT_NAME}</p>
-                <p className="text-[11px] text-gray-400">বেস্ট প্রাইসে বেস্ট কোয়ালিটি</p>
-              </div>
-            </div>
+  const year = new Date().getFullYear();
 
-            <p className="text-sm leading-relaxed text-gray-300/90 mb-6">
-              “এটা কোনো বিজনেস পেজ না, বরং একটা ফ্যামিলি” — দেশীয় তে পাবেন মেয়েদের কুর্তি, থ্রি পিছ,
-              ব্লক ড্রেস, জামদানি/মণিপুরী/বাটিক শাড়ি এবং হোম ডেকোর আইটেম।
+  const outlets = [
+    { name: "Bashundhara City Complex", image: "/Bashundhara_shopping_mall.png" },
+    { name: "Mirpur 12 Outlet", image: "/Mirpure_store.png" },
+    { name: "Jamuna Future Park", image: "/Jamuna_Future_Park.png" },
+  ];
+
+  return (
+    <footer style={{ background: '#f8f8f8', borderTop: '1px solid rgba(0,0,0,0.08)', paddingBottom: '80px' }}>
+      <div className="ec-container">
+
+        {/* ── Outlet Showcase ── */}
+        <section style={{ padding: '56px 0 0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '32px' }}>
+            <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
+            <h2 style={{ fontFamily: "'Poppins', sans-serif", fontSize: '15px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#111111', margin: 0 }}>
+              Our Outlets
+            </h2>
+            <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-8 px-2 lg:px-48 mb-12">
+            {outlets.map((outlet, idx) => (
+              <div key={idx} style={{ overflow: 'hidden', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.08)', background: '#ffffff', maxWidth: '320px', margin: '0 auto' }}>
+                <div style={{ position: 'relative', aspectRatio: '4/3', overflow: 'hidden' }}>
+                  <img
+                    src={outlet.image}
+                    alt={outlet.name}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', transition: 'transform 0.5s ease' }}
+                    onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.06)')}
+                    onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  />
+                </div>
+                <div style={{ padding: '8px', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                  <h3 style={{ fontFamily: "'Poppins', sans-serif", fontSize: '12px', fontWeight: 700, color: '#111111', margin: 0, textAlign: 'center', letterSpacing: '0.04em' }}>
+                    {outlet.name}
+                  </h3>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ── Main footer grid ── */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 md:gap-12" style={{ borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '48px' }}>
+
+          {/* Column 1 — Brand & Info */}
+          <div>
+            <Link href="/e-commerce" style={{ display: 'inline-block', marginBottom: '16px', textDecoration: 'none' }}>
+              <span style={{ fontFamily: "'Poppins', sans-serif", fontSize: '24px', fontWeight: 800, letterSpacing: '0.05em', color: '#111111' }}>
+                ERRUM
+              </span>
+            </Link>
+            <p style={{ fontSize: '13px', lineHeight: 1.7, color: '#555555', maxWidth: '300px', fontFamily: "'Poppins', sans-serif", marginBottom: '24px' }}>
+              A complete lifestyle brand — footwear, clothing, watches, and bags curated for everyday confidence across Bangladesh.
             </p>
 
-            <div className="flex gap-3">
-              <a
-                href={CLIENT_FACEBOOK}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="Facebook"
-                className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
-              >
-                <Facebook size={18} className="group-hover:scale-110 transition-transform" />
-              </a>
+            <p style={COL_HEADER_STYLE}>Quick Info</p>
+            <nav style={{ marginBottom: '24px' }}>
+              {[
+                { href: '/e-commerce/about', label: 'About Us' },
+                { href: '/e-commerce/contact', label: 'Contact Us' },
+                { href: '/e-commerce/track', label: 'Track Your Order' },
+                { href: '/e-commerce/categories', label: 'All Categories' },
+                { href: '/e-commerce/products', label: 'New & Popular' },
+              ].map(({ href, label }) => (
+                <Link key={href} href={href}
+                  style={LINK_STYLE}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#111111'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#555555'}
+                >
+                  {label}
+                </Link>
+              ))}
+            </nav>
 
-              {/* Optional placeholders */}
-              <a
-                href="#"
-                aria-label="Instagram"
-                className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
-              >
-                <Instagram size={18} className="group-hover:scale-110 transition-transform" />
-              </a>
-              <a
-                href="#"
-                aria-label="YouTube"
-                className="w-10 h-10 bg-gray-800 rounded-lg flex items-center justify-center hover:bg-red-600 transition-colors group"
-              >
-                <Youtube size={18} className="group-hover:scale-110 transition-transform" />
-              </a>
+            {/* Social Icons */}
+            <div style={{ display: 'flex', gap: '8px' }}>
+              {[
+                { Icon: Facebook, href: 'https://facebook.com/errum', label: 'Facebook' },
+                { Icon: Instagram, href: 'https://instagram.com/errum', label: 'Instagram' },
+                { Icon: Youtube, href: 'https://youtube.com/errum', label: 'YouTube' },
+              ].map(({ Icon, href, label }) => (
+                <a key={label} href={href} target="_blank" rel="noreferrer" aria-label={label}
+                  style={{
+                    display: 'flex',
+                    width: '36px',
+                    height: '36px',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '4px',
+                    border: '1px solid rgba(0,0,0,0.15)',
+                    color: '#555555',
+                    textDecoration: 'none',
+                    transition: 'background 0.15s, border-color 0.15s, color 0.15s',
+                  }}
+                  onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.background = '#111111'; el.style.borderColor = '#111111'; el.style.color = '#ffffff'; }}
+                  onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.background = 'transparent'; el.style.borderColor = 'rgba(0,0,0,0.15)'; el.style.color = '#555555'; }}
+                >
+                  <Icon style={{ width: '16px', height: '16px' }} />
+                </a>
+              ))}
             </div>
           </div>
 
-          {/* Column 2: Links */}
+          {/* Column 2 — Useful Links */}
           <div>
-            <h4 className="text-white font-semibold mb-6 text-lg">Explore</h4>
-            <ul className="space-y-3 text-sm">
-              <li>
-                <Link href="/e-commerce/about-us" className="hover:text-red-400 transition-colors flex items-center">
-                  → About Us
+            <p style={COL_HEADER_STYLE}>Useful Links</p>
+            <nav>
+              {[
+                { href: '/e-commerce/products', label: 'New Arrivals' },
+                { href: '/e-commerce/categories', label: 'Collections' },
+                { href: '/e-commerce/my-account', label: 'My Account' },
+                { href: '/e-commerce/orders', label: 'My Orders' },
+                { href: '/e-commerce/wishlist', label: 'Wishlist' },
+              ].map(({ href, label }) => (
+                <Link key={href} href={href}
+                  style={LINK_STYLE}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = '#111111'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = '#555555'}
+                >
+                  {label}
                 </Link>
-              </li>
-              <li>
-                <Link href="/e-commerce/categories" className="hover:text-red-400 transition-colors flex items-center">
-                  → Categories
-                </Link>
-              </li>
-              <li>
-                <Link href="/e-commerce/our-story" className="hover:text-red-400 transition-colors flex items-center">
-                  → Our Story
-                </Link>
-              </li>
-              <li>
-                <Link href="/e-commerce/contact" className="hover:text-red-400 transition-colors flex items-center">
-                  → Contact
-                </Link>
-              </li>
-              <li>
-                <Link href="/e-commerce/order-tracking" className="hover:text-red-400 transition-colors flex items-center">
-                  → Track Order
-                </Link>
-              </li>
-            </ul>
+              ))}
+            </nav>
           </div>
 
-          {/* Column 3: Contact info */}
+          {/* Column 3 — Our Promise + WhatsApp */}
           <div>
-            <h4 className="text-white font-semibold mb-6 text-lg">Contact</h4>
-
-            <ul className="space-y-4 text-sm">
-              <li className="flex items-start gap-3">
-                <MapPin size={18} className="text-red-400 flex-shrink-0 mt-1" />
-                <span>{CLIENT_ADDRESS}</span>
-              </li>
-
-              <li className="flex items-start gap-3">
-                <Phone size={18} className="text-red-400 flex-shrink-0 mt-1" />
-                <div>
-                  <p>Phone: {CLIENT_PHONE}</p>
-                  <p>Mobile: {CLIENT_MOBILE}</p>
+            <p style={COL_HEADER_STYLE}>Our Promise</p>
+            <div style={{ marginBottom: '24px' }}>
+              {[
+                { title: 'Comfort & Quality Assured', sub: 'Thoughtfully selected with quality finishing.' },
+                { title: 'In-Store & Online Support', sub: 'Visit us or order easily — responsive service.' },
+                { title: 'Nationwide Delivery', sub: 'Smooth and reliable delivery across Bangladesh.' },
+              ].map(({ title, sub }) => (
+                <div key={title} style={{ paddingBottom: '12px', borderBottom: '1px solid rgba(0,0,0,0.06)', marginBottom: '12px' }}>
+                  <p style={{ fontSize: '13px', fontWeight: 600, color: '#111111', margin: '0 0 2px 0', fontFamily: "'Poppins', sans-serif" }}>{title}</p>
+                  <p style={{ fontSize: '12px', color: '#555555', margin: 0, fontFamily: "'Poppins', sans-serif" }}>{sub}</p>
                 </div>
-              </li>
-
-              <li className="flex items-start gap-3">
-                <Mail size={18} className="text-red-400 flex-shrink-0 mt-1" />
-                <div>
-                  <p>{CLIENT_EMAIL}</p>
-                </div>
-              </li>
-            </ul>
-
-            <div className="mt-6 p-4 bg-gray-800 rounded-lg">
-              <p className="text-xs text-gray-400 mb-1 flex items-center gap-2">
-                <Clock className="w-4 h-4" /> Support hours
-              </p>
-              <p className="text-sm font-semibold text-white">{CLIENT_SUPPORT_HOURS}</p>
+              ))}
             </div>
+
+            <a href="https://wa.me/8801942565664" target="_blank" rel="noreferrer"
+              style={{ padding: '10px 12px', background: '#ffffff', borderRadius: '4px', border: '1px solid rgba(37,211,102,0.25)', display: 'flex', alignItems: 'center', gap: '8px', textDecoration: 'none' }}
+            >
+              <MessageCircle style={{ width: '14px', height: '14px', color: '#25D366', flexShrink: 0 }} />
+              <div>
+                <p style={{ fontSize: '10px', fontWeight: 700, color: '#999999', textTransform: 'uppercase', letterSpacing: '0.06em', margin: '0 0 2px 0', fontFamily: "'Poppins', sans-serif" }}>International Orders</p>
+                <p style={{ fontSize: '12px', color: '#111111', margin: 0, fontFamily: "'Poppins', sans-serif" }}>WhatsApp: <strong>01942565664</strong></p>
+              </div>
+            </a>
           </div>
         </div>
 
-        {/* Bottom */}
-        <div className="border-t border-gray-800 pt-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-3 text-sm text-gray-400">
-            <p>
-              {CLIENT_NAME} &copy; 2026. All rights reserved. Crafted with{' '}
-              <span className="inline-flex items-center gap-1 text-red-500">
-                <Heart className="w-4 h-4" />
-              </span>{' '}
-              in Bangladesh.
-            </p>
-            <p>
-              Developed by{' '}
-              <span className="text-gray-200 font-medium">mADestic Digital</span>
-            </p>
+        {/* ── Store Locations (Side by Side) ── */}
+        <div style={{ marginTop: '48px', borderTop: '1px solid rgba(0,0,0,0.08)', paddingTop: '48px' }}>
+          <p style={COL_HEADER_STYLE}>Our Store Locations</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-6">
+            {stores.map(store => (
+              <div key={store.name} style={{ padding: '16px', background: '#ffffff', borderRadius: '4px', border: '1px solid rgba(0,0,0,0.08)' }}>
+                <p style={{ fontSize: '14px', fontWeight: 700, color: '#111111', margin: '0 0 8px 0', fontFamily: "'Poppins', sans-serif" }}>{store.name}</p>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px', marginBottom: '8px' }}>
+                  <MapPin style={{ width: '14px', height: '14px', color: '#999999', marginTop: '2px', flexShrink: 0 }} />
+                  <span style={{ fontSize: '12px', color: '#555555', fontFamily: "'Poppins', sans-serif", lineHeight: 1.5 }}>{store.address}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Phone style={{ width: '14px', height: '14px', color: '#999999', flexShrink: 0 }} />
+                  <a href={`tel:${store.phone}`} style={{ fontSize: '12px', color: '#555555', fontFamily: "'Poppins', sans-serif", textDecoration: 'none' }}>{store.phone}</a>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Bottom bar ── */}
+        <div style={{ marginTop: '48px', paddingTop: '24px', borderTop: '1px solid rgba(0,0,0,0.08)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
+          <p style={{ fontSize: '12px', color: '#999999', fontFamily: "'Poppins', sans-serif", margin: 0 }}>
+            © {year} Errum STORE — Handcrafted for Confidence.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {['bKash', 'Nagad', 'Visa', 'Mastercard'].map(m => (
+              <span key={m} style={{
+                padding: '4px 10px',
+                border: '1px solid rgba(0,0,0,0.15)',
+                color: '#555555',
+                fontSize: '10px',
+                fontWeight: 700,
+                fontFamily: "'Poppins', sans-serif",
+                borderRadius: '4px',
+                letterSpacing: '0.05em',
+              }}>
+                {m}
+              </span>
+            ))}
           </div>
         </div>
       </div>

@@ -17,10 +17,15 @@ import {
   Truck,
   Search,
   History,
-  Tag,
+  ShieldCheck,
   RotateCcw,
+  Tag,
+  Users,
+  FileText,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { PAGE_ACCESS } from '@/lib/accessMap';
 // ──────────────────────────────
 // Perfect discriminated union
 // ──────────────────────────────
@@ -40,24 +45,25 @@ type MenuItem =
 // Props
 // ──────────────────────────────
 interface SidebarProps {
-  // Controlled usage (most pages)
-  isOpen?: boolean;
-  setIsOpen?: (open: boolean) => void;
-
-  // Compatibility with some legacy pages
-  toggleSidebar?: () => void;
-  darkMode?: boolean;
+  isOpen: boolean;
+  setIsOpen: (open: boolean) => void;
 }
 
-export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }: SidebarProps) {
+export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
   const pathname = usePathname();
-  const [internalOpen, setInternalOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const { isRole, isSuperAdmin, isLoading } = useAuth();
 
-  const isOpen = typeof isOpenProp === 'boolean' ? isOpenProp : internalOpen;
-  const setIsOpen = (open: boolean) => {
-    if (typeof setIsOpenProp === 'function') return setIsOpenProp(open);
-    setInternalOpen(open);
+  const canAccessHref = (href: string) => {
+    if (isSuperAdmin) return true;
+    if (isLoading) return true;
+    
+    const clean = href.split('?')[0];
+    const allowedRoles = PAGE_ACCESS[clean];
+    
+    if (!allowedRoles) return true; // no mapping = accessible
+    
+    return isRole(allowedRoles);
   };
 
   const toggleSubMenu = (label: string) => {
@@ -79,11 +85,10 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
       subMenu: [
         { label: 'Vendor Payment', href: '/vendor' },
         { label: 'Purchase Order', href: '/purchase-order' },
-        { label: 'PO Reports (PDF)', href: '/purchase-order/reports' },
-        { label: 'PO Delete', href: '/purchase-order/delete' },
       ],
     },
     { icon: Store, label: 'Store', href: '/store' },
+    { icon: Store, label: 'Store Assignment', href: '/store-assingment' },
     { icon: FolderTree, label: 'Category', href: '/category' },
     { icon: Image, label: 'Gallery', href: '/gallery' },
     {
@@ -104,7 +109,6 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
         { label: 'View Inventory', href: '/inventory/view' },
         { label: 'Price Adjustment', href: '/inventory/batch-price-update' },
         { label: 'Dispatches', href: '/inventory/outlet-stock' },
-        { label: 'Revive Barcodes', href: '/inventory/revive-barcodes' },
         { label: 'Reports', href: '/inventory/reports' },
       ],
     },
@@ -119,32 +123,57 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
         { label: 'Service Orders', href: '/service-orders' },
       ],
     },
-    { icon: Tag, label: 'Sale Campaigns', href: '/campaigns' },
-    { icon: RotateCcw, label: 'Returns & Exchanges', href: '/returns' },
     { icon: Package, label: 'Orders', href: '/orders' },
     { icon: CreditCard, label: 'Installments', href: '/orders?view=installments' },
     { icon: Package, label: 'Online Order Packing', href: '/social-commerce/package' },
     { icon: Package, label: 'PreOrders', href: '/preorders' },
     { icon: AlertTriangle, label: 'Extra Panel', href: '/extra' },
+    { icon: RotateCcw, label: 'Returns & Exchanges', href: '/returns' },
+    { icon: Tag, label: 'Sale Campaigns', href: '/campaigns' },
     { icon: Search, label: 'Lookup', href: '/lookup' },
     { icon: History, label: 'Activity Log', href: '/activity-logs' },
     { icon: CreditCard, label: 'Transaction', href: '/transaction' },
     { icon: CreditCard, label: 'Accounting', href: '/accounting' },
+    {
+      icon: CreditCard,
+      label: 'Cash Sheet',
+      href: '/cash-sheet',
+      subMenu: [
+        { label: 'Monthly Sheet',  href: '/cash-sheet' },
+        { label: 'Branch Costs',   href: '/cash-sheet/branch-cost' },
+        { label: 'Admin Panel',    href: '/cash-sheet/admin' },
+        { label: 'Owner Panel',    href: '/cash-sheet/owner' },
+        { label: 'Summary View',   href: '/cash-sheet/summary' },
+      ],
+    },
+    {
+      icon: Users,
+      label: 'Human Resources (HRM)',
+      subMenu: [
+        { label: 'Employee Portal', href: '/hrm/my' },
+        { label: 'Branch Management', href: '/hrm/branch' },
+        { label: 'Attendance Logs', href: '/hrm/attendance' },
+        { label: 'Sales Targets', href: '/hrm/sales-targets' },
+        { label: 'Rewards & Fines', href: '/hrm/rewards-fines' },
+      ],
+    },
     { icon: CreditCard, label: 'Employee Management', href: '/employees' },
+
+
   ];
 
-  // Auto-expand the active submenu so users can immediately see relevant options
-  useEffect(() => {
-    if (openMenu) return;
-    const hrefPath = (href: string) => href.split('?')[0];
-    const activeParent = menuItems.find(
-      (it) =>
-        'subMenu' in it &&
-        it.subMenu.some((sub) => hrefPath(sub.href) === hrefPath(pathname || ''))
-    );
-    if (activeParent && activeParent.label) setOpenMenu(activeParent.label);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname]);
+  // Filter menu items based on permissions
+  const filteredMenuItems: MenuItem[] = menuItems
+    .map((item) => {
+      if ('subMenu' in item) {
+        const subMenu = item.subMenu.filter((sub) => canAccessHref(sub.href));
+        return subMenu.length ? { ...item, subMenu } : null;
+      }
+
+      // simple link
+      return canAccessHref((item as any).href) ? item : null;
+    })
+    .filter(Boolean) as MenuItem[];
 
   return (
     <>
@@ -191,7 +220,7 @@ export default function Sidebar({ isOpen: isOpenProp, setIsOpen: setIsOpenProp }
           </p>
 
           <ul className="space-y-1">
-            {menuItems.map((item) => {
+            {filteredMenuItems.map((item) => {
               const Icon = item.icon;
               const hasSubMenu = 'subMenu' in item;
 

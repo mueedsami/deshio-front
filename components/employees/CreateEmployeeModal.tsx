@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import employeeService, { CreateEmployeeData } from '@/services/employeeService2';
 import storeService, { Store } from '@/services/storeService';
 import roleService, { Role } from '@/services/roleService';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface CreateEmployeeModalProps {
   isOpen: boolean;
@@ -13,6 +14,10 @@ interface CreateEmployeeModalProps {
 }
 
 export default function CreateEmployeeModal({ isOpen, onClose, onSuccess }: CreateEmployeeModalProps) {
+  const { user, isSuperAdmin } = useAuth();
+  const isGlobal = isSuperAdmin || user?.role?.slug === 'admin';
+  const isBranchManager = user?.role?.slug === 'branch-manager';
+
   const [loading, setLoading] = useState(false);
   const [stores, setStores] = useState<Store[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -22,7 +27,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onSuccess }: Crea
     name: '',
     email: '',
     password: '',
-    store_id: 0,
+    store_id: isBranchManager ? Number(user?.store_id) : 0,
     role_id: 0,
     phone: '',
     address: '',
@@ -62,10 +67,16 @@ export default function CreateEmployeeModal({ isOpen, onClose, onSuccess }: Crea
         console.log('Roles response:', rolesResponse);
         
         if (rolesResponse.success && rolesResponse.data) {
-          // Filter active roles client-side if needed
-          const activeRoles = Array.isArray(rolesResponse.data) 
+          let activeRoles = Array.isArray(rolesResponse.data)
             ? rolesResponse.data.filter(role => role.is_active)
             : [];
+          
+          // Non-global users (Branch Managers) shouldn't be able to create Admins or other Global roles
+          if (!isGlobal) {
+            const restrictedSlugs = ['super-admin', 'admin', 'super_admin'];
+            activeRoles = activeRoles.filter(role => !restrictedSlugs.includes(role.slug || ''));
+          }
+          
           console.log('Setting roles:', activeRoles);
           setRoles(activeRoles);
         }
@@ -155,7 +166,7 @@ export default function CreateEmployeeModal({ isOpen, onClose, onSuccess }: Crea
       name: '',
       email: '',
       password: '',
-      store_id: 0,
+      store_id: isBranchManager ? Number(user?.store_id) : 0,
       role_id: 0,
       phone: '',
       address: '',
@@ -250,17 +261,17 @@ export default function CreateEmployeeModal({ isOpen, onClose, onSuccess }: Crea
                 name="store_id"
                 value={formData.store_id}
                 onChange={handleChange}
-                disabled={loadingData}
-                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed ${
+                disabled={loadingData || isBranchManager}
+                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white disabled:opacity-75 ${
                   errors.store_id ? 'border-red-500' : 'border-gray-300 dark:border-gray-600'
                 }`}
               >
                 <option value={0}>
-                  {loadingData ? 'Loading stores...' : 'Select Store'}
+                  {loadingData ? 'Loading...' : 'Select Store'}
                 </option>
                 {stores.map((store) => (
                   <option key={store.id} value={store.id}>
-                    {store.name} {store.store_code ? `(${store.store_code})` : ''}
+                    {store.name}
                   </option>
                 ))}
               </select>

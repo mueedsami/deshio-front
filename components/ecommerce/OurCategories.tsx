@@ -1,155 +1,176 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { memo } from 'react';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import catalogService, { CatalogCategory } from '@/services/catalogService';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
-interface CategoryData {
-  id: number;
-  name: string;
-  description?: string;
-  image_url?: string;
-  color?: string;
-  icon?: string;
-  productCount: number;
+const slugify = (v: string) =>
+  v.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
+
+const getTopLevelCategories = (items: CatalogCategory[]): CatalogCategory[] => {
+  const named = (Array.isArray(items) ? items : []).filter(c => c && c.name);
+  const top = named.filter(c => (c.parent_id ?? null) === null);
+  const base = top.length ? top : named;
+  return [...base].sort((a, b) => {
+    const da = Number(a.product_count || 0);
+    const db = Number(b.product_count || 0);
+    if (db !== da) return db - da;
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  });
+};
+
+interface OurCategoriesProps {
+  categories?: CatalogCategory[];
+  loading?: boolean;
 }
 
-export default function OurCategories() {
-  const [categories, setCategoriesData] = useState<CategoryData[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+const OurCategories: React.FC<OurCategoriesProps> = memo(({ categories: categoriesProp, loading = false }) => {
   const router = useRouter();
+  const [categories, setCategories] = React.useState<CatalogCategory[]>(categoriesProp || []);
+  const [isFetching, setIsFetching] = React.useState<boolean>(!categoriesProp);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  React.useEffect(() => {
+    if (categoriesProp) { setCategories(categoriesProp); setIsFetching(false); }
+  }, [categoriesProp]);
 
-        // Fetch categories using the PUBLIC catalog service (no auth required)
-        const categoriesData = await catalogService.getCategories();
+  React.useEffect(() => {
+    if (categoriesProp) return;
+    let active = true;
+    setIsFetching(true);
+    catalogService.getCategories()
+      .then(data => { if (active) setCategories(Array.isArray(data) ? data : []); })
+      .catch(() => { if (active) setCategories([]); })
+      .finally(() => { if (active) setIsFetching(false); });
+    return () => { active = false; };
+  }, [categoriesProp]);
 
-        // Flatten all categories and subcategories
-        const allCategories: CategoryData[] = [];
+  const allDisplay = getTopLevelCategories(categories || []);
 
-        const flattenCategories = (cats: CatalogCategory[]) => {
-          cats.forEach(cat => {
-            allCategories.push({
-              id: cat.id,
-              name: cat.name,
-              description: cat.description,
-              image_url: cat.image_url,
-              color: cat.color,
-              icon: cat.icon,
-              productCount: cat.product_count || 0,
-            });
-
-            if (cat.children && cat.children.length > 0) {
-              flattenCategories(cat.children);
-            }
-          });
-        };
-
-        flattenCategories(categoriesData);
-
-        setCategoriesData(allCategories);
-      } catch (err: any) {
-        console.error('Error fetching categories:', err);
-        setError(err.message || 'Failed to load categories');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchData();
-  }, []);
-
-  if (loading) {
+  if (loading || isFetching) {
     return (
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <p className="text-gray-600">Loading categories...</p>
+      <section style={{ background: '#ffffff', padding: '48px 0' }}>
+        <div className="ec-container">
+          {/* Header skeleton */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '32px' }}>
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
+            <div style={{ height: '24px', width: '180px', background: '#f0f0f0', borderRadius: '4px' }} />
+            <div style={{ height: '1px', width: '48px', background: '#e0e0e0' }} />
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} style={{ aspectRatio: '3/4', background: '#f5f5f5', borderRadius: '4px', animation: 'pulse 1.5s ease-in-out infinite' }} />
+            ))}
           </div>
         </div>
       </section>
     );
   }
 
-  if (error) {
-    return (
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <p className="text-red-600">Error: {error}</p>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  if (categories.length === 0) {
-    return (
-      <section className="py-20 bg-white">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center">
-            <p className="text-gray-600">No categories available</p>
-          </div>
-        </div>
-      </section>
-    );
-  }
+  if (allDisplay.length === 0) return null;
 
   return (
-    <section className="py-20 bg-white">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Section Header */}
-        <div className="text-center mb-16">
-          <h2 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Our Categories</h2>
-          <p className="text-lg text-gray-600">Browse through our curated collections</p>
+    <section style={{ background: '#ffffff', padding: '48px 0' }}>
+      <div className="ec-container">
+        {/* Section header — reference style */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '16px', marginBottom: '32px' }}>
+          <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
+          <h2 style={{
+            fontFamily: "'Poppins', sans-serif",
+            fontSize: '18px',
+            fontWeight: 800,
+            textTransform: 'uppercase',
+            letterSpacing: '0.15em',
+            color: '#111111',
+            margin: 0,
+          }}>
+            FEATURED CATEGORIES
+          </h2>
+          <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
         </div>
 
-        {/* Categories Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-8">
-          {categories.map((cat) => (
-            <div 
-              key={cat.id} 
-              className="group text-center cursor-pointer"
-              onClick={() => router.push(`e-commerce/${encodeURIComponent(cat.name)}`)}
-            >
-              {/* Category Image */}
-              <div className="relative aspect-square rounded-full overflow-hidden mb-5 border-4 border-gray-100 group-hover:border-red-700 transition-all duration-300 shadow-lg group-hover:shadow-2xl bg-gradient-to-br from-indigo-100 to-purple-100">
-                {cat.image_url ? (
-                  <>
-                    <img
-                      src={cat.image_url}
-                      alt={cat.name}
-                      className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-300"
-                    />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-300" />
-                  </>
-                ) : (
-                  <>
-                    {/* Fallback to first letter if no image */}
-                    <div className="w-full h-full flex items-center justify-center">
-                      <span className="text-6xl font-bold text-indigo-600 group-hover:scale-110 transition-transform duration-300">
-                        {cat.name.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-all duration-300" />
-                  </>
-                )}
-              </div>
+        {/* 4-col grid matching reference */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-1.5 md:gap-3">
+          {allDisplay.map((cat, i) => {
+            const imgSrc = toAbsoluteAssetUrl(cat.image || cat.image_url || '');
 
-              {/* Category Info */}
-              <h3 className="font-bold text-gray-900 mb-1 text-lg group-hover:text-red-700 transition-colors">
-                {cat.name}
-              </h3>
-              <p className="text-sm text-gray-500">{cat.productCount} Products</p>
-            </div>
-          ))}
+            return (
+              <button
+                key={cat.id}
+                onClick={() => router.push(`/e-commerce/${encodeURIComponent(cat.slug || slugify(cat.name))}`)}
+                type="button"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  aspectRatio: '3/4',
+                  border: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  background: '#e8e8e8',
+                  display: 'block',
+                  width: '100%',
+                }}
+                onMouseEnter={e => {
+                  const img = (e.currentTarget as HTMLElement).querySelector('img');
+                  if (img) img.style.transform = 'scale(1.06)';
+                }}
+                onMouseLeave={e => {
+                  const img = (e.currentTarget as HTMLElement).querySelector('img');
+                  if (img) img.style.transform = 'scale(1)';
+                }}
+              >
+                {imgSrc ? (
+                  <Image
+                    src={imgSrc}
+                    alt={cat.name}
+                    fill
+                    sizes="(max-width: 768px) 50vw, (max-width: 1024px) 25vw, 25vw"
+                    style={{
+                      objectFit: 'cover',
+                      objectPosition: 'top',
+                      transition: 'transform 0.6s ease',
+                    }}
+                    onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
+                  />
+                ) : (
+                  <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: `hsl(${(i * 40) % 360}, 12%, 88%)`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}>
+                    <span style={{ fontFamily: "'Poppins', sans-serif", fontSize: '48px', fontWeight: 700, color: 'rgba(0,0,0,0.15)' }}>{cat.name.charAt(0)}</span>
+                  </div>
+                )}
+
+                {/* Dark gradient overlay */}
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.10) 50%, transparent 100%)' }} />
+
+                {/* Category label at bottom */}
+                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '16px 12px', textAlign: 'left' }}>
+                  <h3 style={{
+                    fontFamily: "'Poppins', sans-serif",
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.08em',
+                    color: '#ffffff',
+                    margin: 0,
+                    textShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                  }}>
+                    {cat.name}
+                  </h3>
+                </div>
+              </button>
+            );
+          })}
         </div>
       </div>
     </section>
   );
-}
+});
+
+export default OurCategories;

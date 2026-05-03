@@ -1,13 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
 import Link from 'next/link';
 import { Search, X, Globe, Package, AlertCircle, CheckCircle, Eye } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import storeService from '@/services/storeService';
-import catalogService from '@/services/catalogService';
-import productService from '@/services/productService';
 import axios from '@/lib/axios';
 
 interface CartProduct {
@@ -20,7 +19,7 @@ interface CartProduct {
 }
 
 export default function PreOrderPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [allProducts, setAllProducts] = useState<any[]>([]);
   const [stores, setStores] = useState<any[]>([]);
@@ -106,79 +105,65 @@ export default function PreOrderPage() {
   const fetchProducts = async () => {
     try {
       console.log('🔍 Fetching OUT-OF-STOCK products for pre-order...');
-
-      // ✅ Page through catalog to avoid missing products (backend caps per_page)
-      const productsData = await catalogService.getProductsAll(
-        { in_stock: false, per_page: 200 },
-        { max_items: 200000 }
-      );
-
+      
+      // FIXED: Use in_stock=false to get only out-of-stock products as per documentation
+      const response = await axios.get('/catalog/products', { 
+        params: { 
+          in_stock: false,  // Get only out-of-stock products
+          per_page: 1000 
+        } 
+      });
+      
+      console.log('📦 API response:', response.data);
+      
+      let productsData: any[] = [];
+      
+      // Handle different response structures
+      if (response.data?.data) {
+        if (response.data.data.products && Array.isArray(response.data.data.products)) {
+          productsData = response.data.data.products;
+        } else if (Array.isArray(response.data.data.data)) {
+          productsData = response.data.data.data;
+        } else if (Array.isArray(response.data.data)) {
+          productsData = response.data.data;
+        } else if (response.data.data.items && Array.isArray(response.data.data.items)) {
+          productsData = response.data.data.items;
+        }
+      } else if (Array.isArray(response.data)) {
+        productsData = response.data;
+      }
+      
       console.log('📊 Loaded', productsData.length, 'out-of-stock products');
-      setAllProducts(Array.isArray(productsData) ? productsData : []);
+      
+      if (productsData.length > 0) {
+        console.log('🔍 Sample product:', productsData[0]);
+      }
+      
+      setAllProducts(productsData);
     } catch (error: any) {
       console.error('❌ Error fetching products:', error);
+      console.error('❌ Error response:', error.response?.data);
       setAllProducts([]);
     }
   };
 
   const performProductSearch = async (query: string): Promise<any[]> => {
-    const queryLower = query.toLowerCase().trim();
-
-    if (!queryLower) return [];
-    if (allProducts.length === 0) return [];
-
-    // ✅ Try multi-language + fuzzy search first (Bangla/Roman/English)
-    try {
-      const hits = await productService.advancedSearchAll(
-        {
-          query,
-          is_archived: false,
-          enable_fuzzy: true,
-          fuzzy_threshold: 60,
-          search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-          per_page: 50,
-        },
-        { max_items: 8000 }
-      );
-
-      if (Array.isArray(hits) && hits.length > 0) {
-        const idSet = new Set(hits.map((h: any) => h.id));
-
-        const matched = allProducts.filter((p: any) => idSet.has(p.id));
-        if (matched.length > 0) {
-          return matched.slice(0, 50).map((prod: any) => {
-            let imageUrl = '/placeholder-image.jpg';
-            if (prod.images && Array.isArray(prod.images) && prod.images.length > 0) {
-              imageUrl = prod.images[0].url || prod.images[0].image_url || prod.images[0].image_path || '/placeholder-image.jpg';
-            } else if (prod.image_url) imageUrl = prod.image_url;
-            else if (prod.image) imageUrl = prod.image;
-
-            return {
-              id: prod.id,
-              name: prod.name,
-              sku: prod.sku,
-              imageUrl,
-              price_display: prod.price_display || 'TBA',
-              in_stock: prod.in_stock || false,
-              relevance_score: 100,
-            };
-          });
-        }
-      }
-    } catch (e) {
-      console.warn('Advanced search failed; falling back to local search', e);
-    }
-
-    // ✅ Fallback: local contains search within out-of-stock list
     const results: any[] = [];
+    const queryLower = query.toLowerCase().trim();
+    
+    console.log('🔍 Searching for:', queryLower);
+
+    if (allProducts.length === 0) {
+      return [];
+    }
 
     for (const prod of allProducts) {
       const productName = (prod.name || '').toLowerCase();
       const productSku = (prod.sku || '').toLowerCase();
-
+      
       let matches = false;
       let relevanceScore = 0;
-
+      
       if (productName === queryLower || productSku === queryLower) {
         relevanceScore = 100;
         matches = true;
@@ -189,27 +174,31 @@ export default function PreOrderPage() {
         relevanceScore = 60;
         matches = true;
       }
-
+      
       if (matches) {
         let imageUrl = '/placeholder-image.jpg';
         if (prod.images && Array.isArray(prod.images) && prod.images.length > 0) {
           imageUrl = prod.images[0].url || prod.images[0].image_url || prod.images[0].image_path || '/placeholder-image.jpg';
-        } else if (prod.image_url) imageUrl = prod.image_url;
-        else if (prod.image) imageUrl = prod.image;
-
+        } else if (prod.image_url) {
+          imageUrl = prod.image_url;
+        } else if (prod.image) {
+          imageUrl = prod.image;
+        }
+        
         results.push({
           id: prod.id,
           name: prod.name,
           sku: prod.sku,
-          imageUrl,
+          imageUrl: imageUrl,
           price_display: prod.price_display || 'TBA',
           in_stock: prod.in_stock || false,
-          relevance_score: relevanceScore,
+          relevance_score: relevanceScore
         });
       }
     }
-
+    
     results.sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0));
+    
     return results;
   };
 

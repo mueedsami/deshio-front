@@ -2,6 +2,7 @@
 
 import axiosInstance from '@/lib/axios';
 import catalogService from '@/services/catalogService';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
 export const GUEST_CART_STORAGE_KEY = 'guest_cart_v1' as const;
 
@@ -55,24 +56,87 @@ function saveGuestCart(cart: GuestCartStorage) {
   window.dispatchEvent(new Event('cart-updated'));
 }
 
+function emitCartUpdated() {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new Event('cart-updated'));
+}
+
+
+function normalizeCartProduct(product: any): CartProduct {
+  const rawImages =
+    (Array.isArray(product?.images) && product.images) ||
+    (Array.isArray(product?.images?.data) && product.images.data) ||
+    (Array.isArray(product?.product_images) && product.product_images) ||
+    [];
+
+  const images = (rawImages || [])
+    .map((img: any, idx: number) => {
+      const rawUrl =
+        img?.image_url ||
+        img?.url ||
+        img?.thumbnail_url ||
+        img?.image ||
+        img?.path ||
+        img?.src ||
+        '';
+
+      const image_url = toAbsoluteAssetUrl(String(rawUrl || ''));
+
+      return {
+        id: Number(img?.id || idx + 1),
+        image_url,
+        is_primary: Boolean(img?.is_primary || img?.isPrimary || img?.primary || img?.is_main),
+      };
+    })
+    .filter((i: any) => Boolean(i.image_url));
+
+  if (images.length > 0 && !images.some((i: any) => i.is_primary)) {
+    images[0].is_primary = true
+  }
+
+  return {
+    id: Number(product?.id || 0),
+    name: String(product?.name || ''),
+    selling_price: product?.selling_price ?? product?.price ?? 0,
+    images,
+    category: product?.category?.name || product?.category || undefined,
+    stock_quantity: Number(product?.stock_quantity ?? 0),
+    available_inventory: typeof product?.available_inventory === 'number' ? product.available_inventory : Number(product?.stock_quantity ?? 0),
+    in_stock: Boolean(product?.in_stock ?? true),
+    sku: product?.sku || undefined,
+  };
+}
+
 function normalizeCartProductFromCatalog(product: any): CartProduct {
-  const images = Array.isArray(product?.images)
-    ? product.images.map((img: any, idx: number) => ({
-        id: Number(img.id || idx + 1),
-        image_url: String(img.image_url || img.thumbnail_url || ''),
-        is_primary: Boolean(img.is_primary),
+  // catalogService returns images with `url` (not `image_url`).
+  return normalizeCartProduct(product);
+}
+
+function normalizeCart(cart: any): Cart {
+  const cart_items: CartItem[] = Array.isArray(cart?.cart_items)
+    ? cart.cart_items.map((ci: any) => ({
+        ...ci,
+        product: normalizeCartProduct(ci?.product),
       }))
     : [];
 
+  // Preserve summary if present; otherwise compute.
+  const total_items = cart_items.reduce((s, i) => s + Number(i.quantity || 0), 0);
+  const total_amount = cart_items.reduce((s, i) => {
+    const n = typeof i.total_price === 'string' ? parseFloat(i.total_price) : Number(i.total_price || 0);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
+
+  const summary = cart?.summary || {
+    total_items,
+    total_amount,
+    currency: 'BDT',
+    has_items: total_items > 0,
+  };
+
   return {
-    id: Number(product.id),
-    name: String(product.name || ''),
-    selling_price: product.selling_price ?? product.price ?? 0,
-    images,
-    category: product.category?.name || product.category || undefined,
-    stock_quantity: Number(product.stock_quantity ?? 0),
-    in_stock: Boolean(product.in_stock ?? true),
-    sku: product.sku || undefined,
+    cart_items,
+    summary,
   };
 }
 
@@ -94,6 +158,7 @@ export interface CartProduct {
   }>;
   category?: string;
   stock_quantity: number;
+  available_inventory: number;
   in_stock: boolean;
   sku?: string;
 }
@@ -181,7 +246,7 @@ class CartService {
     const cart_items: CartItem[] = storage.items.map((it) => ({
       id: it.id,
       product_id: it.product_id,
-      product: it.product_snapshot,
+      product: normalizeCartProduct(it.product_snapshot),
       variant_options: it.variant_options || null,
       quantity: it.quantity,
       unit_price: it.unit_price,
@@ -215,7 +280,7 @@ class CartService {
     try {
       // Guest cart (localStorage)
       if (!hasCustomerToken()) {
-        return this.buildGuestCart(safeParseGuestCart());
+        return normalizeCart(this.buildGuestCart(safeParseGuestCart()));
       }
 
       const response = await axiosInstance.get<ApiResponse<Cart>>('/cart');
@@ -333,6 +398,7 @@ class CartService {
         throw new Error(response.data.message || 'Failed to add to cart');
       }
       
+      emitCartUpdated();
       return response.data.data;
     } catch (error: any) {
       console.error('❌ Add to cart error:', error);
@@ -435,6 +501,7 @@ class CartService {
         throw new Error(response.data.message || 'Failed to update cart');
       }
       
+      emitCartUpdated();
       return response.data.data;
     } catch (error: any) {
       console.error('❌ Update cart error:', error);
@@ -482,6 +549,7 @@ class CartService {
       if (!response.data.success) {
         throw new Error(response.data.message || 'Failed to remove from cart');
       }
+    emitCartUpdated();
     } catch (error: any) {
       console.error('❌ Remove from cart error:', error);
       console.error('Error details:', error.response?.data);
@@ -510,6 +578,7 @@ class CartService {
       if (!response.data.success) {
         throw new Error(response.data.message || 'Failed to clear cart');
       }
+    emitCartUpdated();
     } catch (error: any) {
       console.error('Clear cart error:', error);
       

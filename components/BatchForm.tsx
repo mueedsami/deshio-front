@@ -1,4 +1,5 @@
 import React, { useRef } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface Product {
   id: number;
@@ -34,6 +35,9 @@ export default function BatchForm({
   const costPriceRef = useRef<HTMLInputElement>(null);
   const sellingPriceRef = useRef<HTMLInputElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
+  
+  const { isRole } = useAuth();
+  const isAdmin = isRole(['admin', 'super-admin']);
 
   const handleSubmit = () => {
     if (loading) return;
@@ -74,7 +78,7 @@ export default function BatchForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+      <div className={`grid grid-cols-1 md:grid-cols-${isAdmin ? '5' : '4'} gap-4`}>
         {/* Product Selection */}
         <div
           onClick={loading ? undefined : onProductClick}
@@ -116,18 +120,20 @@ export default function BatchForm({
         </div>
 
         {/* Cost Price */}
-        <div>
-          <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Cost Price *</label>
-          <input
-            ref={costPriceRef}
-            type="number"
-            step="0.01"
-            placeholder="0.00"
-            disabled={loading}
-            onKeyPress={handleKeyPress}
-            className="w-full border-2 border-gray-200 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 dark:text-white focus:border-blue-500 dark:focus:border-blue-400 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          />
-        </div>
+        {isAdmin && (
+          <div>
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Cost Price *</label>
+            <input
+              ref={costPriceRef}
+              type="number"
+              step="0.01"
+              placeholder="0.00"
+              disabled={loading}
+              onKeyPress={handleKeyPress}
+              className="w-full border-2 border-gray-200 dark:border-gray-600 rounded-lg px-4 py-2.5 bg-white dark:bg-gray-700 dark:text-white focus:border-blue-500 dark:focus:border-blue-400 focus:outline-none transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            />
+          </div>
+        )}
 
         {/* Selling Price */}
         <div>

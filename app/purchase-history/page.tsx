@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer, Pencil, CheckCircle2, XCircle } from 'lucide-react';
+import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer, Edit } from 'lucide-react';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -10,10 +10,14 @@ import productReturnService, { type CreateReturnRequest } from '@/services/produ
 import refundService, { type CreateRefundRequest } from '@/services/refundService';
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import CustomerFormModal from '@/components/pos/CustomerFormModal';
 import axiosInstance from '@/lib/axios';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from "@/contexts/ThemeContext";
+import storeService from '@/services/storeService';
 
-interface OrderItem {
+interface PurchaseHistoryOrderItem {
   id: number;
   product_id: number;
   product_name: string;
@@ -30,7 +34,7 @@ interface OrderItem {
   total_price: string;
 }
 
-interface Order {
+interface PurchaseHistoryOrder {
   id: number;
   order_number: string;
   order_type: string;
@@ -43,7 +47,6 @@ interface Order {
     phone: string;
     email?: string;
     customer_code: string;
-    address?: string;
   };
   store: {
     id: number;
@@ -54,18 +57,18 @@ interface Order {
     name: string;
   };
   subtotal: string;
-  subtotal_amount?: string;
+  subtotal_amount: string;
   tax_amount: string;
   discount_amount: string;
   shipping_amount: string;
-  shipping_cost?: string;
+  shipping_cost: string;
   total_amount: string;
   paid_amount: string;
   outstanding_amount: string;
   is_installment: boolean;
   order_date: string;
   created_at: string;
-  items: OrderItem[];
+  items?: PurchaseHistoryOrderItem[];
   payments?: Array<{
     id: number;
     amount: string;
@@ -84,9 +87,10 @@ interface Store {
 }
 
 export default function PurchaseHistoryPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { user, scopedStoreId, canSelectStore } = useAuth();
+  const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<any[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStore, setSelectedStore] = useState('');
@@ -96,159 +100,117 @@ export default function PurchaseHistoryPage() {
   const [loadingDetails, setLoadingDetails] = useState<number | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ [key: number]: string }>({});
   const [loading, setLoading] = useState(true);
-  const PAGE_SIZE = 50;
-  const [currentPage, setCurrentPage] = useState(1);
-  const [lastPage, setLastPage] = useState(1);
-  const [totalMatchingOrders, setTotalMatchingOrders] = useState(0);
+  // Legacy state kept for minimal refactor
   const [userRole, setUserRole] = useState<string>('');
   const [userStoreId, setUserStoreId] = useState<string>('');
   const [activeMenu, setActiveMenu] = useState<number | null>(null);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
-  
+
   // Modal states
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
-  const [selectedOrderForAction, setSelectedOrderForAction] = useState<Order | null>(null);
+  const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const [selectedCustomerForEdit, setSelectedCustomerForEdit] = useState<any>(null);
+  const [selectedOrderForAction, setSelectedOrderForAction] = useState<any | null>(null);
 
-
-// Toast notifications
-type Toast = { id: string; type: 'success' | 'error'; message: string };
-const [toasts, setToasts] = useState<Toast[]>([]);
-const pushToast = (type: Toast['type'], message: string) => {
-  const id = `${Date.now()}-${Math.random()}`;
-  setToasts((prev) => [...prev, { id, type, message }]);
-  window.setTimeout(() => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, 3500);
-};
-
-// Customer edit modal states
-const [showEditCustomerModal, setShowEditCustomerModal] = useState(false);
-const [selectedOrderForCustomerEdit, setSelectedOrderForCustomerEdit] = useState<Order | null>(null);
-const [editCustomerName, setEditCustomerName] = useState('');
-const [editCustomerPhone, setEditCustomerPhone] = useState('');
-const [editCustomerAddress, setEditCustomerAddress] = useState('');
-const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
-
-  // ✅ Payment method cache (avoid hardcoding IDs)
-  const [cashPaymentMethodId, setCashPaymentMethodId] = useState<number | null>(null);
-
-  const ensureCashPaymentMethod = async (): Promise<number> => {
-    if (cashPaymentMethodId && Number.isFinite(cashPaymentMethodId)) return cashPaymentMethodId;
-
-    try {
-      const res = await axiosInstance.get('/payment-methods/all');
-      const methods: any[] =
-        (res as any)?.data?.data?.payment_methods ||
-        (res as any)?.data?.data ||
-        (res as any)?.data ||
-        [];
-
-      const normalized = (v: any) => String(v ?? '').toLowerCase().trim();
-
-      const cash =
-        methods.find((m) => normalized(m?.type) === 'cash') ||
-        methods.find((m) => normalized(m?.name).includes('cash')) ||
-        methods.find((m) => normalized(m?.name).includes('ক্যাশ')) ||
-        methods[0];
-
-      const id = Number(cash?.id) || 1;
-      setCashPaymentMethodId(id);
-      return id;
-    } catch (e) {
-      console.warn('Failed to load payment methods, falling back to id=1', e);
-      return 1;
-    }
-  };
-
-  const normalizeOrder = (raw: any): Order => ({
-    ...raw,
-    subtotal_amount: raw?.subtotal_amount ?? raw?.subtotal ?? '0',
-    shipping_cost: raw?.shipping_cost ?? raw?.shipping_amount ?? '0',
-    items: Array.isArray(raw?.items) ? raw.items : [],
-    payments: Array.isArray(raw?.payments) ? raw.payments : [],
-  });
-
+  // Initialize roles and initial store selection
   useEffect(() => {
-    const role = localStorage.getItem('userRole') || '';
-    const storeId = localStorage.getItem('storeId') || '';
-    setUserRole(role);
+    if (!user) return;
+
+    const roleSlug = user?.role?.slug || '';
+    setUserRole(roleSlug);
+
+    const storeId = scopedStoreId ? String(scopedStoreId) : (user?.store_id || '');
     setUserStoreId(storeId);
-    
-    if (role === 'store_manager' && storeId) {
-      setSelectedStore(storeId);
+
+    // Auto-select store if scoped (security requirement)
+    if (scopedStoreId) {
+      setSelectedStore(String(scopedStoreId));
     }
-    
-    fetchStores(role, storeId);
-  }, []);
 
+    fetchStores();
+  }, [user?.id, scopedStoreId]);
+
+  // Fetch orders when relevant filters change
   useEffect(() => {
-    fetchOrders(currentPage, userRole, userStoreId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, userRole, userStoreId, searchTerm, selectedStore, startDate, endDate]);
+    fetchOrders();
+  }, [selectedStore, startDate, endDate, searchTerm]);
 
-  const fetchOrders = async (page = 1, role?: string, storeId?: string) => {
+  const fetchOrders = async () => {
     try {
       setLoading(true);
-      
-      const resolvedRole = (role ?? localStorage.getItem('userRole')) || '';
-      const resolvedStoreId = (storeId ?? localStorage.getItem('storeId')) || '';
-      
       const filters: OrderFilters = {
         order_type: 'counter',
-        per_page: PAGE_SIZE,
-        page,
+        per_page: 50,
       };
 
-      if (searchTerm.trim()) filters.search = searchTerm.trim();
+      // Security: Always prioritize scopedStoreId (enforced for non-admins)
+      if (scopedStoreId) {
+        filters.store_id = scopedStoreId;
+      } else if (selectedStore) {
+        // Admins can filter by any store from the dropdown
+        filters.store_id = Number(selectedStore);
+      }
+
+      if (searchTerm) filters.search = searchTerm;
       if (startDate) filters.date_from = startDate;
       if (endDate) filters.date_to = endDate;
 
-      if (resolvedRole === 'store_manager' && resolvedStoreId) {
-        filters.store_id = parseInt(resolvedStoreId);
-      } else if (selectedStore) {
-        filters.store_id = parseInt(selectedStore);
-      }
-      
       const result = await orderService.getAll(filters);
-      setOrders((result.data || []).map(normalizeOrder));
-      setCurrentPage(result.current_page || page);
-      setLastPage(result.last_page || 1);
-      setTotalMatchingOrders(result.total || 0);
-      
+      setOrders(result.data);
+
     } catch (error) {
       console.error('❌ Failed to fetch orders:', error);
       setOrders([]);
-      setLastPage(1);
-      setTotalMatchingOrders(0);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchStores = async (role?: string, storeId?: string) => {
+  const fetchStores = async () => {
     try {
-      const resolvedRole = (role ?? localStorage.getItem('userRole')) || '';
-      const resolvedStoreId = (storeId ?? localStorage.getItem('storeId')) || '';
-      
+      // If store-scoped/restricted, only fetch user's assigned store details for the display field
+      if (!canSelectStore && (scopedStoreId || user?.store_id)) {
+        try {
+          const targetId = scopedStoreId || user?.store_id;
+          const res: any = await storeService.getStore(Number(targetId));
+          const storeObj = res?.data ?? res;
+          if (storeObj) {
+            setStores([
+              {
+                id: storeObj.id,
+                name: storeObj.name,
+                location: storeObj.address || storeObj.location || '',
+              },
+            ]);
+            return;
+          }
+        } catch {
+          // fallback to empty
+        }
+      }
+
+      // If user has multi-store access (admin/moderator), fetch all stores for dropdown
+      if (canSelectStore) {
+        const response = await axiosInstance.get('/stores');
+        const result = response.data;
+        let storesData: Store[] = result?.success && Array.isArray(result.data) ? result.data : (Array.isArray(result) ? result : []);
+        setStores(storesData);
+      } else {
+        setStores([]);
+      }
+
       const response = await axiosInstance.get('/stores');
       const result = response.data;
-      
+
       let storesData: Store[] = [];
-      if (result.success && Array.isArray(result.data)) {
+      if (result?.success && Array.isArray(result.data)) {
         storesData = result.data;
       } else if (Array.isArray(result)) {
         storesData = result;
       }
-      
-      if (resolvedRole === 'store_manager' && resolvedStoreId) {
-        const userStore = storesData.find(store => 
-          store.id === parseInt(resolvedStoreId)
-        );
-        setStores(userStore ? [userStore] : []);
-      } else {
-        setStores(storesData);
-      }
+
+      setStores(storesData);
     } catch (error) {
       console.error('Failed to fetch stores:', error);
       setStores([]);
@@ -263,17 +225,17 @@ const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
 
     setExpandedOrder(orderId);
     const order = orders.find(o => o.id === orderId);
-    
+
     if (order?.items && order.items.length > 0) {
       return;
     }
 
     setLoadingDetails(orderId);
     setErrorDetails(prev => ({ ...prev, [orderId]: '' }));
-    
+
     try {
-      const fullOrder = normalizeOrder(await orderService.getById(orderId));
-      setOrders(prev => prev.map(o => (o.id === orderId ? fullOrder : o)));
+      const fullOrder = await orderService.getById(orderId);
+      setOrders(orders.map(o => o.id === orderId ? fullOrder : o));
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load order details';
       setErrorDetails(prev => ({ ...prev, [orderId]: errorMessage }));
@@ -284,7 +246,7 @@ const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
 
   const handleDelete = async (orderId: number) => {
     if (!confirm('Are you sure you want to delete this order?')) return;
-    
+
     try {
       await orderService.cancel(orderId, 'Deleted by user');
       setOrders(orders.filter(o => o.id !== orderId));
@@ -294,12 +256,22 @@ const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
     }
   };
 
-  const handleReturnClick = async (order: Order) => {
+  const handleEditCustomer = (order: PurchaseHistoryOrder) => {
     setActiveMenu(null);
-    
+    if (!order.customer) {
+      alert("No customer attached to this order.");
+      return;
+    }
+    setSelectedCustomerForEdit(order.customer);
+    setShowCustomerModal(true);
+  };
+
+  const handleReturn = async (order: PurchaseHistoryOrder) => {
+    setActiveMenu(null);
+
     if (!order.items || order.items.length === 0) {
       try {
-        const fullOrder = normalizeOrder(await orderService.getById(order.id));
+        const fullOrder = await orderService.getById(order.id);
         setSelectedOrderForAction(fullOrder);
       } catch (error) {
         console.error('Failed to load order details:', error);
@@ -309,55 +281,16 @@ const [savingCustomerInfo, setSavingCustomerInfo] = useState(false);
     } else {
       setSelectedOrderForAction(order);
     }
-    
+
     setShowReturnModal(true);
   };
 
-
-const handleEditCustomerInfoClick = (order: Order) => {
-  setSelectedOrderForCustomerEdit(order);
-  setEditCustomerName(order.customer?.name || '');
-  setEditCustomerPhone(order.customer?.phone || '');
-  setEditCustomerAddress((order.customer as any)?.address || '');
-  setShowEditCustomerModal(true);
-};
-
-const handleSaveCustomerInfo = async () => {
-  if (!selectedOrderForCustomerEdit) return;
-  if (!editCustomerName.trim() || !editCustomerPhone.trim()) {
-    pushToast('error', 'Customer name and phone are required.');
-    return;
-  }
-  setSavingCustomerInfo(true);
-  try {
-    const res = await orderService.updateCustomerInfo(selectedOrderForCustomerEdit.id, {
-      customer_name: editCustomerName.trim(),
-      customer_phone: editCustomerPhone.trim(),
-      customer_address: editCustomerAddress.trim() || undefined,
-    });
-    pushToast('success', res?.message || 'Customer information updated.');
-    setShowEditCustomerModal(false);
-    setSelectedOrderForCustomerEdit(null);
-
-    // Refresh list to reflect new customer info
-    await fetchOrders();
-  } catch (err: any) {
-    const msg =
-      err?.response?.data?.message ||
-      err?.message ||
-      'Failed to update customer information.';
-    pushToast('error', msg);
-  } finally {
-    setSavingCustomerInfo(false);
-  }
-};
-
-  const handleExchangeClick = async (order: Order) => {
+  const handleExchange = async (order: PurchaseHistoryOrder) => {
     setActiveMenu(null);
-    
+
     if (!order.items || order.items.length === 0) {
       try {
-        const fullOrder = normalizeOrder(await orderService.getById(order.id));
+        const fullOrder = await orderService.getById(order.id);
         setSelectedOrderForAction(fullOrder);
       } catch (error) {
         console.error('Failed to load order details:', error);
@@ -367,11 +300,11 @@ const handleSaveCustomerInfo = async () => {
     } else {
       setSelectedOrderForAction(order);
     }
-    
+
     setShowExchangeModal(true);
   };
 
-  const handlePrintReceipt = async (order: Order) => {
+  const handlePrint = async (order: PurchaseHistoryOrder) => {
     setActiveMenu(null);
 
     try {
@@ -390,8 +323,8 @@ const handleSaveCustomerInfo = async () => {
   };
 
   const handleReturnSubmit = async (returnData: {
-    selectedProducts: Array<{ 
-      order_item_id: number; 
+    selectedProducts: Array<{
+      order_item_id: number;
       quantity: number;
       product_barcode_id?: number;
     }>;
@@ -408,23 +341,11 @@ const handleSaveCustomerInfo = async () => {
   }) => {
     try {
       if (!selectedOrderForAction) return;
-      // ✅ Store where the return is physically received (important for cross-store returns)
-      const employeeStoreId = Number(userStoreId);
-      const receivedAtStoreIdCandidate =
-        (returnData as any)?.received_at_store_id ??
-        (returnData as any)?.receivedAtStoreId ??
-        (returnData as any)?.return_store_id ??
-        (returnData as any)?.store_id ??
-        (Number.isFinite(employeeStoreId) && employeeStoreId > 0 ? employeeStoreId : selectedOrderForAction.store.id);
-
-      const receivedAtStoreId = Number(receivedAtStoreIdCandidate) || selectedOrderForAction.store.id;
-
 
       console.log('🔄 Processing return with data:', returnData);
 
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
-        received_at_store_id: receivedAtStoreId,
         return_reason: returnData.returnReason,
         return_type: returnData.returnType,
         items: returnData.selectedProducts.map(item => ({
@@ -486,8 +407,8 @@ const handleSaveCustomerInfo = async () => {
       }
 
       console.log('🔄 Refreshing order list...');
-      await fetchOrders(currentPage, userRole, userStoreId);
-      
+      await fetchOrders();
+
       alert('✅ Return processed successfully!');
       setShowReturnModal(false);
       setSelectedOrderForAction(null);
@@ -523,19 +444,6 @@ const handleSaveCustomerInfo = async () => {
   }) => {
     try {
       if (!selectedOrderForAction) return;
-      // ✅ Store where the exchange/return is physically happening.
-      // Important: backend uses received_at_store_id to decide which store gets the returned inventory.
-      const employeeStoreId = Number(userStoreId);
-      const exchangeStoreIdCandidate =
-        (exchangeData as any)?.received_at_store_id ??
-        (exchangeData as any)?.exchange_store_id ??
-        (exchangeData as any)?.exchangeAtStoreId ??
-        (exchangeData as any)?.exchange_at_store_id ??
-        (exchangeData as any)?.store_id ??
-        (Number.isFinite(employeeStoreId) && employeeStoreId > 0 ? employeeStoreId : selectedOrderForAction.store.id);
-
-      const exchangeStoreId = Number(exchangeStoreIdCandidate) || selectedOrderForAction.store.id;
-
 
       console.log('🔄 Processing exchange with data:', exchangeData);
       console.log('📦 Original order:', selectedOrderForAction.order_number);
@@ -543,7 +451,6 @@ const handleSaveCustomerInfo = async () => {
       console.log('\n📤 STEP 1: Creating return for old products...');
       const returnRequest: CreateReturnRequest = {
         order_id: selectedOrderForAction.id,
-        received_at_store_id: exchangeStoreId,
         return_reason: 'other',
         return_type: 'customer_return',
         items: exchangeData.removedProducts.map(item => ({
@@ -560,7 +467,7 @@ const handleSaveCustomerInfo = async () => {
       console.log(`✅ Return created: #${returnNumber} (ID: ${returnId})`);
 
       console.log('\n⚙️ STEP 2: Auto-approving and processing return...');
-      
+
       await productReturnService.update(returnId, {
         quality_check_passed: true,
         quality_check_notes: 'Exchange - Auto-approved via POS',
@@ -594,27 +501,23 @@ const handleSaveCustomerInfo = async () => {
 
       await refundService.process(refundId);
       console.log('✅ Refund processed');
-      
+
       await refundService.complete(refundId, {
         transaction_reference: `EXCHANGE-REFUND-${Date.now()}`,
       });
       console.log('✅ Refund completed - Customer has full refund amount');
 
       console.log('\n🛒 STEP 4: Creating new order for replacement products...');
-      
-      const newOrderTotal = exchangeData.replacementProducts.reduce(
-        (sum, p) => sum + (p.unit_price * p.quantity), 
-        0
-      );
-      console.log(`New order total: ৳${newOrderTotal.toLocaleString()}`);
 
-      const paymentMethodId = await ensureCashPaymentMethod();
+      // ✅ Enhanced Trace: Include specific item names in the notes
+      const returnedItemTrace = exchangeData.removedProducts.map(rp => {
+        const item = selectedOrderForAction.items?.find(i => i.id === rp.order_item_id);
+        return `${item?.product_name || 'Item'} (x${rp.quantity})`;
+      }).join(', ');
 
-      // ✅ Per guidelines: New order payment = full new order amount
-      // Customer has full refund, uses it to "pay" for new items
       const newOrderData = {
         order_type: 'counter' as const,
-        store_id: exchangeStoreId,
+        store_id: selectedOrderForAction.store.id,
         customer_id: selectedOrderForAction.customer?.id,
         items: exchangeData.replacementProducts.map(p => ({
           product_id: p.product_id,
@@ -622,30 +525,52 @@ const handleSaveCustomerInfo = async () => {
           quantity: p.quantity,
           unit_price: p.unit_price,
           barcode: p.barcode,
-})),
-        payment: {
-          payment_method_id: paymentMethodId,
-// Cash
-          amount: newOrderTotal, // Full amount of new items
-          payment_type: 'full' as const,
-        },
-        notes: `Exchange from order #${selectedOrderForAction.order_number} | Return: #${returnNumber}`,
+          barcode_id: p.barcode_id,
+        })),
+        notes: `EXCHANGE TRACE:\nFrom Order: #${selectedOrderForAction.order_number}\nReturn: #${returnNumber}\nReturned Items: ${returnedItemTrace}`,
       };
 
-      console.log(`📝 Order includes payment: ৳${newOrderTotal.toLocaleString()} (customer "pays" with refund)`);
-      console.log('Creating new order with data:', newOrderData);
+      console.log('Creating new order (no payment yet)...');
       const newOrder = await orderService.create(newOrderData);
       console.log(`✅ New order created: #${newOrder.order_number} (ID: ${newOrder.id})`);
+
+      // STEP 4a: Link the return and the new order for accounting/exchange history
+      console.log('\n🔗 STEP 4a: Linking return to replacement order...');
+      try {
+        await axiosInstance.post(`/returns/${returnId}/exchange`, {
+          new_order_id: newOrder.id,
+          notes: `Automatic link from exchange flow. Original: #${selectedOrderForAction.order_number}`
+        });
+        console.log('✅ Exchange link established');
+      } catch (linkErr) {
+        console.warn('⚠️ Link failed (non-critical):', linkErr);
+      }
+
+      // STEP 4b: Explicitly create + auto-complete the payment so the order is marked "paid"
+      // We use the backend-calculated total_amount to ensure it perfectly covers VAT/taxes.
+      const rawTotal = String(newOrder.total_amount).replace(/[^0-9.]/g, '');
+      const backendTotal = parseFloat(rawTotal) || 0;
+      
+      console.log(`\n💳 STEP 4b: Completing payment of ৳${backendTotal} for order #${newOrder.order_number}...`);
+      await axiosInstance.post(`/orders/${newOrder.id}/payments/simple`, {
+        payment_method_id: 1, // Cash
+        amount: backendTotal,
+        payment_type: 'full',
+        auto_complete: true,
+        notes: `Exchange payment - Original Order: #${selectedOrderForAction.order_number}`,
+      });
+      console.log(`✅ Payment completed for order #${newOrder.order_number} — order is now PAID`);
+
 
       // Log what happens with the money difference
       if (exchangeData.paymentRefund.type === 'payment') {
         console.log(`\n💳 Financial settlement: Customer collects ADDITIONAL ৳${exchangeData.paymentRefund.total.toLocaleString()}`);
-        console.log(`   (New items ৳${newOrderTotal} > Refund received, customer pays extra)`);
+        console.log(`   (New items ৳${backendTotal} > Refund received, customer pays extra)`);
       } else if (exchangeData.paymentRefund.type === 'refund') {
         console.log(`\n💵 Financial settlement: Cashier gives back ৳${exchangeData.paymentRefund.total.toLocaleString()}`);
-        console.log(`   (Refund received > New items ৳${newOrderTotal}, customer gets difference)`);
+        console.log(`   (Refund received > New items ৳${backendTotal}, customer gets difference)`);
       } else {
-        console.log(`\n📊 Financial settlement: Even exchange (Refund = New items ৳${newOrderTotal})`);
+        console.log(`\n📊 Financial settlement: Even exchange (Refund = New items ৳${backendTotal})`);
       }
 
       console.log('\n🏁 STEP 5: Completing new order...');
@@ -653,8 +578,8 @@ const handleSaveCustomerInfo = async () => {
       console.log('✅ New order completed - Inventory reduced for new products');
 
       console.log('\n🔄 STEP 6: Refreshing order list...');
-      await fetchOrders(currentPage, userRole, userStoreId);
-      
+      await fetchOrders();
+
       console.log('\n✅ ========================================');
       console.log('✅ EXCHANGE COMPLETED SUCCESSFULLY!');
       console.log('✅ ========================================');
@@ -662,37 +587,22 @@ const handleSaveCustomerInfo = async () => {
       console.log(`Return: #${returnNumber}`);
       console.log(`New Order: #${newOrder.order_number}`);
       console.log(`New Order Payment Status: PAID ✅`);
-      
+
       // Build success message based on exchange type
-      const baseMessage = `✅ Exchange processed successfully!\n\n📦 Return: #${returnNumber}\n🛒 New Order: #${newOrder.order_number}\n💰 New Order Status: PAID\n\n`;
-      
-      let financialMessage = '';
-      if (exchangeData.paymentRefund.type === 'payment') {
-        console.log(`Financial: Customer paid additional ৳${exchangeData.paymentRefund.total.toLocaleString()}`);
-        financialMessage = `💳 Customer paid additional:\n   ৳${exchangeData.paymentRefund.total.toLocaleString()}\n\n✅ Payment collected successfully`;
-      } else if (exchangeData.paymentRefund.type === 'refund') {
-        console.log(`Financial: Customer gets back ৳${exchangeData.paymentRefund.total.toLocaleString()}`);
-        financialMessage = `💵 GIVE CUSTOMER:\n   ৳${exchangeData.paymentRefund.total.toLocaleString()}\n\n(Old items cost more than new items)`;
-      } else {
-        console.log(`Financial: Even exchange`);
-        financialMessage = `📊 Even exchange\nNo additional payment needed`;
-      }
-      
       console.log('✅ ========================================\n');
-      
-      alert(baseMessage + financialMessage);
-      
+
+
       console.log('\n✅ ========================================');
       console.log('✅ EXCHANGE COMPLETED SUCCESSFULLY!');
       console.log('✅ ========================================');
       console.log(`Old Order: #${selectedOrderForAction.order_number}`);
       console.log(`Return: #${returnNumber}`);
       console.log(`New Order: #${newOrder.order_number}`);
-      
+
       let successMessage = `✅ Exchange processed successfully!\n\n`;
       successMessage += `Return: #${returnNumber}\n`;
       successMessage += `New Order: #${newOrder.order_number}\n\n`;
-      
+
       if (exchangeData.paymentRefund.type === 'payment') {
         console.log(`Payment Type: Additional payment from customer`);
         console.log(`Amount Collected: ৳${exchangeData.paymentRefund.total.toLocaleString()}`);
@@ -708,11 +618,11 @@ const handleSaveCustomerInfo = async () => {
         console.log(`Payment Type: Even exchange`);
         successMessage += `Even exchange - no payment difference`;
       }
-      
+
       console.log('✅ ========================================\n');
-      
+
       alert(successMessage);
-      
+
       setShowExchangeModal(false);
       setSelectedOrderForAction(null);
     } catch (error: any) {
@@ -722,7 +632,7 @@ const handleSaveCustomerInfo = async () => {
       console.error('Error details:', error);
       console.error('Error response:', error.response?.data);
       console.error('❌ ========================================\n');
-      
+
       const errorMsg = error.response?.data?.message || error.message || 'Failed to process exchange';
       alert(`❌ Exchange failed: ${errorMsg}\n\nPlease check the console for details.`);
     }
@@ -733,15 +643,28 @@ const handleSaveCustomerInfo = async () => {
     return store ? `${store.name} - ${store.location}` : 'Unknown Store';
   };
 
-  const filteredOrders = orders;
+  const filteredOrders = orders.filter(order => {
+    const matchesSearch =
+      order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customer?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      order.customer?.phone?.includes(searchTerm);
+
+    const matchesStore = !selectedStore || order.store.id === parseInt(selectedStore);
+
+    const orderDate = new Date(order.created_at);
+    const matchesStartDate = !startDate || orderDate >= new Date(startDate);
+    const matchesEndDate = !endDate || orderDate <= new Date(endDate);
+
+    return matchesSearch && matchesStore && matchesStartDate && matchesEndDate;
+  });
 
   const totalRevenue = filteredOrders.reduce((sum, order) => {
     const amount = parseFloat(order.total_amount.replace(/,/g, ''));
     return sum + (isNaN(amount) ? 0 : amount);
   }, 0);
-  
-  const totalOrders = totalMatchingOrders;
-  
+
+  const totalOrders = filteredOrders.length;
+
   const totalDue = filteredOrders.reduce((sum, order) => {
     const amount = parseFloat(order.outstanding_amount.replace(/,/g, ''));
     return sum + (isNaN(amount) ? 0 : amount);
@@ -761,8 +684,8 @@ const handleSaveCustomerInfo = async () => {
                   Purchase History
                 </h1>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {userRole === 'store_manager' 
-                    ? 'View and manage your store counter sales' 
+                  {userRole === 'branch-manager'
+                    ? 'View and manage your store counter sales'
                     : 'View and manage all counter sales transactions'}
                 </p>
               </div>
@@ -794,36 +717,50 @@ const handleSaveCustomerInfo = async () => {
                       type="text"
                       placeholder="Search by order#, customer, phone..."
                       value={searchTerm}
-                      onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                      onChange={(e) => setSearchTerm(e.target.value)}
                       className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
-                  
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => { setSelectedStore(e.target.value); setCurrentPage(1); }}
-                    disabled={userRole === 'store_manager'}
-                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:dark:bg-gray-600"
-                  >
-                    <option value="">All Stores</option>
-                    {stores.map((store) => (
-                      <option key={store.id} value={store.id}>
-                        {store.name} - {store.location}
-                      </option>
-                    ))}
-                  </select>
-                  
+
+                  {!canSelectStore && scopedStoreId ? (
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        value={
+                          stores.find((s) => String(s.id) === String(selectedStore))
+                            ? `${stores.find((s) => String(s.id) === String(selectedStore))?.name ?? ''} - ${stores.find((s) => String(s.id) === String(selectedStore))?.location ?? ''}`
+                            : 'Loading Store...'
+                        }
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-gray-100 dark:bg-gray-600 text-gray-900 dark:text-white text-sm cursor-not-allowed"
+                      />
+                    </div>
+                  ) : (
+                    <select
+                      value={selectedStore}
+                      onChange={(e) => setSelectedStore(e.target.value)}
+                      className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                    >
+                      <option value="">All Stores</option>
+                      {stores.map((store) => (
+                        <option key={store.id} value={store.id}>
+                          {store.name} - {store.location}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
                   <input
                     type="date"
                     value={startDate}
-                    onChange={(e) => { setStartDate(e.target.value); setCurrentPage(1); }}
+                    onChange={(e) => setStartDate(e.target.value)}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
-                  
+
                   <input
                     type="date"
                     value={endDate}
-                    onChange={(e) => { setEndDate(e.target.value); setCurrentPage(1); }}
+                    onChange={(e) => setEndDate(e.target.value)}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
@@ -838,8 +775,7 @@ const handleSaveCustomerInfo = async () => {
                   <div className="text-gray-500 dark:text-gray-400">No counter orders found</div>
                 </div>
               ) : (
-                <>
-                  <div className="space-y-4">
+                <div className="space-y-4">
                   {filteredOrders.map((order) => (
                     <div
                       key={order.id}
@@ -852,23 +788,21 @@ const handleSaveCustomerInfo = async () => {
                               <span className="text-xs font-mono bg-blue-100 dark:bg-blue-900/30 px-2 py-1 rounded text-blue-700 dark:text-blue-400">
                                 {order.order_number}
                               </span>
-                              <span className={`text-xs px-2 py-1 rounded ${
-                                order.payment_status === 'paid'
+                              <span className={`text-xs px-2 py-1 rounded ${order.payment_status === 'paid'
                                   ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
                                   : order.payment_status === 'partial'
-                                  ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
-                                  : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
-                              }`}>
-                                {order.payment_status === 'paid' ? 'Paid' : 
-                                 order.payment_status === 'partial' ? 'Partial' : 'Pending'}
+                                    ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400'
+                                    : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                                }`}>
+                                {order.payment_status === 'paid' ? 'Paid' :
+                                  order.payment_status === 'partial' ? 'Partial' : 'Pending'}
                               </span>
-                              <span className={`text-xs px-2 py-1 rounded ${
-                                order.status === 'confirmed'
+                              <span className={`text-xs px-2 py-1 rounded ${order.status === 'confirmed'
                                   ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
                                   : order.status === 'cancelled'
-                                  ? 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'
-                                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                              }`}>
+                                    ? 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-400'
+                                    : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                                }`}>
                                 {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                               </span>
                             </div>
@@ -905,7 +839,7 @@ const handleSaveCustomerInfo = async () => {
                               </div>
                             </div>
                           </div>
-                          
+
                           <div className="flex items-center gap-2">
                             <div className="text-right mr-4">
                               <div className="text-xs text-gray-600 dark:text-gray-400">Total</div>
@@ -918,7 +852,7 @@ const handleSaveCustomerInfo = async () => {
                                 </div>
                               )}
                             </div>
-                            
+
                             <div className="relative">
                               <button
                                 type="button"
@@ -935,40 +869,38 @@ const handleSaveCustomerInfo = async () => {
                               >
                                 <MoreVertical className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                               </button>
-                              
+
                               {activeMenu === order.id && menuPosition && (
                                 <div className="fixed w-48 bg-white dark:bg-gray-800 rounded-lg shadow-2xl border-2 border-gray-300 dark:border-gray-600 z-50" style={{ top: menuPosition.top, left: menuPosition.left }}>
                                   <button
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handlePrintReceipt(order);
+                                      handlePrint(order);
                                     }}
                                     className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-3 rounded-t-lg transition-colors"
                                   >
                                     <Printer className="w-4 h-4 text-gray-700 dark:text-gray-300" />
                                     <span>Print Receipt</span>
                                   </button>
-                                  
-<div className="h-px bg-gray-200 dark:bg-gray-700"></div>
-<button
-  type="button"
-  onClick={(e) => {
-    e.stopPropagation();
-    setActiveMenu(null);
-    handleEditCustomerInfoClick(order);
-  }}
-  className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-amber-50 dark:hover:bg-amber-900/20 flex items-center gap-3 transition-colors"
->
-  <Pencil className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-  <span>Edit Customer Info</span>
-</button>
                                   <div className="h-px bg-gray-200 dark:bg-gray-700"></div>
                                   <button
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleExchangeClick(order);
+                                      handleEditCustomer(order);
+                                    }}
+                                    className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center gap-3 transition-colors"
+                                  >
+                                    <Edit className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                                    <span>Edit Customer</span>
+                                  </button>
+                                  <div className="h-px bg-gray-200 dark:bg-gray-700"></div>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleExchange(order);
                                     }}
                                     className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center gap-3 transition-colors"
                                   >
@@ -980,7 +912,7 @@ const handleSaveCustomerInfo = async () => {
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      handleReturnClick(order);
+                                      handleReturn(order);
                                     }}
                                     className="w-full px-4 py-3 text-left text-sm font-medium text-gray-900 dark:text-white hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center gap-3 rounded-b-lg transition-colors"
                                   >
@@ -990,7 +922,7 @@ const handleSaveCustomerInfo = async () => {
                                 </div>
                               )}
                             </div>
-                            
+
                             <button
                               onClick={() => handleExpandOrder(order.id)}
                               className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md transition-colors"
@@ -1056,7 +988,7 @@ const handleSaveCustomerInfo = async () => {
                                       </tr>
                                     </thead>
                                     <tbody className="bg-white dark:bg-gray-800">
-                                      {order.items.map((item) => (
+                                      {order.items?.map((item: any, itemIndex: number) => (
                                         <tr key={item.id} className="border-t border-gray-200 dark:border-gray-700">
                                           <td className="px-3 py-2 text-gray-900 dark:text-white">
                                             {item.product_name}
@@ -1132,7 +1064,7 @@ const handleSaveCustomerInfo = async () => {
                                   {order.payments && order.payments.length > 0 && (
                                     <div className="pt-2 mt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
                                       <div className="text-xs font-medium text-gray-700 dark:text-gray-300">Payment History:</div>
-                                      {order.payments.map((payment) => (
+                                      {order.payments?.map((payment: any, payIndex: number) => (
                                         <div key={payment.id} className="flex justify-between text-xs">
                                           <span className="text-gray-600 dark:text-gray-400">
                                             {payment.payment_method} ({payment.payment_type})
@@ -1153,126 +1085,9 @@ const handleSaveCustomerInfo = async () => {
                     </div>
                   ))}
                 </div>
-
-                {lastPage > 1 && (
-                  <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
-                    <div className="text-xs text-gray-600 dark:text-gray-400">
-                      Showing {orders.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}-{(currentPage - 1) * PAGE_SIZE + orders.length} of {totalMatchingOrders} orders
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                        disabled={currentPage <= 1 || loading}
-                        className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Previous
-                      </button>
-                      <div className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300">
-                        Page {currentPage} / {lastPage}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setCurrentPage((p) => Math.min(lastPage, p + 1))}
-                        disabled={currentPage >= lastPage || loading}
-                        className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
-                )}
-                </>
               )}
             </div>
-          
-
-{/* Edit Customer Info Modal */}
-{showEditCustomerModal && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-    <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-gray-200 dark:border-gray-700">
-      <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Edit Customer Info</h3>
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            Updating phone will reassign the order to a different customer.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            setShowEditCustomerModal(false);
-            setSelectedOrderForCustomerEdit(null);
-          }}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-        >
-          <span className="text-gray-500 dark:text-gray-400">✕</span>
-        </button>
-      </div>
-
-      <div className="px-6 py-5 space-y-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Customer Name</label>
-          <input
-            value={editCustomerName}
-            onChange={(e) => setEditCustomerName(e.target.value)}
-            maxLength={255}
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-            placeholder="Full name"
-          />
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone Number</label>
-          <input
-            value={editCustomerPhone}
-            onChange={(e) => setEditCustomerPhone(e.target.value)}
-            maxLength={20}
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-            placeholder="+8801XXXXXXXXX"
-          />
-          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
-            ⚠️ Changing phone will reassign this order to another customer record.
-          </p>
-        </div>
-        <div>
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Address</label>
-          <textarea
-            value={editCustomerAddress}
-            onChange={(e) => setEditCustomerAddress(e.target.value)}
-            maxLength={500}
-            rows={3}
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-            placeholder="Customer address (optional)"
-          />
-        </div>
-      </div>
-
-      <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onClick={() => {
-            setShowEditCustomerModal(false);
-            setSelectedOrderForCustomerEdit(null);
-          }}
-          className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800"
-          disabled={savingCustomerInfo}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={handleSaveCustomerInfo}
-          className="px-4 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-60"
-          disabled={savingCustomerInfo}
-        >
-          {savingCustomerInfo ? 'Saving...' : 'Save Changes'}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
-</main>
+          </main>
         </div>
       </div>
 
@@ -1302,6 +1117,29 @@ const handleSaveCustomerInfo = async () => {
             setSelectedOrderForAction(null);
           }}
           onExchange={handleExchangeSubmit}
+        />
+      )}
+
+      {showCustomerModal && selectedCustomerForEdit && (
+        <CustomerFormModal
+          mode="edit"
+          customer={selectedCustomerForEdit}
+          initial={{
+            name: selectedCustomerForEdit.name,
+            phone: selectedCustomerForEdit.phone,
+            address: selectedCustomerForEdit.address || '',
+            customer_type: 'counter',
+          }}
+          onClose={() => {
+            setShowCustomerModal(false);
+            setSelectedCustomerForEdit(null);
+          }}
+          onSaved={(savedCustomer: any) => {
+            // Re-fetch orders to show updated customer info
+            fetchOrders();
+            setShowCustomerModal(false);
+            setSelectedCustomerForEdit(null);
+          }}
         />
       )}
     </div>

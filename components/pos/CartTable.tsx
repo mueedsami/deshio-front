@@ -14,6 +14,7 @@ export interface CartItem {
   amount: number;
   availableQty: number;
   barcode?: string;
+  isService?: boolean;
 }
 
 interface CartTableProps {
@@ -25,38 +26,38 @@ interface CartTableProps {
   vatRate?: number; // VAT percentage to calculate per-product tax
 }
 
-export default function CartTable({ 
-  items, 
-  onRemoveItem, 
-  onUpdateQuantity, 
+export default function CartTable({
+  items,
+  onRemoveItem,
+  onUpdateQuantity,
   onUpdateDiscount,
   darkMode,
   vatRate = 0
 }: CartTableProps) {
-  
+
   /**
    * Calculate proportional VAT for a specific item
    */
   const calculateItemVAT = (item: CartItem): number => {
     if (vatRate === 0) return 0;
-    
+
     const subtotal = items.reduce((sum, i) => sum + i.amount, 0);
     if (subtotal === 0) return 0;
-    
+
     const totalVAT = (subtotal * vatRate) / 100;
     const itemShare = item.amount / subtotal;
     const itemVAT = totalVAT * itemShare;
-    
+
     return itemVAT;
   };
-  
+
   /**
    * Calculate total with VAT for a specific item
    */
   const getItemTotalWithVAT = (item: CartItem): number => {
     return item.amount + calculateItemVAT(item);
   };
-  
+
   /**
    * Handle discount percentage input
    */
@@ -143,9 +144,16 @@ export default function CartTable({
                     <p className="text-sm font-medium text-gray-900 dark:text-white">
                       {item.productName}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Batch: {item.batchNumber}
-                    </p>
+                    {!item.isService && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Batch: {item.batchNumber}
+                      </p>
+                    )}
+                    {item.isService && (
+                      <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                        Service
+                      </span>
+                    )}
                     {item.barcode && (
                       <p className="text-xs text-gray-400 dark:text-gray-500">
                         {item.barcode}
@@ -170,14 +178,20 @@ export default function CartTable({
                     </button>
                     <input
                       type="number"
-                      value={item.qty}
+                      value={item.qty === 0 ? '' : item.qty}
+                      placeholder="0"
                       onChange={(e) => {
-                        const newQty = parseInt(e.target.value) || 1;
-                        if (newQty > 0 && newQty <= item.availableQty) {
-                          onUpdateQuantity(item.id, newQty);
+                        const val = e.target.value;
+                        if (val === '') {
+                          onUpdateQuantity(item.id, 0); // Allow temporary 0/empty for typing
+                        } else {
+                          const newQty = parseInt(val);
+                          if (!isNaN(newQty) && newQty >= 0 && newQty <= item.availableQty) {
+                            onUpdateQuantity(item.id, newQty);
+                          }
                         }
                       }}
-                      min="1"
+                      min="0"
                       max={item.availableQty}
                       className="w-16 text-center px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
                     />
@@ -321,7 +335,7 @@ export default function CartTable({
               ৳{items.reduce((sum, item) => sum + item.amount, 0).toFixed(2)}
             </span>
           </div>
-          
+
           {items.some(item => item.discount > 0) && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-green-600 dark:text-green-400">
@@ -332,7 +346,7 @@ export default function CartTable({
               </span>
             </div>
           )}
-          
+
           {vatRate > 0 && (
             <div className="flex justify-between items-center">
               <span className="text-xs text-blue-600 dark:text-blue-400">
@@ -343,7 +357,7 @@ export default function CartTable({
               </span>
             </div>
           )}
-          
+
           <div className="flex justify-between items-center pt-2 border-t border-gray-300 dark:border-gray-600">
             <span className="text-base font-bold text-gray-900 dark:text-white">
               Grand Total

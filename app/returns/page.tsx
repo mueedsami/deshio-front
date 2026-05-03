@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
+import { useAuth } from '@/contexts/AuthContext';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import productReturnService, {
@@ -47,7 +49,7 @@ const STATUS_CONFIG: Record<ReturnStatus, { label: string; bg: string; text: str
   pending:    { label: 'Pending',    bg: 'bg-amber-100 dark:bg-amber-900/20',  text: 'text-amber-700 dark:text-amber-400',  icon: Clock },
   approved:   { label: 'Approved',   bg: 'bg-blue-100 dark:bg-blue-900/20',    text: 'text-blue-700 dark:text-blue-400',    icon: CheckCircle },
   rejected:   { label: 'Rejected',   bg: 'bg-red-100 dark:bg-red-900/20',      text: 'text-red-700 dark:text-red-400',      icon: XCircle },
-  processing: { label: 'Processing', bg: 'bg-purple-100 dark:bg-purple-900/20',text: 'text-purple-700 dark:text-purple-400',icon: RefreshCcw },
+  processed: { label: 'Processing', bg: 'bg-purple-100 dark:bg-purple-900/20',text: 'text-purple-700 dark:text-purple-400',icon: RefreshCcw },
   completed:  { label: 'Completed',  bg: 'bg-green-100 dark:bg-green-900/20',  text: 'text-green-700 dark:text-green-400',  icon: CheckCircle },
   refunded:   { label: 'Refunded',   bg: 'bg-teal-100 dark:bg-teal-900/20',    text: 'text-teal-700 dark:text-teal-400',    icon: DollarSign },
 };
@@ -566,31 +568,37 @@ function DetailModal({ ret, onClose, onAction }: DetailModalProps) {
             )}
 
             {/* Actions */}
-            <div className="flex flex-wrap gap-2 pt-2 border-t border-gray-200 dark:border-gray-700">
-              {ret.status === 'pending' && (
-                <>
-                  <button onClick={() => setApproveOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
-                    <Check className="w-4 h-4" /> Approve
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-gray-200 dark:border-gray-700">
+              <div className="flex flex-wrap gap-2">
+                {ret.status === 'pending' && (
+                  <>
+                    <button onClick={() => setApproveOpen(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
+                      <Check className="w-4 h-4" /> Approve
+                    </button>
+                    <button onClick={() => setRejectOpen(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
+                      <X className="w-4 h-4" /> Reject
+                    </button>
+                  </>
+                )}
+                {ret.status === 'approved' && (
+                  <button onClick={() => setProcessOpen(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium">
+                    <RefreshCcw className="w-4 h-4" /> Process Return
                   </button>
-                  <button onClick={() => setRejectOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
-                    <X className="w-4 h-4" /> Reject
+                )}
+                {ret.status === 'completed' && (
+                  <button onClick={() => setRefundOpen(true)}
+                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium">
+                    <DollarSign className="w-4 h-4" /> Issue Refund
                   </button>
-                </>
-              )}
-              {ret.status === 'approved' && (
-                <button onClick={() => setProcessOpen(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium">
-                  <RefreshCcw className="w-4 h-4" /> Process Return
-                </button>
-              )}
-              {ret.status === 'completed' && (
-                <button onClick={() => setRefundOpen(true)}
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium">
-                  <DollarSign className="w-4 h-4" /> Issue Refund
-                </button>
-              )}
+                )}
+              </div>
+              <button onClick={onClose}
+                className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+                Close
+              </button>
             </div>
           </div>
         </div>
@@ -606,8 +614,11 @@ function DetailModal({ ret, onClose, onAction }: DetailModalProps) {
 
 // ─── Main page ────────────────────────────────────────────────
 export default function ReturnsPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
+  const { role } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  const isBranchManager = role === 'branch-manager';
 
   const [returns, setReturns] = useState<ProductReturn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -640,6 +651,7 @@ export default function ReturnsPage() {
         ...(search ? { search } : {}),
         ...(fromDate ? { from_date: fromDate } : {}),
         ...(toDate ? { to_date: toDate } : {}),
+        skipStoreScope: isBranchManager
       };
       const res = await productReturnService.getAll(filters);
       const data = res?.data?.data || res?.data || [];
@@ -653,7 +665,7 @@ export default function ReturnsPage() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    productReturnService.getStatistics().then(r => setStats(r?.data || null)).catch(() => {});
+    productReturnService.getStatistics({ skipStoreScope: isBranchManager }).then(r => setStats(r?.data || null)).catch(() => {});
     storeService.getStores({ per_page: 100, is_active: true }).then((r: any) => {
       const list = Array.isArray(r) ? r : Array.isArray(r?.data) ? r.data : Array.isArray(r?.data?.data) ? r.data.data : [];
       setStores(list);

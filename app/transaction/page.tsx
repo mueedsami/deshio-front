@@ -1,14 +1,19 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useTheme } from "@/contexts/ThemeContext";
+import { useRouter } from 'next/navigation';
 import { Plus, Calendar, Tag, TrendingDown, TrendingUp, Receipt, Search, ShoppingBag, Store, Package, RefreshCw, ArrowUpDown, Image as ImageIcon } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import Link from 'next/link';
 import transactionService, { Transaction } from '@/services/transactionService';
+import ManualEntryModal from '@/components/accounting/ManualEntryModal';
+import { toast } from 'react-hot-toast';
 
 export default function TransactionsPage() {
-  const [darkMode, setDarkMode] = useState(false);
+  const { darkMode, setDarkMode } = useTheme();
+  const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -17,6 +22,7 @@ export default function TransactionsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [error, setError] = useState<string | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     loadTransactions();
@@ -42,7 +48,21 @@ export default function TransactionsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return 'Invalid Date';
+    
+    // If it's a midnight UTC date, it's likely a date-only field from backend
+    // Format it without time to avoid the "6:00 AM" timezone shift
+    if (dateString.endsWith('T00:00:00.000000Z') || dateString.endsWith(' 00:00:00')) {
+      return date.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      });
+    }
+
+    return date.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
@@ -140,7 +160,10 @@ export default function TransactionsPage() {
   
   const netBalance = totalIncome - totalExpense;
 
-  const uniqueSources = ['all', ...new Set(transactions.map(t => t.source))];
+  const uniqueSources = ['all', ...new Set(transactions.map(t => {
+    const s = t.source?.toLowerCase() || 'manual';
+    return (s === 'null' || s === 'undefined' || s === '') ? 'manual' : s;
+  }))];
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -174,15 +197,24 @@ export default function TransactionsPage() {
                     <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
                     <span className="font-medium">Refresh</span>
                   </button>
-                  <Link
-                    href="/transaction/new"
+                  <button
+                    onClick={() => setIsModalOpen(true)}
                     className="flex items-center gap-1.5 px-3 py-1.5 bg-black dark:bg-white text-white dark:text-black rounded-md hover:bg-gray-800 dark:hover:bg-gray-100 transition-all duration-200 font-medium text-sm"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     Manual Entry
-                  </Link>
+                  </button>
                 </div>
               </div>
+
+              <ManualEntryModal 
+                isOpen={isModalOpen}
+                onClose={() => setIsModalOpen(false)}
+                onSuccess={() => {
+                  loadTransactions();
+                  toast.success('List updated');
+                }}
+              />
 
               {error && (
                 <div className="mb-5 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-3">
@@ -383,7 +415,8 @@ export default function TransactionsPage() {
                       return (
                         <div 
                           key={transaction.id} 
-                          className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-all duration-200"
+                          onClick={() => router.push(`/transaction/${transaction.id}`)}
+                          className="p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-all duration-200 cursor-pointer group"
                         >
                           <div className="flex items-start gap-3">
                             <div className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white flex-shrink-0">
@@ -393,8 +426,11 @@ export default function TransactionsPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-4 mb-2">
                                 <div className="flex-1 min-w-0">
-                                  <h3 className="font-semibold text-gray-900 dark:text-white mb-1 text-sm">
+                                  <h3 className="font-semibold text-gray-900 dark:text-white mb-1 text-sm flex items-center gap-2">
                                     {transaction.name}
+                                    <span className="text-[10px] bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-mono border border-blue-100 dark:border-blue-800/50 group-hover:bg-blue-100 dark:group-hover:bg-blue-800 transition-colors">
+                                      {transaction.referenceId}
+                                    </span>
                                   </h3>
                                   {transaction.description && (
                                     <p className="text-xs text-gray-600 dark:text-gray-400 mb-2 leading-relaxed">
@@ -404,14 +440,14 @@ export default function TransactionsPage() {
                                   <div className="flex flex-wrap items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
                                     <div className="flex items-center gap-1">
                                       <Calendar className="w-3.5 h-3.5" />
-                                      <span>{formatDate(transaction.createdAt)}</span>
+                                      <span>{formatDate(transaction.transactionDate || transaction.createdAt)}</span>
                                     </div>
                                     <div className="flex items-center gap-1">
                                       <Tag className="w-3.5 h-3.5" />
                                       <span>{transaction.category}</span>
                                     </div>
                                     <span className={`px-2 py-0.5 text-[10px] font-medium rounded-full ${sourceBadge.color}`}>
-                                      {sourceBadge.label}
+                                      {transaction.referenceLabel || sourceBadge.label}
                                     </span>
                                     {transaction.receiptImage && (
                                       <div className="flex items-center gap-1 text-gray-900 dark:text-white">
@@ -430,14 +466,8 @@ export default function TransactionsPage() {
                               </div>
 
                               {transaction.comment && (
-                                <p className="text-xs text-gray-600 dark:text-gray-400 italic mt-2 pl-3 border-l-2 border-gray-200 dark:border-gray-700 leading-relaxed">
+                                <p className="text-xs text-gray-600 dark:text-gray-400 italic mt-2 pl-3 border-l-2 border-gray-200 dark:border-gray-700 leading-relaxed bg-gray-50/50 dark:bg-gray-800/30 p-2 rounded-r">
                                   {transaction.comment}
-                                </p>
-                              )}
-
-                              {transaction.referenceId && (
-                                <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-2 font-mono">
-                                  Ref: {transaction.referenceId}
                                 </p>
                               )}
                             </div>

@@ -8,10 +8,10 @@ import { Category } from '@/services/categoryService';
 
 interface CategoryListItemProps {
   category: Category;
-  onDelete: (id: number) => void;
+  onDelete?: (id: number) => void;
   onHardDelete?: (id: number, title: string) => void;
-  onEdit: (category: Category) => void;
-  onAddSubcategory: (parentId: number) => void;
+  onEdit?: (category: Category) => void;
+  onAddSubcategory?: (parentId: number) => void;
   level?: number;
 }
 
@@ -23,6 +23,11 @@ export default function CategoryListItem({
   onAddSubcategory,
   level = 0,
 }: CategoryListItemProps) {
+  const canEdit = typeof onEdit === 'function';
+  const canDelete = typeof onDelete === 'function';
+  const canAddSubcategory = typeof onAddSubcategory === 'function';
+  const canHardDelete = typeof onHardDelete === 'function' && canDelete;
+  const hasAnyAction = canEdit || canDelete || canAddSubcategory || canHardDelete;
   const [showSubcategories, setShowSubcategories] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
@@ -77,74 +82,90 @@ export default function CategoryListItem({
           </span>
         )}
 
-        <div className="relative" ref={dropdownRef}>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-              setDropdownPos(computeMenuPosition(rect, 192, 160, 4, 8));
-              setShowDropdown(!showDropdown);
-            }}
-            className="h-8 w-8 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
-          >
-            <MoreVertical className="w-4 h-4" />
-          </button>
+        {hasAnyAction && (
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
+                setDropdownPos(computeMenuPosition(rect, 192, 200, 4, 8));
+                setShowDropdown(!showDropdown);
+              }}
+              className="h-8 w-8 flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
 
-          {showDropdown && dropdownPos && (
-            <div className="fixed w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50" style={{ top: dropdownPos?.top ?? 0, left: dropdownPos?.left ?? 0 }}>
-              <button
-                onClick={() => {
-                  onEdit(category);
-                  setShowDropdown(false);
-                }}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            {showDropdown && dropdownPos && (
+              <div
+                className="fixed w-48 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-50"
+                style={{ top: dropdownPos.top, left: dropdownPos.left }}
               >
-                <Edit className="w-4 h-4" />
-                Edit
-              </button>
-              <button
-                onClick={() => {
-                  onAddSubcategory(category.id);
-                  setShowDropdown(false);
-                }}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              >
-                <Plus className="w-4 h-4" />
-                Add Subcategory
-              </button>
-              <button
-                onClick={() => {
-                  onDelete(category.id);
-                  setShowDropdown(false);
-                }}
-                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
+                {canEdit && (
+                  <button
+                    onClick={() => {
+                      onEdit?.(category);
+                      setShowDropdown(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <Edit className="w-4 h-4" />
+                    Edit
+                  </button>
+                )}
 
-              {/* Hard delete (dangerous) */}
-              {onHardDelete && (
-                <button
-                  onClick={() => {
-                    onHardDelete(category.id, category.title);
-                    setShowDropdown(false);
-                  }}
-                  disabled={hasSubcategories}
-                  className={`w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors ${
-                    hasSubcategories
-                      ? 'text-red-300 dark:text-red-600/60 cursor-not-allowed'
-                      : 'text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
-                  }`}
-                  title={hasSubcategories ? 'Cannot delete forever while subcategories exist' : 'Permanently delete (cannot be undone)'}
-                >
-                  <Trash className="w-4 h-4" />
-                  Delete Forever
-                </button>
-              )}
-            </div>
-          )}
-        </div>
+                {canAddSubcategory && (
+                  <button
+                    onClick={() => {
+                      onAddSubcategory?.(category.id);
+                      setShowDropdown(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Subcategory
+                  </button>
+                )}
+
+                {canDelete && (
+                  <button
+                    onClick={() => {
+                      onDelete?.(category.id);
+                      setShowDropdown(false);
+                    }}
+                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </button>
+                )}
+
+                {canHardDelete && (
+                  <button
+                    onClick={() => {
+                      onHardDelete?.(category.id, category.title);
+                      setShowDropdown(false);
+                    }}
+                    disabled={hasSubcategories}
+                    className={`w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors ${
+                      hasSubcategories
+                        ? 'text-red-300 dark:text-red-600/60 cursor-not-allowed'
+                        : 'text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
+                    }`}
+                    title={
+                      hasSubcategories
+                        ? 'Cannot delete forever while subcategories exist'
+                        : 'Permanently delete (cannot be undone)'
+                    }
+                  >
+                    <Trash className="w-4 h-4" />
+                    Delete Forever
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {showSubcategories && hasSubcategories && (

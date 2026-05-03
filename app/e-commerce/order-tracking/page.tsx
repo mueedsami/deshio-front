@@ -34,7 +34,7 @@ export default function OrderTrackingByPhonePage() {
 
     setLoading(true);
     try {
-      const res: any = await guestCheckoutService.ordersByPhone({ phone: cleanPhone(phone) });
+      const res: any = await guestCheckoutService.ordersByPhone(cleanPhone(phone));
       setCustomer(res?.data?.customer || null);
       setOrders(res?.data?.orders || []);
     } catch (err: any) {
@@ -50,14 +50,14 @@ export default function OrderTrackingByPhonePage() {
   const badge = (status: string) => {
     const s = String(status || '').toLowerCase();
     if (s.includes('deliver')) return 'bg-green-50 text-green-700 border-green-200';
-    if (s.includes('cancel')) return 'bg-red-50 text-red-700 border-red-200';
+    if (s.includes('cancel')) return 'bg-rose-50 text-neutral-900 border-rose-200';
     if (s.includes('ship')) return 'bg-orange-50 text-orange-700 border-orange-200';
     if (s.includes('process')) return 'bg-blue-50 text-blue-700 border-blue-200';
     return 'bg-yellow-50 text-yellow-700 border-yellow-200';
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="ec-root min-h-screen">
       <Navigation />
 
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -67,15 +67,15 @@ export default function OrderTrackingByPhonePage() {
               <h1 className="text-2xl font-bold text-gray-900">Track Orders by Phone</h1>
               <p className="text-gray-600 mt-1">Enter your phone number to see your recent orders.</p>
             </div>
-            <div className="w-12 h-12 rounded-full bg-red-50 flex items-center justify-center">
-              <PhoneIcon className="text-red-700" />
+            <div className="w-12 h-12 rounded-full bg-rose-50 flex items-center justify-center">
+              <PhoneIcon className="text-neutral-900" />
             </div>
           </div>
 
           {error && (
-            <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex items-start gap-3">
-              <AlertCircle className="text-red-600 flex-shrink-0 mt-0.5" size={20} />
-              <p className="text-red-700 text-sm">{error}</p>
+            <div className="mb-6 bg-rose-50 border border-rose-200 rounded-lg p-4 flex items-start gap-3">
+              <AlertCircle className="text-rose-600 flex-shrink-0 mt-0.5" size={20} />
+              <p className="text-neutral-900 text-sm">{error}</p>
             </div>
           )}
 
@@ -88,13 +88,13 @@ export default function OrderTrackingByPhonePage() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="017XXXXXXXX"
-                className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-neutral-200 focus:border-neutral-900"
               />
             </div>
             <button
               type="submit"
               disabled={loading}
-              className="mt-6 sm:mt-0 sm:self-end inline-flex items-center justify-center gap-2 bg-red-700 hover:bg-red-800 text-white font-semibold px-5 py-3 rounded-lg disabled:opacity-60"
+              className="mt-6 sm:mt-0 sm:self-end inline-flex items-center justify-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-white font-semibold px-5 py-3 rounded-lg disabled:opacity-60"
             >
               {loading ? <Loader2 className="animate-spin" size={18} /> : <Search size={18} />}
               {loading ? 'Searching…' : 'Find Orders'}
@@ -132,7 +132,7 @@ export default function OrderTrackingByPhonePage() {
                       </span>
                       <Link
                         href={`/e-commerce/order-tracking/${o.order_number}`}
-                        className="text-red-700 font-semibold text-sm hover:underline"
+                        className="text-neutral-900 font-semibold text-sm hover:underline"
                       >
                         View
                       </Link>
