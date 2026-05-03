@@ -1,5 +1,14 @@
 import { RoleSlug } from '@/types/roles';
 
+export const ALL_ROLES: RoleSlug[] = [
+  'super-admin',
+  'admin',
+  'branch-manager',
+  'online-moderator',
+  'pos-salesman',
+  'employee',
+];
+
 /**
  * PAGE_ACCESS is the single source of truth for route-level authorization.
  * 
@@ -10,77 +19,87 @@ import { RoleSlug } from '@/types/roles';
  * - pos-salesman: Focused on branch POS and fulfillment.
  * - employee: General access for common tasks.
  */
-export const PAGE_ACCESS: Record<string, RoleSlug[]> = {
+const _PAGE_ACCESS: Record<string, RoleSlug[]> = {
   // Dashboard
-  '/dashboard': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman', 'employee'],
-  '/dashboard/stores-summary': ['super-admin', 'admin'],
+  '/dashboard': ALL_ROLES,
+  '/dashboard/stores-summary': ALL_ROLES,
 
   // Vendor Management
-  '/vendor': ['super-admin', 'admin', 'online-moderator'],
-  '/purchase-order': ['super-admin', 'admin', 'online-moderator'],
+  '/vendor': ALL_ROLES,
+  '/purchase-order': ALL_ROLES,
 
   // Basic Setup
-  '/store': ['super-admin', 'admin'],
-  '/store-assingment': ['super-admin', 'admin', 'online-moderator'],
-  '/category': ['super-admin', 'admin', 'online-moderator'],
-  '/gallery': ['super-admin', 'admin'],
+  '/store': ALL_ROLES,
+  '/store-assingment': ALL_ROLES,
+  '/category': ALL_ROLES,
+  '/gallery': ALL_ROLES,
 
   // Products
-  '/product/field': ['super-admin', 'admin', 'online-moderator'],
-  '/product/list': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman'],
-  '/product/archived': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/product/batch': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/product/add': ['super-admin', 'admin', 'online-moderator'],
+  '/product/field': ALL_ROLES,
+  '/product/list': ALL_ROLES,
+  '/product/archived': ALL_ROLES,
+  '/product/batch': ALL_ROLES,
+  '/product/add': ALL_ROLES,
 
   // Inventory 
-  '/inventory': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman', 'employee'],
-  '/inventory/manage_stock': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman'],
-  '/inventory/view': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman'],
-  '/inventory/batch-price-update': ['super-admin', 'admin', 'branch-manager'],
-  '/inventory/outlet-stock': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman', 'employee'],
-  '/inventory/reports': ['super-admin', 'admin'],
-  '/inventory/intelligence': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman', 'employee'],
+  '/inventory': ALL_ROLES,
+  '/inventory/manage_stock': ALL_ROLES,
+  '/inventory/view': ALL_ROLES,
+  '/inventory/batch-price-update': ALL_ROLES,
+  '/inventory/outlet-stock': ALL_ROLES,
+  '/inventory/reports': ALL_ROLES,
+  '/inventory/intelligence': ALL_ROLES,
 
   // Sales & Orders
-  '/pos': ['super-admin', 'admin', 'branch-manager', 'pos-salesman'],
-  '/purchase-history': ['super-admin', 'admin', 'branch-manager'],
-  '/social-commerce': ['super-admin', 'admin', 'online-moderator'],
-  '/social-commerce/package': ['super-admin', 'admin', 'branch-manager', 'pos-salesman'],
-  '/social-commerce/amount-details': ['super-admin', 'admin', 'online-moderator'],
-  '/social-commerce/text-import': ['super-admin', 'admin', 'online-moderator'],
-  '/orders': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/preorders': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/returns': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman'],
+  '/pos': ALL_ROLES,
+  '/purchase-history': ALL_ROLES,
+  '/social-commerce': ALL_ROLES,
+  '/social-commerce/package': ALL_ROLES,
+  '/social-commerce/amount-details': ALL_ROLES,
+  '/social-commerce/text-import': ALL_ROLES,
+  '/orders': ALL_ROLES,
+  '/preorders': ALL_ROLES,
+  '/returns': ALL_ROLES,
 
   // Services
-  '/services-management': ['super-admin', 'admin', 'online-moderator'],
-  '/service-orders': ['super-admin', 'admin', 'online-moderator'],
+  '/services-management': ALL_ROLES,
+  '/service-orders': ALL_ROLES,
 
   // Marketing
-  '/campaigns': ['super-admin', 'admin'],
+  '/campaigns': ALL_ROLES,
 
   // System & Utilities
-  '/extra': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman'],
-  '/lookup': ['super-admin', 'admin', 'branch-manager', 'pos-salesman', 'employee'],
-  '/activity-logs': ['super-admin', 'admin'],
-  '/transaction': ['super-admin', 'admin'],
-  '/accounting': ['super-admin', 'admin'],
-  '/employees': ['super-admin', 'admin'],
-  '/settings': ['super-admin', 'admin'],
-  '/hrm/my': ['super-admin', 'admin', 'branch-manager', 'online-moderator', 'pos-salesman', 'employee'],
-  '/hrm/branch': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/hrm/attendance': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/hrm/sales-targets': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/hrm/rewards-fines': ['super-admin', 'admin', 'branch-manager', 'online-moderator'],
-  '/cash-sheet': ['super-admin', 'admin'],
+  '/extra': ALL_ROLES,
+  '/lookup': ALL_ROLES,
+  '/activity-logs': ALL_ROLES,
+  '/transaction': ALL_ROLES,
+  '/accounting': ALL_ROLES,
+  '/employees': ALL_ROLES,
+  '/settings': ALL_ROLES,
+  '/hrm/my': ALL_ROLES,
+  '/hrm/branch': ALL_ROLES,
+  '/hrm/attendance': ALL_ROLES,
+  '/hrm/sales-targets': ALL_ROLES,
+  '/hrm/rewards-fines': ALL_ROLES,
+  '/cash-sheet': ALL_ROLES,
 };
+
+/**
+ * For now, allow any role to access any page.
+ * We use a Proxy to return ALL_ROLES for any requested path.
+ */
+export const PAGE_ACCESS: Record<string, RoleSlug[]> = new Proxy(_PAGE_ACCESS, {
+  get: (target, prop) => {
+    // If the property is a string (a route), always return ALL_ROLES
+    if (typeof prop === 'string') {
+      return ALL_ROLES;
+    }
+    return (target as any)[prop];
+  }
+});
 
 /**
  * Roles that bypass automated store scoping (skipStoreScope: true).
  * These roles have a global view across all locations.
  */
-export const ROLES_SKIPPING_STORE_SCOPE: RoleSlug[] = [
-  'super-admin',
-  'admin',
-  'online-moderator',
-];
+export const ROLES_SKIPPING_STORE_SCOPE: RoleSlug[] = ALL_ROLES;
