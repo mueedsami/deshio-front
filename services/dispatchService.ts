@@ -241,28 +241,10 @@ class DispatchService {
   }
 
   /**
-   * Submit dispatch for approval
-   */
-  async submitDispatch(id: number) {
-    const response = await axiosInstance.patch(`${this.basePath}/${id}/submit`);
-    return response.data;
-  }
-
-  /**
    * Approve dispatch
    */
   async approveDispatch(id: number) {
     const response = await axiosInstance.patch(`${this.basePath}/${id}/approve`);
-    return response.data;
-  }
-
-  /**
-   * Reject dispatch
-   */
-  async rejectDispatch(id: number, notes?: string) {
-    const response = await axiosInstance.patch(`${this.basePath}/${id}/reject`, {
-      notes,
-    });
     return response.data;
   }
 
