@@ -463,9 +463,9 @@ export default function ProductPage() {
             size: getColorAndSize(product).size,
             variation_suffix: (product as any).variation_suffix,
             image: primaryImageUrl,
-            stockQuantity: Number(product.stock_quantity) || 0,
-            onlineStockQuantity: Number(product.online_stock_quantity) || 0,
-            offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
+            stockQuantity: product.stock_quantity ?? 0,
+            onlineStockQuantity: product.online_stock_quantity ?? 0,
+            offlineStockQuantity: product.offline_stock_quantity ?? 0,
           },
           ...serverVariants.map((v: any) => {
             const vImg = v.images?.[0];
@@ -483,9 +483,9 @@ export default function ProductPage() {
               size: vColorSize.size,
               variation_suffix: v.variation_suffix,
               image: vImgUrl,
-              stockQuantity: Number(v.stock_quantity) || 0,
-              onlineStockQuantity: Number(v.online_stock_quantity) || 0,
-              offlineStockQuantity: Number(v.offline_stock_quantity) || 0,
+              stockQuantity: v.stock_quantity ?? 0,
+              onlineStockQuantity: v.online_stock_quantity ?? 0,
+              offlineStockQuantity: v.offline_stock_quantity ?? 0,
             };
           }),
         ];
@@ -501,9 +501,9 @@ export default function ProductPage() {
           hasVariations: allVariants.length > 1,
           vendorId: product.vendor_id,
           vendorName: vendorsById[product.vendor_id] ?? null,
-          stockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0),
-          onlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0),
-          offlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0),
+          stockQuantity: allVariants.reduce((sum, v) => sum + (v.stockQuantity || 0), 0),
+          onlineStockQuantity: allVariants.reduce((sum, v) => sum + (v.onlineStockQuantity || 0), 0),
+          offlineStockQuantity: allVariants.reduce((sum, v) => sum + (v.offlineStockQuantity || 0), 0),
         };
       });
     }
@@ -553,9 +553,9 @@ export default function ProductPage() {
         size,
         variation_suffix: (product as any).variation_suffix,
         image: variantImageUrl,
-        stockQuantity: Number(product.stock_quantity) || 0,
-        onlineStockQuantity: Number(product.online_stock_quantity) || 0,
-        offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
+        stockQuantity: product.stock_quantity ?? 0,
+        onlineStockQuantity: product.online_stock_quantity ?? 0,
+        offlineStockQuantity: product.offline_stock_quantity ?? 0,
       });
     });
 
@@ -563,9 +563,9 @@ export default function ProductPage() {
       group.baseName = getGroupBaseName(group.variants, group.baseName);
       group.totalVariants = group.variants.length;
       group.hasVariations = group.variants.length > 1;
-      group.stockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0);
-      group.onlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0);
-      group.offlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0);
+      group.stockQuantity = group.variants.reduce((sum, v) => sum + (v.stockQuantity || 0), 0);
+      group.onlineStockQuantity = group.variants.reduce((sum, v) => sum + (v.onlineStockQuantity || 0), 0);
+      group.offlineStockQuantity = group.variants.reduce((sum, v) => sum + (v.offlineStockQuantity || 0), 0);
       if (!group.primaryImage) {
         group.primaryImage = group.variants.find(v => v.image)?.image || null;
       }
@@ -867,7 +867,7 @@ export default function ProductPage() {
             toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
 
-          <main className={`flex-1 overflow-y-auto p-6 ${isSocialCommerceMode ? 'pb-[440px]' : ''}`}>
+          <main className="flex-1 overflow-y-auto p-6">
             <div className="max-w-7xl mx-auto">
               {/* Header */}
               <div className="mb-6">
@@ -877,9 +877,7 @@ export default function ProductPage() {
                       {selectMode ? 'Select a Product' : 'Products'}
                     </h1>
                     <p className="text-gray-600 dark:text-gray-400">
-                      {isSocialCommerceMode
-                        ? 'Click a variant to add it to the Social Commerce queue, then use the queue drawer to return'
-                        : selectMode
+                      {selectMode
                         ? 'Choose a product variant to add to your operation'
                         : `Manage your store's product catalog`}
                     </p>
@@ -933,25 +931,6 @@ export default function ProductPage() {
                     )}
                   </div>
                 </div>
-
-                {/* Social Commerce Mode Banner */}
-                {isSocialCommerceMode && (
-                  <div className="mb-4 flex items-center gap-3 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/40 px-4 py-3">
-                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-indigo-100 dark:bg-indigo-900 flex items-center justify-center text-indigo-600 dark:text-indigo-400 text-base">🛒</div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Social Commerce – Queue Mode</p>
-                      <p className="text-xs text-indigo-600 dark:text-indigo-400 mt-0.5">
-                        Click <span className="font-semibold">Select</span> on any product variant to add it to the queue. Adjust quantities in the drawer (bottom-right), then click <span className="font-semibold">Back to Social Commerce</span>.
-                      </p>
-                    </div>
-                    <button
-                      onClick={handleReturnToSocialCommerce}
-                      className="flex-shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
-                    >
-                      ← Back ({queueItems.length})
-                    </button>
-                  </div>
-                )}
 
                 {/* Stats Bar */}
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
@@ -1237,12 +1216,11 @@ export default function ProductPage() {
                   {paginatedGroups.map((group) => (
                     <ProductListItem
                       key={`${group.sku}-${group.variants[0].id}`}
-                      stockFilter={stockStatus}
                       productGroup={{
                         ...group,
                         sellingPrice: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.selling_price ?? null : null,
                         inStock: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.in_stock ?? null : null,
-                        stockQuantity: group.variants?.[0]?.id ? Number(catalogMetaById[group.variants[0].id]?.stock_quantity ?? 0) : null,
+                        stockQuantity: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.stock_quantity ?? null : null,
                       }}
                       onDelete={canDeleteProducts ? handleDelete : undefined}
                       onEdit={canEditProducts ? handleEdit : undefined}

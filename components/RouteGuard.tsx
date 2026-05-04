@@ -23,6 +23,19 @@ export default function RouteGuard({
   const { isRole, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
 
-  // For now, literally always return true/allow everything
+  useEffect(() => {
+    if (!isLoading) {
+      if (!isAuthenticated) {
+        router.replace('/login');
+      } else if (!isRole(allowedRoles)) {
+        router.replace(redirectTo);
+      }
+    }
+  }, [isLoading, isAuthenticated, allowedRoles, router, redirectTo]);
+
+  if (isLoading || !isAuthenticated || !isRole(allowedRoles)) {
+    return null; // or a loading spinner
+  }
+
   return <>{children}</>;
 }

@@ -314,7 +314,7 @@ export default function PurchaseHistoryPage() {
       }
 
       const fullOrder = await orderService.getById(order.id);
-      await printReceipt(fullOrder, undefined, { template: 'pos_receipt', title: 'POS Receipt' });
+      await printReceipt(fullOrder, undefined, { template: 'pos_receipt' });
       alert(`✅ Receipt printed for order #${fullOrder.order_number || fullOrder.id}`);
     } catch (error: any) {
       console.error('Print receipt error:', error);
@@ -509,12 +509,6 @@ export default function PurchaseHistoryPage() {
 
       console.log('\n🛒 STEP 4: Creating new order for replacement products...');
 
-      // ✅ Enhanced Trace: Include specific item names in the notes
-      const returnedItemTrace = exchangeData.removedProducts.map(rp => {
-        const item = selectedOrderForAction.items?.find(i => i.id === rp.order_item_id);
-        return `${item?.product_name || 'Item'} (x${rp.quantity})`;
-      }).join(', ');
-
       const newOrderData = {
         order_type: 'counter' as const,
         store_id: selectedOrderForAction.store.id,
@@ -527,7 +521,7 @@ export default function PurchaseHistoryPage() {
           barcode: p.barcode,
           barcode_id: p.barcode_id,
         })),
-        notes: `EXCHANGE TRACE:\nFrom Order: #${selectedOrderForAction.order_number}\nReturn: #${returnNumber}\nReturned Items: ${returnedItemTrace}`,
+        notes: `Exchange from order #${selectedOrderForAction.order_number} | Return: #${returnNumber}`,
       };
 
       console.log('Creating new order (no payment yet)...');

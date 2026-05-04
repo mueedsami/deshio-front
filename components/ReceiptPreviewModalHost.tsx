@@ -14,7 +14,7 @@ export default function ReceiptPreviewModalHost() {
   const [open, setOpen] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [idx, setIdx] = useState(0);
-  const [title, setTitle] = useState('Receipt');
+  const [title, setTitle] = useState('Parcel Sticker');
   const [template, setTemplate] = useState<'receipt' | 'pos_receipt' | 'social_invoice'>('receipt');
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
@@ -25,7 +25,7 @@ export default function ReceiptPreviewModalHost() {
       const list = Array.isArray(payload?.orders) ? payload.orders : [];
       setOrders(list);
       setIdx(Math.max(0, Math.min(payload?.startIndex ?? 0, Math.max(0, list.length - 1))));
-      setTitle(payload?.title || (list.length > 1 ? 'Bulk Receipts' : 'Receipt'));
+      setTitle(payload?.title || (list.length > 1 ? 'Bulk Parcel Stickers' : 'Parcel Sticker'));
       setTemplate((payload as any)?.template || 'receipt');
       setOpen(true);
     };
@@ -64,7 +64,7 @@ export default function ReceiptPreviewModalHost() {
     }
 
     if (template === 'pos_receipt') return `POS Receipt #${r.orderNo}`;
-    return `Receipt #${r.orderNo}`;
+    return `Parcel Sticker #${r.orderNo}`;
   }, [mode, title, orders.length, currentOrder, template]);
 
   const close = () => {

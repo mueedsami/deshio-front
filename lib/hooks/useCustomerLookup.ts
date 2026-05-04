@@ -22,15 +22,6 @@ type LastOrderSummary = {
   last_order_id?: number;
 };
 
-export type RecentOrder = {
-  id: number;
-  order_number?: string;
-  order_date?: string;
-  total_amount?: string | number;
-  status?: string;
-  items?: any[];
-};
-
 export function useCustomerLookup(opts?: {
   debounceMs?: number;
   minLength?: number;
@@ -42,7 +33,6 @@ export function useCustomerLookup(opts?: {
   const [phone, setPhone] = useState("");
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [lastOrder, setLastOrder] = useState<LastOrderSummary | null>(null);
-  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,7 +58,6 @@ export function useCustomerLookup(opts?: {
     if (formatted.length < minLength) {
       setCustomer(null);
       setLastOrder(null);
-      setRecentOrders([]);
       setError(null);
       lastQueried.current = "";
       return;
@@ -84,13 +73,14 @@ export function useCustomerLookup(opts?: {
 
         lastQueried.current = formatted;
 
-        // 1) lookup customer by phone
+        // 1) lookup customer by phone (new endpoint preferred)
         let found: any = null;
         try {
           const res = await axiosInstance.post('/customers/find-by-phone', { phone: formatted });
           const payload = res.data?.data ?? res.data;
           found = payload?.customer ?? payload;
         } catch (err: any) {
+          // Fallbacks for older builds
           try {
             const res = await axiosInstance.get('/customers/by-phone', { params: { phone: formatted } });
             const payload = res.data?.data ?? res.data;
@@ -103,25 +93,22 @@ export function useCustomerLookup(opts?: {
         if (!found?.id) {
           setCustomer(null);
           setLastOrder(null);
-          setRecentOrders([]);
           return;
         }
 
         setCustomer(found);
 
-        // 2) fetch last 5 orders for history
+        // 2) fetch last purchase/summary
+        // New customer payload already includes total_orders/total_purchases, but not last order.
+        // Use customer orders endpoint (if available) as a best-effort.
         try {
-          const ordersRes = await axiosInstance.get(`/customers/${found.id}/orders`, {
-            params: { per_page: 5, sort_by: 'order_date', sort_order: 'desc' },
+          const lastRes = await axiosInstance.get(`/customers/${found.id}/orders`, {
+            params: { per_page: 1, sort_by: 'order_date', sort_order: 'desc' },
           });
-          const ordersPayload = ordersRes.data?.data ?? ordersRes.data;
-          const list = ordersPayload?.data ?? ordersPayload?.orders ?? ordersPayload ?? [];
-          const orders = Array.isArray(list) ? list : [];
-          
-          setRecentOrders(orders);
-
-          if (orders.length > 0) {
-            const last = orders[0];
+          const lastPayload = lastRes.data?.data ?? lastRes.data;
+          const list = lastPayload?.data ?? lastPayload?.orders ?? lastPayload ?? [];
+          const last = Array.isArray(list) ? list[0] : null;
+          if (last) {
             setLastOrder({
               last_order_id: last?.id,
               last_order_date: last?.order_date || last?.created_at || last?.date,
@@ -132,13 +119,18 @@ export function useCustomerLookup(opts?: {
             setLastOrder(null);
           }
         } catch {
-          setRecentOrders([]);
-          setLastOrder(null);
+          // fallback to old summary endpoint (if still present)
+          try {
+            const lastRes = await axiosInstance.get(`/customers/${found.id}/last-order-summary`);
+            const lastPayload = lastRes.data?.data ?? lastRes.data;
+            setLastOrder(lastPayload ?? null);
+          } catch {
+            setLastOrder(null);
+          }
         }
       } catch (e: any) {
         setCustomer(null);
         setLastOrder(null);
-        setRecentOrders([]);
         setError(e?.response?.data?.message || "Customer lookup failed");
       } finally {
         setLoading(false);
@@ -153,14 +145,12 @@ export function useCustomerLookup(opts?: {
     setPhone,
     customer,
     lastOrder,
-    recentOrders,
     loading,
     error,
     clear: () => {
       setPhone("");
       setCustomer(null);
       setLastOrder(null);
-      setRecentOrders([]);
       setError(null);
       lastQueried.current = "";
     },

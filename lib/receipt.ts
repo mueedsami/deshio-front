@@ -1,6 +1,6 @@
 // lib/receipt.ts
 // Normalizes different order shapes (social commerce UI, backend API order, POS order)
-// into a single receipt-friendly model for printing.
+import { CLIENT_ADDRESS, CLIENT_MOBILE } from './constants';
 
 export type ReceiptItem = {
   name: string;
@@ -28,10 +28,17 @@ export type ReceiptOrder = {
   orderNo: string;
   dateTime: string; // human readable
   storeName?: string;
+  storeAddress?: string;
+  storePhone?: string;
   salesBy?: string;
   customerName?: string;
   customerPhone?: string;
   customerAddressLines?: string[];
+  orderType?: string;
+  orderTypeLabel?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  intendedCourier?: string;
   items: ReceiptItem[];
   totals: ReceiptTotals;
   notes?: string;
@@ -73,86 +80,6 @@ function uniqNonEmpty(arr: string[]): string[] {
   return out;
 }
 
-function normalizeText(v: unknown): string {
-  return String(v ?? '').trim().toLowerCase();
-}
-
-function looksLikeService(it: any): boolean {
-  const t = normalizeText(it?.item_type || it?.type);
-  return Boolean(it?.service_id || it?.serviceId || it?.is_service || it?.isService || t === 'service');
-}
-
-
-export function hasPrintableServiceLines(order: any): boolean {
-  if (!order || typeof order !== 'object') return false;
-
-  const serviceArrays = [
-    order?.services,
-    order?.service_items,
-    order?.order_services,
-    order?.orderServices,
-    order?.serviceItems,
-  ];
-
-  if (serviceArrays.some((arr) => Array.isArray(arr) && arr.length > 0)) {
-    return true;
-  }
-
-  const mixedArrays = [order?.items, order?.products];
-  return mixedArrays.some(
-    (arr) =>
-      Array.isArray(arr) &&
-      arr.some((it: any) => looksLikeService(it))
-  );
-}
-
-export function toPrintableServiceLines(services: any[] = []): any[] {
-  if (!Array.isArray(services)) return [];
-
-  return services
-    .map((s: any, i: number) => {
-      const quantity = Number(s?.quantity ?? s?.qty ?? 1) || 1;
-      const unitPrice = parseMoney(s?.unit_price ?? s?.price ?? s?.unitPrice ?? s?.base_price ?? 0);
-      const discount = parseMoney(s?.discount_amount ?? s?.discount ?? 0);
-      const lineTotal =
-        parseMoney(s?.total_amount ?? s?.amount ?? s?.lineTotal) ||
-        Math.max(0, quantity * unitPrice - discount);
-
-      return {
-        id: s?.id ?? s?.order_service_id ?? s?.orderServiceId ?? `service-fallback-${i + 1}`,
-        service_id: s?.service_id ?? s?.serviceId ?? s?.service?.id,
-        service_name: s?.service_name ?? s?.name ?? s?.service?.name ?? s?.product_name ?? 'Service',
-        quantity,
-        unit_price: unitPrice,
-        discount_amount: discount,
-        total_amount: lineTotal,
-        category: s?.category ?? s?.service_category ?? s?.service?.category,
-        is_service: true,
-        item_type: 'service',
-        type: 'service',
-      };
-    })
-    .filter((s: any) => String(s?.service_name || '').trim() || Number(s?.total_amount || 0) > 0);
-}
-
-export function withPrintableServiceFallback(order: any, fallbackServices: any[] = []): any {
-  if (hasPrintableServiceLines(order)) return order;
-
-  const normalizedFallback = toPrintableServiceLines(fallbackServices);
-  if (normalizedFallback.length === 0) return order;
-
-  return {
-    ...(order || {}),
-    services: normalizedFallback,
-  };
-}
-
-function changeFromNotes(notes: string): number {
-  if (!notes) return 0;
-  const m = notes.match(/change\s*(?:given|amount)?\s*[:\-]?\s*(?:৳|tk\.?|bdt)?\s*([0-9]+(?:\.[0-9]+)?)/i);
-  return m ? parseMoney(m[1]) : 0;
-}
-
 /**
  * Accepts:
  * - Backend orderService Order (order_number, items[], store, customer, totals as strings)
@@ -163,15 +90,37 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const id = order?.id ?? order?.order_id ?? '';
 
   const orderNo =
-    safeString(order?.order_number) || safeString(order?.orderNumber) || safeString(order?.order_no) || (id ? String(id) : '');
+    safeString(order?.order_number) ||
+    safeString(order?.orderNumber) ||
+    safeString(order?.order_number) ||
+    (id ? String(id) : '');
 
-  const dateTime = formatDateTime(order?.order_date || order?.created_at || order?.createdAt || order?.date);
+  const dateTime =
+    formatDateTime(order?.order_date || order?.created_at || order?.createdAt || order?.date);
 
   // Store
-  const storeName = safeString(order?.store?.name) || safeString(order?.store) || safeString(order?.storeName);
+  const storeObj = order?.store || order?.branch || order?.outlet || order?.assigned_store || order?.assignedStore;
+  const storeName =
+    safeString(storeObj?.name) || safeString(storeObj?.store_name) || safeString(order?.storeName) || safeString(order?.store) || 'Main Store';
+  
+  const storeAddress = 
+    safeString(storeObj?.address) || 
+    safeString(storeObj?.store_address) || 
+    safeString(order?.storeAddress) || 
+    safeString(order?.store_address) || 
+    CLIENT_ADDRESS;
+
+  const storePhone = 
+    safeString(storeObj?.phone) || 
+    safeString(storeObj?.mobile) || 
+    safeString(storeObj?.contact_phone) || 
+    safeString(order?.storePhone) || 
+    safeString(order?.store_phone) || 
+    CLIENT_MOBILE;
 
   // Salesperson
-  const salesBy = safeString(order?.salesBy) || safeString(order?.salesman?.name) || safeString(order?.created_by?.name);
+  const salesBy =
+    safeString(order?.salesBy) || safeString(order?.salesman?.name) || safeString(order?.created_by?.name);
 
   // Customer
   const customerName = safeString(order?.customer?.name) || safeString(order?.customerName);
@@ -190,248 +139,103 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     if (divLine) addrLines.push(divLine);
   }
 
-  const shippingAddress = order?.shipping_address || order?.shippingAddress;
+  const shippingAddress = order?.shipping_address || order?.shippingAddress || order?.shipping_address;
   if (shippingAddress && typeof shippingAddress === 'object') {
-    const line1 =
-      shippingAddress.address ||
-      shippingAddress.street ||
-      shippingAddress.address_line1 ||
-      shippingAddress.address_line_1 ||
-      shippingAddress.line1;
-    const line2 =
-      shippingAddress.address_line2 ||
-      shippingAddress.address_line_2 ||
-      shippingAddress.line2 ||
-      shippingAddress.landmark;
-
-    if (line1) addrLines.push(safeString(line1));
-    if (line2) addrLines.push(safeString(line2));
-
+    // common keys: address, area, city, district, division, postal_code
+    if (shippingAddress.address) addrLines.push(safeString(shippingAddress.address));
     const areaLine = [shippingAddress.area, shippingAddress.zone].filter(Boolean).join(', ');
     if (areaLine) addrLines.push(areaLine);
-    const cityLine = [shippingAddress.city, shippingAddress.district, shippingAddress.state].filter(Boolean).join(', ');
+    const cityLine = [shippingAddress.city, shippingAddress.district].filter(Boolean).join(', ');
     if (cityLine) addrLines.push(cityLine);
-    const countryPostal = [shippingAddress.country, shippingAddress.postal_code || shippingAddress.postalCode].filter(Boolean).join(' - ');
-    if (countryPostal) addrLines.push(countryPostal);
+    const divLine = [shippingAddress.division, shippingAddress.postal_code || shippingAddress.postalCode]
+      .filter(Boolean)
+      .join(' - ');
+    if (divLine) addrLines.push(divLine);
   }
-
-  const orderLevelCustomerAddr = safeString(order?.customer_address || order?.customerAddress);
-  if (orderLevelCustomerAddr) addrLines.push(orderLevelCustomerAddr);
 
   const customerAddr = safeString(order?.customer?.address);
   if (customerAddr) addrLines.push(customerAddr);
 
   const customerAddressLines = uniqNonEmpty(addrLines);
 
-  // Items (products + services)
+  const orderType = safeString(order?.order_type || order?.orderType);
+  const orderTypeLabel = safeString(order?.order_type_label || order?.orderTypeLabel);
+  const paymentStatus = safeString(order?.payment_status || order?.paymentStatus);
+  const intendedCourier = safeString(order?.intended_courier || order?.intendedCourier);
+
+  const paymentMethod =
+    safeString(order?.payment_method) ||
+    safeString(order?.paymentMethod) ||
+    (Array.isArray(order?.payments)
+      ? uniqNonEmpty((order.payments as any[]).map((p) => safeString(p?.payment_method || p?.method || p?.name)))[0] || ''
+      : '');
+
+  // Items
   const items: ReceiptItem[] = [];
-  const seenLines = new Set<string>();
 
-  const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
-
-  const emitItem = (args: {
-    src: any;
-    kind: 'product' | 'service';
-    name: string;
-    variant: string;
-    qty: number;
-    unitPrice: number;
-    lineTotal: number;
-    discount: number;
-    barcodes: string[];
-  }) => {
-    const { src, kind, name, variant, qty, unitPrice, lineTotal, discount, barcodes } = args;
-
-    // IMPORTANT:
-    // Keep same-product lines separate when barcode is different
-    // (e.g., 2 pieces of the same SKU scanned as 2 unique barcodes).
-    // This prevents receipts from hiding one line while subtotal still includes it.
-    const stableId = safeString(
-      src?.id ??
-        src?.item_id ??
-        src?.order_item_id ??
-        src?.orderItemId ??
-        src?.line_id ??
-        src?.lineId ??
-        src?.product_barcode_id ??
-        src?.barcode_id ??
-        src?.barcodeId
-    );
-
-    const barcodeSig = barcodes.length > 0 ? [...barcodes].sort().join('|') : '';
-    const batchSig = safeString(src?.batch_number ?? src?.batchNo ?? src?.batch ?? src?.batch_id ?? src?.product_batch_id);
-    const skuSig = safeString(src?.sku ?? src?.product_sku ?? src?.productSku);
-
-    // If a row has a stable id but also barcode(s), include barcode in dedupe key.
-    // Otherwise split rows coming from one aggregated line (qty 2, barcode A+B)
-    // can collapse back into one line.
-    const dedupeKey = stableId
-      ? `${kind}|id:${stableId}|bc:${barcodeSig || '-'}|batch:${batchSig}|sku:${skuSig}`
-      : `${kind}|${name}|${variant}|${qty}|${unitPrice}|${lineTotal}|bc:${barcodeSig}|batch:${batchSig}|sku:${skuSig}`;
-
-    if (seenLines.has(dedupeKey)) return;
-    seenLines.add(dedupeKey);
-
-    items.push({
-      name: name || (kind === 'service' ? 'Service' : 'Item'),
-      variant,
-      qty,
-      unitPrice,
-      discount,
-      lineTotal,
-      barcodes: barcodes.length ? barcodes : undefined,
-    });
-  };
-
-  const pushItem = (src: any, kind: 'product' | 'service') => {
-    const qtyRaw = Number(src?.quantity ?? src?.qty ?? 0) || 0;
-    const unitPrice = parseMoney(src?.unit_price ?? src?.price ?? src?.unitPrice ?? src?.base_price);
-    const discount = parseMoney(src?.discount_amount ?? src?.discount ?? 0);
-    const computed = Math.max(0, qtyRaw * unitPrice - discount);
-    const lineTotal = parseMoney(src?.total_amount ?? src?.amount ?? src?.lineTotal) || computed;
-
-    const rawBarcodes = Array.isArray(src?.barcodes)
-      ? (src.barcodes as string[])
-      : src?.barcode
-      ? [String(src.barcode)]
-      : [];
-
-    const barcodes = rawBarcodes
-      .map((b) => String(b || '').trim())
-      .filter(Boolean);
-
-    const name =
-      kind === 'service'
-        ? safeString(src?.service_name || src?.name || src?.service?.name || src?.product_name || 'Service')
-        : safeString(src?.product_name || src?.productName || src?.name || 'Item');
-
-    const variant =
-      kind === 'service'
-        ? safeString(src?.category || src?.service_category || src?.service?.category || '')
-        : safeString(src?.size || src?.variant || '');
-
-    // Some service rows come with qty=0 but valid amount.
-    const qty = qtyRaw > 0 ? qtyRaw : lineTotal > 0 || unitPrice > 0 ? 1 : 0;
-    if (!name && qty <= 0 && lineTotal <= 0) return;
-
-    // Keep original row as-is here.
-    // We aggregate similar rows after collection so receipt stays clean:
-    // same product + same price -> one row with higher qty.
-
-    emitItem({
-      src,
-      kind,
-      name,
-      variant,
-      qty,
-      unitPrice,
-      lineTotal,
-      discount,
-      barcodes,
-    });
-  };
-
+  // Social-commerce style: order.products
   if (Array.isArray(order?.products)) {
     for (const p of order.products) {
-      pushItem(p, looksLikeService(p) ? 'service' : 'product');
-    }
-  }
+      const qty = Number(p?.qty ?? p?.quantity ?? 0) || 0;
+      const unitPrice = parseMoney(p?.price ?? p?.unit_price);
+      const discount = parseMoney(p?.discount ?? p?.discount_amount);
+      const lineTotal = parseMoney(p?.amount ?? p?.total_amount) || Math.max(0, qty * unitPrice - discount);
+      const barcodes = Array.isArray(p?.barcodes)
+        ? (p.barcodes as string[])
+        : p?.barcode
+          ? [String(p.barcode)]
+          : undefined;
 
-  if (Array.isArray(order?.items)) {
-    for (const it of order.items) {
-      pushItem(it, looksLikeService(it) ? 'service' : 'product');
-    }
-  }
-
-  const rawServices: any[] =
-    (order?.services ?? order?.service_items ?? order?.order_services ?? order?.orderServices ?? order?.serviceItems ?? []) as any[];
-
-  if (Array.isArray(rawServices) && rawServices.length > 0) {
-    for (const s of rawServices) {
-      pushItem(s, 'service');
-    }
-  }
-
-  // Merge rows for cleaner receipt display:
-  // If same product/service name + same variant + same unit price,
-  // show one row with combined qty and amount.
-  const mergeKeyOf = (it: ReceiptItem) => {
-    const n = normalizeText(it.name);
-    const v = normalizeText(it.variant || '');
-    const p = round2(parseMoney(it.unitPrice));
-    return `${n}|${v}|${p}`;
-  };
-
-  const mergedMap = new Map<string, ReceiptItem>();
-  for (const it of items) {
-    const key = mergeKeyOf(it);
-    const existing = mergedMap.get(key);
-    if (!existing) {
-      mergedMap.set(key, {
-        ...it,
-        qty: Number(it.qty) || 0,
-        lineTotal: round2(parseMoney(it.lineTotal)),
-        discount: round2(parseMoney(it.discount || 0)),
-        barcodes: it.barcodes ? [...it.barcodes] : undefined,
+      items.push({
+        name: safeString(p?.productName || p?.product_name || p?.name || 'Item'),
+        variant: safeString(p?.size || p?.variant || ''),
+        qty,
+        unitPrice,
+        discount,
+        lineTotal,
+        barcodes,
       });
-      continue;
     }
-
-    existing.qty = round2((Number(existing.qty) || 0) + (Number(it.qty) || 0));
-    existing.lineTotal = round2(parseMoney(existing.lineTotal) + parseMoney(it.lineTotal));
-    existing.discount = round2(parseMoney(existing.discount || 0) + parseMoney(it.discount || 0));
-
-    const mergedBC = uniqNonEmpty([...(existing.barcodes || []), ...((it.barcodes || []) as string[])]);
-    existing.barcodes = mergedBC.length ? mergedBC : undefined;
   }
 
-  const mergedItems = Array.from(mergedMap.values()).map((it) => {
-    const qty = Number(it.qty) || 0;
-    const line = round2(parseMoney(it.lineTotal));
-    const unit = qty > 0 ? round2(line / qty) : round2(parseMoney(it.unitPrice));
-    return {
-      ...it,
-      qty,
-      unitPrice: unit,
-      lineTotal: line,
-      discount: round2(parseMoney(it.discount || 0)),
-    };
-  });
+  // Backend order style: order.items
+  if (items.length === 0 && Array.isArray(order?.items)) {
+    for (const it of order.items) {
+      const qty = Number(it?.quantity ?? it?.qty ?? 0) || 0;
+      const unitPrice = parseMoney(it?.unit_price ?? it?.price ?? it?.unitPrice);
+      const discount = parseMoney(it?.discount_amount ?? it?.discount ?? 0);
+      const lineTotal =
+        parseMoney(it?.total_amount ?? it?.amount ?? it?.lineTotal) || Math.max(0, qty * unitPrice - discount);
+      const barcodes = it?.barcode ? [String(it.barcode)] : undefined;
 
-  // Keep original declaration name used below
-  const finalItems = mergedItems;
+      items.push({
+        name: safeString(it?.product_name || it?.productName || it?.name || 'Item'),
+        variant: safeString(it?.size || it?.variant || ''),
+        qty,
+        unitPrice,
+        discount,
+        lineTotal,
+        barcodes,
+      });
+    }
+  }
 
   // Totals
-  const itemsSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
-  const itemsDiscount = finalItems.reduce((s, i) => s + parseMoney(i.discount), 0);
-
-  const subtotalRaw =
+  const subtotal =
     parseMoney(order?.amounts?.subtotal) ||
     parseMoney(order?.subtotal_amount) ||
     parseMoney(order?.subtotal) ||
-    parseMoney(order?.subtotal_including_tax);
-
-  const subtotal = subtotalRaw > 0 ? subtotalRaw : itemsSubtotal;
+    items.reduce((s, i) => s + i.lineTotal, 0);
 
   const discount =
     parseMoney(order?.amounts?.totalDiscount) ||
     parseMoney(order?.discount_amount) ||
     parseMoney(order?.discount) ||
-    parseMoney(order?.total_discount) ||
-    itemsDiscount ||
     0;
 
-  const tax =
-    parseMoney(order?.amounts?.vat) ||
-    parseMoney(order?.amounts?.tax) ||
-    parseMoney(order?.tax_amount) ||
-    parseMoney(order?.vat_amount) ||
-    parseMoney(order?.vat) ||
-    0;
-
+  const tax = parseMoney(order?.amounts?.vat) || parseMoney(order?.tax_amount) || 0;
   const shipping =
     parseMoney(order?.amounts?.transportCost) ||
-    parseMoney(order?.amounts?.shipping) ||
     parseMoney(order?.shipping_amount) ||
     parseMoney(order?.shipping) ||
     0;
@@ -439,39 +243,42 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const total =
     parseMoney(order?.amounts?.total) ||
     parseMoney(order?.total_amount) ||
-    parseMoney(order?.grand_total) ||
-    Math.max(0, subtotal - discount + tax + shipping);
+    (subtotal - discount + tax + shipping);
 
   const paid =
     parseMoney(order?.payments?.paid) ||
     parseMoney(order?.payments?.totalPaid) ||
     parseMoney(order?.paid_amount) ||
-    parseMoney(order?.amounts?.paid) ||
-    (Array.isArray(order?.payments) ? (order.payments as any[]).reduce((s, p) => s + parseMoney(p?.amount), 0) : 0);
+    (Array.isArray(order?.payments)
+      ? (order.payments as any[]).reduce((s, p) => s + parseMoney(p?.amount), 0)
+      : 0);
 
   const due =
     parseMoney(order?.payments?.due) ||
     parseMoney(order?.outstanding_amount) ||
-    parseMoney(order?.amounts?.due) ||
     Math.max(0, total - paid);
 
-  const notes = safeString(order?.notes);
+  const change = Math.max(0, paid - total);
 
-  const explicitChange = parseMoney(order?.change_amount) || parseMoney(order?.changeAmount) || parseMoney(order?.change) || 0;
-  const noteChange = changeFromNotes(notes);
-  const overpayChange = Math.max(0, paid - total);
-  const change = Math.max(explicitChange, noteChange, overpayChange);
+  const notes = safeString(order?.notes);
 
   return {
     id,
     orderNo,
     dateTime,
     storeName,
+    storeAddress,
+    storePhone,
     salesBy,
     customerName,
     customerPhone,
     customerAddressLines,
-    items: finalItems,
+    orderType,
+    orderTypeLabel,
+    paymentMethod,
+    paymentStatus,
+    intendedCourier,
+    items,
     totals: {
       subtotal,
       discount,

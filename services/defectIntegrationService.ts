@@ -738,7 +738,7 @@ async sellDefectiveProduct(data: {
           ),
           payment_type: 'full',
         },
-        notes: `EXCHANGE TRACE:\nOriginal Order: ${exchangeData.return_data.order_id}\nReturn: ${returnResult.return_number}\nItems: ${exchangeData.return_data.selected_barcodes.join(', ')}`,
+        notes: `Exchange - Original return: ${returnResult.return_number}`,
       });
 
       await orderService.complete(newOrder.id);

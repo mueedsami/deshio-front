@@ -45,28 +45,6 @@ const normalizeKey = (item: any): string => {
   return `${productId}::${batchId}`;
 };
 
-const normalizeShippingPayload = (addr: any) => {
-  if (!addr || typeof addr !== 'object') return {};
-  const normalized = { ...addr };
-
-  // 1. address_line1 is mandatory
-  if (!normalized.address_line1) {
-    normalized.address_line1 = normalized.street || normalized.address || normalized.address_line_1 || '';
-  }
-
-  // 2. city is mandatory
-  if (!normalized.city) {
-    normalized.city = 'Dhaka'; // Default domestic fallback
-  }
-
-  // 3. country is mandatory
-  if (!normalized.country) {
-    normalized.country = 'Bangladesh'; // Default domestic fallback
-  }
-
-  return normalized;
-};
-
 export default function AmountDetailsPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -141,25 +119,17 @@ export default function AmountDetailsPage() {
       // ignore bad session data
     }
 
-    const processedItems = (parsedOrder.items || []).map((item: any) => ({
-      ...item,
-      amount: calculateItemAmount(item),
-    }));
+    if (parsedOrder.items) {
+      parsedOrder.items = parsedOrder.items.map((item: any) => ({
+        ...item,
+        amount: calculateItemAmount(item),
+      }));
 
-    const processedServices = (parsedOrder.services || []).map((svc: any) => ({
-      ...svc,
-      amount: calculateItemAmount(svc),
-    }));
-
-    parsedOrder.items = processedItems;
-    parsedOrder.services = processedServices;
-
-    // Always rebuild subtotal from line totals. Product/item discounts are already
-    // deducted in calculateItemAmount(), so this is the NET item subtotal.
-    // This prevents stale/gross subtotal from making the order total wrong.
-    const itemSubtotal = processedItems.reduce((sum: number, item: any) => sum + item.amount, 0);
-    const serviceSubtotal = processedServices.reduce((sum: number, svc: any) => sum + svc.amount, 0);
-    parsedOrder.subtotal = itemSubtotal + serviceSubtotal;
+      // Always rebuild subtotal from line totals. Product/item discounts are already
+      // deducted in calculateItemAmount(), so this is the NET item subtotal.
+      // This prevents stale/gross subtotal from making the order total wrong.
+      parsedOrder.subtotal = parsedOrder.items.reduce((sum: number, item: any) => sum + calculateItemAmount(item), 0);
+    }
 
     setOrderData(parsedOrder);
     setTransportCost(String(parseNumber(parsedOrder.shipping_amount ?? parsedOrder.shippingAmount ?? 0)));
@@ -195,21 +165,13 @@ export default function AmountDetailsPage() {
   }, [orderData]);
 
   const itemDiscountTotal = useMemo(() => {
-    const itemDisc = (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
-    const serviceDisc = (orderData?.services || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
-    return itemDisc + serviceDisc;
+    return (orderData?.items || []).reduce((sum: number, it: any) => sum + parseNumber(it?.discount_amount), 0);
   }, [orderData]);
-
   const grossSubtotal = useMemo(() => {
-    const itemGross = (orderData?.items || []).reduce((sum: number, it: any) => {
+    return (orderData?.items || []).reduce((sum: number, it: any) => {
       return sum + parseNumber(it?.unit_price) * (parseNumber(it?.quantity) || 1);
     }, 0);
-    const serviceGross = (orderData?.services || []).reduce((sum: number, it: any) => {
-      return sum + parseNumber(it?.unit_price) * (parseNumber(it?.quantity) || 1);
-    }, 0);
-    return itemGross + serviceGross;
   }, [orderData]);
-
   const subtotal = useMemo(() => Math.max(0, grossSubtotal - itemDiscountTotal), [grossSubtotal, itemDiscountTotal]);
   const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
@@ -347,8 +309,7 @@ export default function AmountDetailsPage() {
 
       const effectiveEditOrderId = Number(orderData?.editOrderId || editContextOrderId || 0) || null;
       const isEditMode = !!effectiveEditOrderId;
-      const rawShipping = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
-      const shippingPayload = normalizeShippingPayload(rawShipping);
+      const shippingPayload = orderData.shipping_address || orderData.delivery_address || orderData.deliveryAddress || {};
 
       const itemPayloads = (orderData.items || []).map((item: any) => ({
         id: item.id ?? null,
@@ -375,7 +336,6 @@ export default function AmountDetailsPage() {
           shipping_address: shippingPayload,
           discount_amount: orderDiscount,
           shipping_amount: transport,
-          services: orderData.services || [],
           ...(String(orderData.notes || '').trim() ? { notes: String(orderData.notes).trim() } : {}),
         };
 
@@ -793,64 +753,32 @@ export default function AmountDetailsPage() {
                   </div>
 
                   {/* Products */}
-                  {Array.isArray(orderData.items) && orderData.items.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
-                        Products ({orderData.items.length})
-                      </p>
-                      <div className="space-y-2 max-h-64 overflow-y-auto">
-                        {orderData.items.map((item: any, idx: number) => {
-                          const itemAmount = calculateItemAmount(item);
-                          return (
-                            <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-gray-50 dark:bg-gray-700">
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
-                                <p className="text-xs text-gray-600 dark:text-gray-400">
-                                  Qty: {item.quantity} × ৳{parseNumber(item.unit_price).toFixed(2)}
+                  <div className="mb-4">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                      Products ({orderData.items?.length || 0})
+                    </p>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {orderData.items?.map((item: any, idx: number) => {
+                        const itemAmount = calculateItemAmount(item);
+                        return (
+                          <div key={idx} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-gray-50 dark:bg-gray-700">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm text-gray-900 dark:text-white truncate">{item.productName || `Product #${item.product_id}`}</p>
+                              <p className="text-xs text-gray-600 dark:text-gray-400">
+                                Qty: {item.quantity} × ৳{parseNumber(item.unit_price).toFixed(2)}
+                              </p>
+                              {parseNumber(item.discount_amount) > 0 && (
+                                <p className="text-xs text-red-600 dark:text-red-400">
+                                  Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
                                 </p>
-                                {parseNumber(item.discount_amount) > 0 && (
-                                  <p className="text-xs text-red-600 dark:text-red-400">
-                                    Discount: -৳{parseNumber(item.discount_amount).toFixed(2)}
-                                  </p>
-                                )}
-                              </div>
-                              <p className="text-sm font-medium text-gray-900 dark:text-white sm:ml-2 self-end sm:self-auto">৳{itemAmount.toFixed(2)}</p>
+                              )}
                             </div>
-                          );
-                        })}
-                      </div>
+                            <p className="text-sm font-medium text-gray-900 dark:text-white sm:ml-2 self-end sm:self-auto">৳{itemAmount.toFixed(2)}</p>
+                          </div>
+                        );
+                      })}
                     </div>
-                  )}
-
-                  {/* Services */}
-                  {Array.isArray(orderData.services) && orderData.services.length > 0 && (
-                    <div className="mb-4">
-                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-3">
-                        Services ({orderData.services.length})
-                      </p>
-                      <div className="space-y-2 max-h-64 overflow-y-auto">
-                        {orderData.services.map((svc: any, idx: number) => {
-                          const svcAmount = calculateItemAmount(svc);
-                          return (
-                            <div key={`svc-${idx}`} className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-2 p-2 rounded bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800">
-                              <div className="min-w-0 flex-1">
-                                <p className="text-sm text-indigo-900 dark:text-indigo-100 font-medium truncate">{svc.service_name || svc.productName || 'Service'}</p>
-                                <p className="text-xs text-indigo-700 dark:text-indigo-300">
-                                  Qty: {svc.quantity} × ৳{parseNumber(svc.unit_price).toFixed(2)}
-                                </p>
-                                {parseNumber(svc.discount_amount) > 0 && (
-                                  <p className="text-xs text-red-600 dark:text-red-400">
-                                    Discount: -৳{parseNumber(svc.discount_amount).toFixed(2)}
-                                  </p>
-                                )}
-                              </div>
-                              <p className="text-sm font-medium text-indigo-900 dark:text-indigo-100 sm:ml-2 self-end sm:self-auto">৳{svcAmount.toFixed(2)}</p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                  </div>
 
                   {/* Totals */}
                   <div className="pt-3 border-t border-gray-200 dark:border-gray-700">

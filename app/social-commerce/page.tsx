@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Eye, FileText } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -280,55 +280,6 @@ export default function SocialCommercePage() {
     if (typeof window === 'undefined') return;
     sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
     localStorage.removeItem('social_commerce_queue');
-  };
-
-  const handleResetAll = () => {
-    if (typeof window === 'undefined') return;
-    if (!confirm('Are you sure you want to clear all data and start a new order? This will remove all items from cart and clear customer details.')) return;
-
-    // Clear all session storage related to SC
-    sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
-    sessionStorage.removeItem(SC_SELECTION_QUEUE_KEY);
-    sessionStorage.removeItem(SC_EDIT_PREFILL_KEY);
-    sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
-    localStorage.removeItem('social_commerce_queue'); 
-    sessionStorage.removeItem('pendingOrder');
-
-    // Reset local states
-    setEditOrderId(null);
-    setEditOrderNumber(null);
-    setStagingQueue([]);
-    setDate(getTodayDate());
-    setSalesBy('');
-    setUserName('');
-    setUserEmail('');
-    setUserPhone('');
-    setSocialId('');
-    setOrderNotes('');
-    setIsInternational(false);
-    setPathaoCityId('');
-    setPathaoZoneId('');
-    setPathaoAreaId('');
-    setStreetAddress('');
-    setPostalCode('');
-    setCountry('');
-    setState('');
-    setInternationalCity('');
-    setInternationalPostalCode('');
-    setDeliveryAddress('');
-    setCart([]);
-    setSearchQuery('');
-    setMinPrice('');
-    setMaxPrice('');
-    setExactPrice('');
-    setSearchResults([]);
-    setSelectedProduct(null);
-    setExistingCustomer(null);
-    setRecentOrders([]);
-    setLastOrderInfo(null);
-    setDefectiveProduct(null);
-
-    showToast('All data cleared. You can start a new order.', 'success');
   };
 
   const formatOrderDateTime = (v?: any) => {
@@ -812,7 +763,10 @@ export default function SocialCommercePage() {
 
   const normalizeQtyForProduct = (product: any, rawQty: any) => {
     const parsedQty = Math.max(1, Math.floor(Number(rawQty) || 1));
-    return parsedQty; // Remove hard-cap to allow flexible manual entry
+    if (product?.isDefective) return parsedQty;
+    const available = Math.max(0, Number(product?.available ?? 0) || 0);
+    if (available <= 0) return 1;
+    return Math.min(parsedQty, available);
   };
 
   const buildStagingItem = (product: any, overrides: Partial<StagingItem> = {}): StagingItem => {
@@ -849,22 +803,16 @@ export default function SocialCommercePage() {
         const baseAmount = getProductUnitPrice(item.product) * quantity;
 
         if (mode === 'finalAmount') {
-          const rawInput = changes.amount !== undefined ? String(changes.amount) : item.amount;
-          const rawAmount = Number(rawInput.replace(/[^0-9.-]/g, ''));
-          const finalAmount = Number.isFinite(rawAmount) ? Math.max(0, rawAmount) : baseAmount;
-          const discountValue = baseAmount - finalAmount;
-
-          // Reverse-calculate discountPercent so the discount persists during quantity changes
-          const calculatedDiscountPercent = (baseAmount > 0 && discountValue > 0) 
-            ? ((discountValue / baseAmount) * 100).toFixed(2) 
-            : '';
+          const rawAmount = Number(String(changes.amount ?? item.amount).replace(/[^0-9.-]/g, ''));
+          const finalAmount = Number.isFinite(rawAmount) ? Math.min(baseAmount, Math.max(0, rawAmount)) : baseAmount;
+          const discountValue = Math.max(0, baseAmount - finalAmount);
 
           return {
             ...item,
             quantity,
-            discountPercent: calculatedDiscountPercent,
-            discountTk: '',
-            amount: rawInput, // Preserve the exact string user types (to allow decimals like "100.")
+            discountPercent: '',
+            discountTk: discountValue ? discountValue.toFixed(2) : '0',
+            amount: finalAmount.toFixed(2),
           };
         }
 
@@ -978,10 +926,9 @@ export default function SocialCommercePage() {
         return;
       }
 
-      // Otherwise, check if it's explicitly international
-      const isActuallyIntl = !!(shipping?.country && String(shipping.country).toLowerCase() !== 'bangladesh');
-      
-      if (isActuallyIntl) {
+      // Otherwise, treat as international if fields exist
+      const hasInternational = !!shipping?.country || !!shipping?.state || !!shipping?.city;
+      if (hasInternational) {
         if (!isInternational) setIsInternational(true);
         if (!country && shipping?.country) setCountry(String(shipping.country));
         if (!state && shipping?.state) setState(String(shipping.state));
@@ -992,17 +939,6 @@ export default function SocialCommercePage() {
         if (!deliveryAddress && (shipping?.street || shipping?.address)) {
           setDeliveryAddress(String(shipping?.street || shipping?.address));
         }
-        setLastPrefilledOrderId(orderId);
-      } else {
-        // It's a domestic order without Pathao IDs (auto location)
-        if (isInternational) setIsInternational(false);
-        if (!streetAddress && (shipping?.street || shipping?.address)) {
-          setStreetAddress(String(shipping?.street || shipping?.address));
-        }
-        if (!postalCode && shipping?.postal_code) {
-          setPostalCode(String(shipping.postal_code));
-        }
-        setUsePathaoAutoLocation(true);
         setLastPrefilledOrderId(orderId);
       }
     } catch (e) {
@@ -1033,8 +969,8 @@ export default function SocialCommercePage() {
     }
 
     const lo: any = customerLookup.lastOrder;
-    const ros = Array.isArray(customerLookup.recentOrders)
-      ? (customerLookup.recentOrders as RecentOrder[])
+    const ros = Array.isArray((customerLookup as any)?.recentOrders)
+      ? ((customerLookup as any).recentOrders as RecentOrder[])
       : [];
     setRecentOrders(ros);
 
@@ -1063,7 +999,7 @@ export default function SocialCommercePage() {
       prefillDeliveryFromOrder(Number(lo.last_order_id));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customerLookup.customer, customerLookup.lastOrder, customerLookup.recentOrders, customerLookup.loading, customerLookup.error]);
+  }, [customerLookup.customer, customerLookup.lastOrder, (customerLookup as any).recentOrders, customerLookup.loading, customerLookup.error]);
 
   // 🖼️ Warm cache: thumbnails for items in the recent orders list
   useEffect(() => {
@@ -1855,11 +1791,10 @@ export default function SocialCommercePage() {
         ? {
             name: userName,
             phone: cleanPhone,
-            address_line1: deliveryAddress,
             street: deliveryAddress,
             city: internationalCity,
             state: state || undefined,
-            country: country || 'Bangladesh',
+            country,
             postal_code: internationalPostalCode || undefined,
           }
         : (() => {
@@ -1867,10 +1802,7 @@ export default function SocialCommercePage() {
             const base: any = {
               name: userName,
               phone: cleanPhone,
-              address_line1: streetAddress,
               street: streetAddress,
-              city: cityObj?.city_name || 'Dhaka',
-              country: 'Bangladesh',
               postal_code: postalCode || undefined,
             };
 
@@ -1879,6 +1811,7 @@ export default function SocialCommercePage() {
               return {
                 ...base,
                 area: areaObj?.area_name || '',
+                city: cityObj?.city_name || '',
                 pathao_city_id: pathaoCityId ? Number(pathaoCityId) : undefined,
                 pathao_zone_id: pathaoZoneId ? Number(pathaoZoneId) : undefined,
                 pathao_area_id: pathaoAreaId ? Number(pathaoAreaId) : undefined,
@@ -1938,7 +1871,10 @@ export default function SocialCommercePage() {
             category: item.serviceCategory,
           })),
         shipping_amount: 0,
-        notes: orderNotes?.trim() || '',
+        notes: [
+          orderNotes?.trim(),
+          `Social Commerce. ${socialId ? `ID: ${socialId}. ` : ''}${isInternational ? 'International' : 'Domestic'} delivery.`
+        ].filter(Boolean).join(' '),
       };
 
       sessionStorage.setItem(
@@ -1980,16 +1916,7 @@ export default function SocialCommercePage() {
           <main className="flex-1 overflow-auto p-4 md:p-6">
             <div className="max-w-7xl mx-auto">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4 md:mb-6">
-                <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-                  <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
-                  <button
-                    onClick={handleResetAll}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 dark:bg-red-900/10 dark:text-red-400 dark:border-red-800 transition-colors shadow-sm"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Reset Order / Clear All
-                  </button>
-                </div>
+                <h1 className="text-xl md:text-2xl font-semibold text-gray-900 dark:text-white">Social Commerce</h1>
 
                 {editOrderId && (
                   <div className="w-full flex items-center gap-2 px-4 py-2.5 bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700 rounded-lg">
@@ -2558,7 +2485,7 @@ export default function SocialCommercePage() {
                         type="button"
                         onClick={() => {
                           saveDraftToSession();
-                          window.location.href = `/product/list?selectMode=true&mode=social_commerce&redirect=${encodeURIComponent('/social-commerce')}`;
+                          window.location.href = `/product/list?selectMode=true&redirect=${encodeURIComponent('/social-commerce')}`;
                         }}
                         disabled={!selectedStore}
                         className="px-3 py-1.5 text-xs font-semibold rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2739,18 +2666,12 @@ export default function SocialCommercePage() {
                                   <div>
                                     <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Sell At / Final Amount</label>
                                     <input
-                                      type="text"
-                                      inputMode="decimal"
+                                      type="number"
+                                      min="0"
+                                      step="0.01"
                                       value={s.amount}
                                       onChange={(e) => updateStagingItem(s.id, { amount: e.target.value }, 'finalAmount')}
-                                      onBlur={() => {
-                                        // Format nicely on blur
-                                        const n = parseFloat(s.amount);
-                                        if (!isNaN(n)) {
-                                          updateStagingItem(s.id, { amount: n.toFixed(2) }, 'finalAmount');
-                                        }
-                                      }}
-                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                                      className="w-full px-2 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                                     />
                                   </div>
                                 </div>

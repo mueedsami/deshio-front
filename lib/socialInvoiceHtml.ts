@@ -1,5 +1,8 @@
 // lib/socialInvoiceHtml.ts
-// Social commerce invoice (A5 / Half A4), clean two-column header and compact items table.
+// Social commerce invoice (A5 / Half A4), cleaner print-first layout.
+// - Includes Delivery Fee
+// - No VAT row
+// - Invoice No = part after 'ORD' prefix from Order No
 
 import { normalizeOrderForReceipt } from '@/lib/receipt';
 
@@ -24,14 +27,12 @@ function invoiceNoFromOrderNo(orderNo?: string) {
   return inv || String(orderNo).trim();
 }
 
-function paymentStatus(total: number, paid: number, due: number) {
-  if (due <= 0 && total > 0) return 'Paid';
-  if (paid > 0 && due > 0) return 'Partial';
-  return 'Due';
-}
-
-function compactAddress(lines: string[]) {
-  return lines.filter(Boolean).join('<br/>');
+function fmtDate(iso?: string) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const pad = (x: number) => String(x).padStart(2, '0');
+  return `${pad(d.getDate())}-${d.toLocaleString('en-US', { month: 'short' })}-${d.getFullYear()}`;
 }
 
 function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
@@ -41,137 +42,58 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
   <meta charset="utf-8" />
   <title>${escapeHtml(title)}</title>
   <style>
-    @page { size: A5 portrait; margin: 8mm; }
+    @page { size: A5; margin: 10mm; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; }
-    body {
-      font-family: Arial, Helvetica, sans-serif;
-      color: #111827;
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
+    html, body { margin: 0; padding: 0; background: #fff; color:#111827; }
+    body { font-family: Inter, Arial, Helvetica, sans-serif; }
+    .page { padding: 0; }
+    .top { display:flex; justify-content:space-between; gap: 14px; align-items:flex-start; }
+    .invoiceTitle { font-size: 26px; font-weight: 900; letter-spacing: 0.08em; margin: 0; }
+    .subtle { color:#6b7280; }
+    .tag { display:inline-flex; align-items:center; min-height: 28px; padding: 6px 12px; border-radius: 999px; border: 1px solid #d1d5db; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    .company {
+      border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px 14px; text-align: right; min-width: 235px;
+      background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
     }
-    .page { width: 100%; }
-    .topRow {
-      display: grid;
-      grid-template-columns: 1fr 1.15fr;
-      gap: 12px;
-      align-items: start;
-      margin-bottom: 8px;
-    }
-    .brandBlock { padding-top: 2px; }
-    .brandLine {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 4px;
-    }
-    .logo {
-      max-height: 30px;
-      max-width: 108px;
-      object-fit: contain;
-      display: block;
-    }
-    .brandText {
-      font-size: 16px;
-      font-weight: 800;
-      color: #ea580c;
-      letter-spacing: 0.2px;
-      line-height: 1;
-    }
-    .title { margin: 6px 0 0; font-size: 17px; font-weight: 800; letter-spacing: 0.8px; }
-    .subtitle { margin-top: 2px; font-size: 10px; color: #6b7280; }
-    .seller {
-      border: 1px solid #d1d5db;
-      border-radius: 10px;
-      padding: 8px 10px;
-      min-height: 72px;
-    }
-    .sellerTitle, .sectionTitle {
-      font-size: 11px;
-      font-weight: 700;
-      margin: 0 0 5px;
-      color: #111827;
-    }
-    .sellerBody, .bodyText {
-      font-size: 11px;
-      line-height: 1.36;
-      color: #1f2937;
-    }
-    .infoGrid {
-      display: grid;
-      grid-template-columns: 1.35fr 0.9fr;
-      gap: 8px;
-      margin-bottom: 8px;
-      align-items: start;
-    }
-    .stack { display: grid; gap: 8px; }
-    .box {
-      border: 1px solid #d1d5db;
-      border-radius: 10px;
-      padding: 8px 10px;
-    }
-    .metaRow {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 1px 0;
-      font-size: 11px;
-    }
-    .metaLabel { color: #6b7280; }
-    .metaValue { font-weight: 700; text-align: right; }
-    table { width: 100%; border-collapse: collapse; margin-top: 2px; font-size: 11px; }
-    th {
-      text-align: left;
-      font-size: 10.5px;
-      color: #374151;
-      font-weight: 700;
-      padding: 7px 6px;
-      border-bottom: 1px solid #111827;
-    }
-    td {
-      padding: 7px 6px;
-      border-bottom: 1px solid #e5e7eb;
-      vertical-align: top;
-    }
-    .right { text-align: right; }
-    .muted { color: #6b7280; }
-    .qtyBadge {
-      display: inline-block;
-      min-width: 30px;
-      text-align: center;
-      border: 1px solid #d1d5db;
-      border-radius: 999px;
-      padding: 1px 8px;
-      font-weight: 700;
-    }
-    .totalsWrap { width: 48%; margin-left: auto; margin-top: 8px; }
-    .totalsWrap table { margin-top: 0; }
-    .totalsWrap td { border-bottom: none; padding: 3px 4px; }
-    .totalsWrap tr.grand td {
-      border-top: 1px solid #111827;
-      padding-top: 6px;
-      font-weight: 800;
-    }
-    .footer { margin-top: 8px; text-align: center; font-size: 10px; color: #6b7280; }
+    .company .name { font-size: 20px; font-weight: 900; margin: 0; }
+    .company .line { margin-top: 4px; font-size: 11px; color:#4b5563; line-height: 1.4; }
+    .spacer { height: 12px; }
+    .row { display:grid; grid-template-columns: 1.15fr 0.85fr; gap: 12px; }
+    .box { border: 1px solid #e5e7eb; border-radius: 14px; padding: 12px; }
+    .sectionTitle { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .08em; color:#6b7280; margin: 0 0 8px; }
+    .billName { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+    .addr { font-size: 12px; line-height: 1.45; color:#111827; }
+    .metaGrid { display:grid; grid-template-columns: 1fr auto; gap: 8px 12px; font-size: 12px; }
+    .metaGrid .k { color:#6b7280; }
+    .metaGrid .v { text-align:right; font-weight: 700; }
+    table { width:100%; border-collapse: collapse; margin-top: 12px; font-size: 12px; }
+    th { text-align:left; padding: 9px 8px; border-bottom: 1px solid #111827; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+    td { padding: 9px 8px; border-bottom: 1px solid #eef2f7; vertical-align: top; }
+    .right { text-align:right; }
+    .itemTitle { font-weight: 700; }
+    .itemSub { font-size: 11px; color:#6b7280; margin-top: 2px; }
+    .summaryArea { display:grid; grid-template-columns: 1fr 240px; gap: 14px; align-items:start; margin-top: 12px; }
+    .paymentCard { border: 1px dashed #cbd5e1; border-radius: 14px; padding: 12px; background: #f8fafc; }
+    .paymentCard .big { font-size: 18px; font-weight: 900; margin-top: 4px; }
+    .totals { width:100%; border-collapse: collapse; }
+    .totals td { border: none; padding: 5px 0; font-size: 12px; }
+    .totals tr:last-child td { border-top: 1px solid #111827; padding-top: 8px; font-weight: 800; }
+    .footer { margin-top: 16px; font-size: 10.5px; color:#6b7280; text-align:center; }
     ${opts?.embed ? 'html,body{height:100%;}' : ''}
   </style>
 </head>
 <body>
-${inner}
+  <div class="page">${inner}</div>
 </body>
 </html>`;
 }
 
-function companyInfoBlock() {
+function companyInfoBlock(r: any) {
   return `
-    <div class="seller">
-      <div class="sellerTitle">Seller</div>
-      <div class="sellerBody">
-        <b>Deshio-দেশীয়</b><br/>
-        House: 4, Road: 1, Dhaka Housing, Adabor, Mohammadpur, Dhaka-1207.<br/>
-        Mobile: 01711-585400<br/>
-        BIN: 007243936-0402
-      </div>
+    <div class="company">
+      <div class="name">${escapeHtml(r.storeName || 'Errum BD')}</div>
+      <div class="line">${escapeHtml(r.storeAddress || '')}</div>
+      <div class="line">Mobile: ${escapeHtml(r.storePhone || '')}</div>
     </div>
   `;
 }
@@ -180,97 +102,110 @@ function render(order: any) {
   const r = normalizeOrderForReceipt(order);
   const orderNo = r.orderNo || '';
   const invNo = invoiceNoFromOrderNo(orderNo);
+  const date = fmtDate(r.dateTime);
+
   const sub = Number(r.totals?.subtotal ?? 0);
   const disc = Number(r.totals?.discount ?? 0);
   const delivery = Number(r.totals?.shipping ?? 0);
   const grand = Number(r.totals?.total ?? Math.max(0, sub - disc + delivery));
+  const due = Number(r.totals?.due ?? 0);
   const paid = Number(r.totals?.paid ?? 0);
-  const due = Number(r.totals?.due ?? Math.max(0, grand - paid));
-  const status = paymentStatus(grand, paid, due);
 
-  const customerAddress = compactAddress(r.customerAddressLines || []);
-  const noteText = escapeHtml(r.notes || '').replace(/\n/g, '<br/>');
+  const billToLines = [
+    r.customerName ? `<div class="billName">${escapeHtml(r.customerName)}</div>` : '<div class="billName">Customer</div>',
+    r.customerPhone ? `Phone: ${escapeHtml(r.customerPhone)}` : '',
+    ...(r.customerAddressLines || []).map((x: string) => escapeHtml(x)),
+  ].filter(Boolean);
 
   const items = (r.items || []).map((it: any, i: number) => {
-    const desc = [it.name, it.variant].filter(Boolean).join(' - ');
+    const desc = escapeHtml(it.name || 'Item');
+    const subline = it.variant ? `<div class="itemSub">${escapeHtml(it.variant)}</div>` : '';
     return `
       <tr>
-        <td class="right">${i + 1}</td>
-        <td>${escapeHtml(desc)}</td>
-        <td class="right"><span class="qtyBadge">${escapeHtml(it.qty)}</span></td>
+        <td class="right" style="width:38px;">${i + 1}</td>
+        <td>
+          <div class="itemTitle">${desc}</div>
+          ${subline}
+        </td>
+        <td class="right" style="width:56px;">${escapeHtml(it.qty)}</td>
+        <td class="right" style="width:88px;">${escapeHtml(money(it.unitPrice))}</td>
+        <td class="right" style="width:96px;">${escapeHtml(money(it.lineTotal))}</td>
       </tr>
     `;
   }).join('');
 
+  const paymentLabel = due > 0 ? (paid > 0 ? 'Partial Advance' : 'Cash on Delivery') : 'Fully Paid';
+  const paymentAmount = due > 0 ? due : grand;
+
   return `
-    <div class="page">
-      <div class="topRow">
-        <div class="brandBlock">
-          <div class="brandLine">
-            <img class="logo" src="/logo.png" alt="Logo" />
-            <div class="brandText">দেশীয়</div>
-          </div>
-          <h1 class="title">INVOICE</h1>
-          <div class="subtitle">Social Commerce Order</div>
-        </div>
-        ${companyInfoBlock()}
+    <div class="top">
+      <div>
+        <h1 class="invoiceTitle">INVOICE</h1>
+        <div class="subtle" style="margin-top:4px; font-size:12px;">Social Commerce Order Document</div>
+        <div style="margin-top:10px;"><span class="tag">${escapeHtml(paymentLabel)}</span></div>
+      </div>
+      ${companyInfoBlock(r)}
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="row">
+      <div class="box">
+        <div class="sectionTitle">Bill To</div>
+        <div class="addr">${billToLines.join('<br/>')}</div>
       </div>
 
-      <div class="infoGrid">
-        <div class="stack">
-          <div class="box">
-            <div class="sectionTitle">Bill To</div>
-            <div class="bodyText">
-              ${r.customerName ? `<b>${escapeHtml(r.customerName)}</b><br/>` : ''}
-              ${r.customerPhone ? `Phone: ${escapeHtml(r.customerPhone)}<br/>` : ''}
-              ${customerAddress || '<span class="muted">No address provided</span>'}
-            </div>
-          </div>
-
-          ${noteText ? `
-            <div class="box">
-              <div class="sectionTitle">Order Notes</div>
-              <div class="bodyText">${noteText}</div>
-            </div>
-          ` : ''}
-        </div>
-
-        <div class="box">
-          <div class="sectionTitle">Invoice Details</div>
-          <div class="metaRow"><span class="metaLabel">Invoice No</span><span class="metaValue">${escapeHtml(invNo)}</span></div>
-          <div class="metaRow"><span class="metaLabel">Order No</span><span class="metaValue">${escapeHtml(orderNo)}</span></div>
-          <div class="metaRow"><span class="metaLabel">Status</span><span class="metaValue">${escapeHtml(status)}</span></div>
-          ${disc > 0 ? `<div class="metaRow"><span class="metaLabel">Discount</span><span class="metaValue">-৳${escapeHtml(money(disc))}</span></div>` : ''}
-          <div class="metaRow"><span class="metaLabel">Paid Amount</span><span class="metaValue">৳${escapeHtml(money(paid))}</span></div>
-          <div class="metaRow"><span class="metaLabel">Due Amount</span><span class="metaValue">৳${escapeHtml(money(due))}</span></div>
+      <div class="box">
+        <div class="sectionTitle">Invoice Details</div>
+        <div class="metaGrid">
+          <div class="k">Invoice No</div><div class="v">${escapeHtml(invNo)}</div>
+          <div class="k">Order No</div><div class="v">${escapeHtml(orderNo)}</div>
+          <div class="k">Date</div><div class="v">${escapeHtml(date)}</div>
+          ${r.orderTypeLabel || r.orderType ? `<div class="k">Order Type</div><div class="v">${escapeHtml(r.orderTypeLabel || r.orderType || '')}</div>` : ''}
+          ${r.paymentStatus ? `<div class="k">Payment Status</div><div class="v">${escapeHtml(r.paymentStatus)}</div>` : ''}
+          ${r.storeName ? `<div class="k">Store</div><div class="v">${escapeHtml(r.storeName)}</div>` : ''}
         </div>
       </div>
+    </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th style="width: 30px;" class="right">#</th>
-            <th>Item</th>
-            <th style="width: 56px;" class="right">Qty</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${items || `<tr><td colspan="3" class="muted">No items</td></tr>`}
-        </tbody>
-      </table>
+    <table>
+      <thead>
+        <tr>
+          <th class="right">#</th>
+          <th>Item</th>
+          <th class="right">Qty</th>
+          <th class="right">Unit</th>
+          <th class="right">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items || `<tr><td colspan="5" class="subtle">No items</td></tr>`}
+      </tbody>
+    </table>
 
-      <div class="totalsWrap">
-        <table>
+    <div class="summaryArea">
+      <div class="paymentCard">
+        <div class="sectionTitle" style="margin-bottom:6px;">Collection Summary</div>
+        <div class="subtle" style="font-size:12px;">${due > 0 ? 'Amount to collect from customer upon delivery' : 'Amount already settled for this order'}</div>
+        <div class="big">৳${escapeHtml(money(paymentAmount))}</div>
+      </div>
+
+      <div class="box">
+        <table class="totals">
           <tbody>
             <tr><td>Subtotal</td><td class="right">${escapeHtml(money(sub))}</td></tr>
             <tr><td>Delivery Fee</td><td class="right">${escapeHtml(money(delivery))}</td></tr>
             ${disc > 0 ? `<tr><td>Discount</td><td class="right">-${escapeHtml(money(disc))}</td></tr>` : ''}
-            <tr class="grand"><td>Grand Total</td><td class="right">${escapeHtml(money(grand))}</td></tr>
+            ${paid > 0 ? `<tr><td>Paid</td><td class="right">${escapeHtml(money(paid))}</td></tr>` : ''}
+            ${due > 0 ? `<tr><td>Due</td><td class="right">${escapeHtml(money(due))}</td></tr>` : ''}
+            <tr><td>Grand Total</td><td class="right">${escapeHtml(money(grand))}</td></tr>
           </tbody>
         </table>
       </div>
+    </div>
 
-      <div class="footer">This is a computer-generated invoice. Please keep it for your records.</div>
+    <div class="footer">
+      This is a computer-generated invoice. Please keep it for your records.
     </div>
   `;
 }

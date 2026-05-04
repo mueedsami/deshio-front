@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import { MoreVertical, Edit, Trash2, Eye, Plus, Archive } from 'lucide-react';
@@ -19,8 +19,8 @@ interface ProductListItemProps {
   onAddVariation?: (group: ProductGroup) => void;
   onSelect?: (variant: ProductVariant) => void;
   selectable?: boolean;
-  stockFilter?: string;
 }
+
 export default function ProductListItem({
   productGroup,
   onDelete,
@@ -30,7 +30,6 @@ export default function ProductListItem({
   onAddVariation,
   onSelect,
   selectable,
-  stockFilter,
 }: ProductListItemProps) {
   const canEdit = typeof onEdit === 'function';
   const canDelete = typeof onDelete === 'function';
@@ -87,20 +86,8 @@ export default function ProductListItem({
     }
   };
 
-  const filteredVariants = useMemo(() => {
-    if (!stockFilter || stockFilter === 'all') return productGroup.variants;
-    return productGroup.variants.filter(v => {
-      const stock = Number(v.stockQuantity) || 0;
-      const online = Number(v.onlineStockQuantity) || 0;
-      if (stockFilter === 'in_stock') return stock > 0;
-      if (stockFilter === 'not_in_stock') return stock <= 0;
-      if (stockFilter === 'available_online') return online > 0;
-      return true;
-    });
-  }, [productGroup.variants, stockFilter]);
-
   // Group variants by color for display
-  const variantsByColor = filteredVariants.reduce((acc, variant) => {
+  const variantsByColor = productGroup.variants.reduce((acc, variant) => {
     const color = variant.color || 'na';
     if (!acc[color]) {
       acc[color] = [];
@@ -302,7 +289,7 @@ export default function ProductListItem({
         <div className="border-t border-gray-200 dark:border-gray-700 p-5 bg-gray-50 dark:bg-gray-900/50">
           <div className="flex items-center justify-between mb-4">
             <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-              Available Variations ({filteredVariants.length})
+              Available Variations ({productGroup.totalVariants})
             </h4>
             {canAddVariation && (
             <button

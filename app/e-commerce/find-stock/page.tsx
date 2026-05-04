@@ -1,7 +1,7 @@
 import FindStockClient from './FindStockClient';
 
 export const metadata = {
-  title: 'Find Stock - Deshio',
+  title: 'Find Stock - Errum',
   description: 'Scan product barcode to find stock details',
 };
 

@@ -273,53 +273,32 @@ export default function DispatchBarcodeScanModal({
     }
   };
 
-  const scanOneBarcode = async (value: string): Promise<number | null> => {
-    if (!dispatch) return null;
+  const scanOneBarcode = async (value: string) => {
+    if (!dispatch) return;
     const code = value.trim();
-    if (!code) return null;
+    if (!code) return;
 
     try {
       if (mode === 'send') {
-        // Normal dispatch scanning should scan against the selected dispatch item.
-        // Some backends also support scan-to-add, so keep that as a safe fallback
-        // when no item is selected or the item endpoint is unavailable.
-        let data: any = null;
-
-        if (selectedItemId) {
-          try {
-            const res = await dispatchService.scanBarcode(dispatch.id, selectedItemId, code);
-            data = unpackData(res);
-          } catch (scanErr: any) {
-            const status = scanErr?.response?.status;
-            if (status === 404 || status === 405) {
-              const res = await dispatchService.scanToAddItem(dispatch.id, code);
-              data = unpackData(res);
-            } else {
-              throw scanErr;
-            }
-          }
-        } else {
-          const res = await dispatchService.scanToAddItem(dispatch.id, code);
-          data = unpackData(res);
+        // In 'send' mode, we use scanToAddItem which is robust: 
+        // it finds the existing item or adds a new one if permitted by the backend.
+        const res = await dispatchService.scanToAddItem(dispatch.id, code);
+        const data = unpackData(res);
+        
+        // Update selection to the item that was just scanned/added
+        if (data?.dispatch_item_id) {
+          setSelectedItemId(Number(data.dispatch_item_id));
         }
-
-        const scannedItemId = Number(data?.dispatch_item_id ?? selectedItemId ?? 0) || null;
-        if (scannedItemId) {
-          setSelectedItemId(scannedItemId);
+        
+        // Signal that dispatch items might have changed
+        if (onComplete) onComplete();
+      } else {
+        if (!selectedItemId) {
+          throw new Error('Please select an item to receive');
         }
-
-        // Signal that dispatch items/progress might have changed.
-        onComplete?.();
-        playBeep('success');
-        return scannedItemId;
+        await dispatchService.receiveBarcode(dispatch.id, selectedItemId, code);
       }
-
-      if (!selectedItemId) {
-        throw new Error('Please select an item to receive');
-      }
-      await dispatchService.receiveBarcode(dispatch.id, selectedItemId, code);
       playBeep('success');
-      return selectedItemId;
     } catch (e: any) {
       playBeep('error');
       throw new Error(e?.response?.data?.message || e.message || 'Scan failed');
@@ -335,23 +314,18 @@ export default function DispatchBarcodeScanModal({
     setError(null);
 
     try {
-      let lastScannedItemId: number | null = null;
       while (scanQueueRef.current.length > 0) {
         const next = scanQueueRef.current.shift();
         if (!next) continue;
         scanQueueSetRef.current.delete(next);
         setQueuedScanCount(scanQueueRef.current.length);
         // eslint-disable-next-line no-await-in-loop
-        const itemIdAfterScan = await scanOneBarcode(next);
-        if (itemIdAfterScan) {
-          lastScannedItemId = itemIdAfterScan;
-        }
+        await scanOneBarcode(next);
       }
 
       setBarcode('');
-      const progressItemId = lastScannedItemId ?? selectedItemId;
-      if (progressItemId) {
-        await fetchProgress(progressItemId);
+      if (selectedItemId) {
+        await fetchProgress(selectedItemId);
       }
       onComplete?.();
 
@@ -370,10 +344,9 @@ export default function DispatchBarcodeScanModal({
     }
   };
 
-  const enqueueScan = (rawValue?: string) => {
-    if (!dispatch) return;
-    if (mode === 'receive' && !selectedItemId) return;
-    const value = (rawValue ?? barcode).trim();
+  const enqueueScan = () => {
+    if (!dispatch || !selectedItemId) return;
+    const value = barcode.trim();
     if (!value) return;
     if (scanQueueSetRef.current.has(value)) return;
     scanQueueRef.current.push(value);
@@ -571,20 +544,20 @@ export default function DispatchBarcodeScanModal({
                         // the browser would move focus away and subsequent scans go to the wrong field.
                         if (e.key === 'Enter' || e.key === 'Tab') {
                           e.preventDefault();
-                          enqueueScan(e.currentTarget.value);
+                          enqueueScan();
                           setTimeout(() => inputRef.current?.focus(), 0);
                         }
                       }}
                       placeholder={mode === 'send' ? 'Scan barcode to send…' : 'Scan received barcode…'}
                       className="w-full pl-10 pr-3 py-3 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      // Keep the input enabled while the API is processing. Real scanners can send
-                      // the next barcode immediately; disabling the field makes those scans vanish.
-                      disabled={false}
+                      // Do not lock the input even if item is complete, so staff can scan the next item
+                      // or use "Scan to Add" flow without manually switching items.
+                      disabled={loading}
                     />
                   </div>
                   <button
-                    onClick={() => enqueueScan()}
-                    disabled={!barcode.trim()}
+                    onClick={enqueueScan}
+                    disabled={loading || !barcode.trim()}
                     className={`px-4 py-3 rounded-lg text-white font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 ${
                       mode === 'send' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-green-600 hover:bg-green-700'
                     }`}
