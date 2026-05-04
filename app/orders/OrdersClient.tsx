@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTheme } from "@/contexts/ThemeContext";
-import { useAuth } from '@/contexts/AuthContext';
 import { useSearchParams } from 'next/navigation';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -32,6 +31,7 @@ import {
   CreditCard,
   RotateCcw,
   FileSpreadsheet,
+  AlertCircle,
 } from 'lucide-react';
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
@@ -313,8 +313,6 @@ type PathaoArea = { area_id: number; area_name: string };
 
 export default function OrdersDashboard() {
   const { darkMode, setDarkMode } = useTheme();
-  const { isRole } = useAuth();
-  const isBranchManager = isRole('branch-manager');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [orders, setOrders] = useState<Order[]>([]);
@@ -2142,7 +2140,9 @@ export default function OrdersDashboard() {
       alert('Please select at least one order to send to Pathao.');
       return;
     }
-    if (!confirm(`Send ${selectedOrders.size} order(s) to Pathao?`)) return;
+    
+    // Add informative direction about the 19 per 60 sec rate limit
+    if (!confirm(`Send ${selectedOrders.size} order(s) to Pathao?\n\nNote: Pathao API limits us to 19 orders per minute. This process will run in the background and evenly spread out the requests to avoid rate limits.`)) return;
 
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2163,108 +2163,21 @@ export default function OrdersDashboard() {
 
     try {
       const selectedOrdersList = orders.filter((o) => selectedOrders.has(o.id));
-      const shipmentIdsToSend: number[] = [];
+      const orderIdsToSend = selectedOrdersList.map(o => Number(o.id)).filter(id => !isNaN(id) && id > 0);
       const detailsBuffer: Array<{ orderId?: number; orderNumber?: string; status: 'success' | 'failed'; message: string }> = [];
 
-      for (let idx = 0; idx < selectedOrdersList.length; idx++) {
-        const order = selectedOrdersList[idx];
-        setPathaoProgress((prev) => ({ ...prev, current: idx + 1 }));
+      // Pass all order IDs directly to backend for queue processing
+      const started = await shipmentService.bulkSendOrdersToPathao(orderIdsToSend);
 
-        try {
-          let existingShipment: any = null;
-          try {
-            existingShipment = await shipmentService.getByOrderId(order.id);
-          } catch {
-            existingShipment = null;
-          }
-
-          if (existingShipment) {
-            if (existingShipment.pathao_consignment_id) {
-              failedCount++;
-              detailsBuffer.push({ orderId: order.id, orderNumber: order.orderNumber, status: 'failed', message: 'Already sent to Pathao' });
-              setPathaoProgress((prev) => ({ ...prev, failed: failedCount, details: [...prev.details, detailsBuffer[detailsBuffer.length - 1]] }));
-              continue;
-            }
-            shipmentIdsToSend.push(existingShipment.id);
-          } else {
-            const newShipment = await shipmentService.create({
-              order_id: order.id,
-              delivery_type: 'home_delivery',
-              package_weight: 1.0,
-              send_to_pathao: false,
-            });
-            shipmentIdsToSend.push(newShipment.id);
-          }
-        } catch (error: any) {
-          failedCount++;
-          const item = {
-            orderId: order.id,
-            orderNumber: order.orderNumber,
-            status: 'failed' as const,
-            message: error?.response?.data?.message || error.message || 'Failed',
-          };
-          detailsBuffer.push(item);
-          setPathaoProgress((prev) => ({ ...prev, failed: failedCount, details: [...prev.details, item] }));
-        }
-
-        await wait(250);
-      }
-
-      if (shipmentIdsToSend.length === 0) {
-        setPathaoProgress((prev) => ({
-          ...prev,
-          current: prev.total,
-          success: successCount,
-          failed: failedCount,
-          batchStatus: 'completed',
-        }));
-
-        alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
-        setSelectedOrders(new Set());
-        await loadOrders();
-        return;
-      }
-
-      // Start queue batch send (default async mode)
-      const started = await shipmentService.startBulkSendToPathao(shipmentIdsToSend);
-
-      // Backward compatible handling if server responds in sync mode
-      if ('success' in started && 'failed' in started) {
-        for (const item of started.success || []) {
-          successCount++;
-          detailsBuffer.push({
-            orderNumber: item.shipment_number,
-            status: 'success',
-            message: `Consignment ID: ${item.pathao_consignment_id}`,
-          });
-        }
-
-        for (const item of started.failed || []) {
-          failedCount++;
-          detailsBuffer.push({
-            orderNumber: item.shipment_number,
-            status: 'failed',
-            message: item.reason,
-          });
-        }
-
-        setPathaoProgress((prev) => ({
-          ...prev,
-          current: prev.total,
-          success: successCount,
-          failed: failedCount,
-          batchStatus: 'completed',
-          details: detailsBuffer,
-        }));
-      } else {
+      if ('batch_code' in started && started.batch_code) {
         const batchCode = started.batch_code;
         const immediateFailures = Array.isArray(started.immediate_failures) ? started.immediate_failures : [];
 
         if (immediateFailures.length > 0) {
           failedCount += immediateFailures.length;
-          immediateFailures.forEach((f) => {
+          immediateFailures.forEach((f: any) => {
             detailsBuffer.push({
-              orderNumber: f.shipment_number,
+              orderNumber: f.order_number || f.shipment_number,
               status: 'failed',
               message: f.reason,
             });
@@ -2281,6 +2194,7 @@ export default function OrdersDashboard() {
 
         let summary = await shipmentService.getBulkStatus(batchCode);
 
+        // Keep polling until the batch is complete
         while (summary.status === 'pending' || summary.status === 'processing') {
           successCount = summary.success;
           const queuedFailed = summary.failed;
@@ -2295,7 +2209,12 @@ export default function OrdersDashboard() {
             failed: failedCount + queuedFailed,
           }));
 
-          await wait(2000);
+          // Trigger background queue worker just in case cron isn't running
+          try {
+             await axios.post('/shipments/pathao-queue-tick', { max_jobs: 5, max_time: 15 });
+          } catch (e) {}
+
+          await wait(2500); // Poll every 2.5 seconds
           summary = await shipmentService.getBulkStatus(batchCode);
         }
 
@@ -2328,39 +2247,51 @@ export default function OrdersDashboard() {
           failed: failedCount,
           details: detailsBuffer,
         }));
+      } else if ('success' in started && 'failed' in started) {
+        // Sync response mode fallback
+        for (const item of started.success || []) {
+          successCount++;
+          detailsBuffer.push({
+            orderNumber: item.shipment_number,
+            status: 'success',
+            message: `Consignment ID: ${item.pathao_consignment_id}`,
+          });
+        }
+
+        for (const item of started.failed || []) {
+          failedCount++;
+          detailsBuffer.push({
+            orderNumber: item.shipment_number,
+            status: 'failed',
+            message: item.reason,
+          });
+        }
+
+        setPathaoProgress((prev) => ({
+          ...prev,
+          current: prev.total,
+          success: successCount,
+          failed: failedCount,
+          batchStatus: 'completed',
+          details: detailsBuffer,
+        }));
       }
 
       alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
       setSelectedOrders(new Set());
-      // Set courier marker to Pathao in DB (persists after reload + can be filtered)
+      
+      // Update intended courier to Pathao optimistically
       try {
-        const ids = selectedOrdersList
-          .map((o) => Number(o?.id))
-          .filter((id) => Number.isFinite(id) && id > 0);
-
-        if (ids.length > 0) {
-          const idSet = new Set<number>(ids);
-          const concurrency = Math.min(5, ids.length);
-          let idx = 0;
-
-          const worker = async () => {
-            while (idx < ids.length) {
-              const current = ids[idx++];
-              try {
-                await orderService.setIntendedCourier(current, 'pathao');
-              } catch {
-                // ignore per-order failures
-              }
-            }
-          };
-
-          await Promise.all(Array.from({ length: concurrency }, () => worker()));
-
-          // optimistic UI update
+        if (orderIdsToSend.length > 0) {
+          const idSet = new Set<number>(orderIdsToSend);
+          // Process in background to not block UI
+          orderIdsToSend.forEach(id => {
+            orderService.setIntendedCourier(id, 'pathao').catch(() => {});
+          });
           setOrders((prev) => prev.map((o) => (idSet.has(o.id) ? { ...o, intendedCourier: 'pathao' } : o)));
         }
       } catch (e) {
-        console.warn('Failed to set intended courier for bulk Pathao send:', e);
+        console.warn('Failed to set intended courier:', e);
       }
 
       await loadOrders();
@@ -2369,18 +2300,12 @@ export default function OrdersDashboard() {
       alert(`Failed to complete bulk send: ${error?.response?.data?.message || error.message || 'Unknown error'}`);
     } finally {
       setIsSendingBulk(false);
-      setTimeout(() => {
-        setPathaoProgress({
-          show: false,
-          current: 0,
-          total: 0,
-          success: 0,
-          failed: 0,
-          batchCode: undefined,
-          batchStatus: 'preparing',
-          details: [],
-        });
-      }, 2500);
+      // Don't auto-close if there are failures, let user see details
+      if (failedCount === 0) {
+        setTimeout(() => {
+          setPathaoProgress((prev) => ({ ...prev, show: false }));
+        }, 5000);
+      }
     }
   };
 
@@ -3525,8 +3450,7 @@ export default function OrdersDashboard() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {!isRole('branch-manager') && (
-                    <select
+                  <select
                       value={storeFilter}
                       onChange={(e) => setStoreFilter(e.target.value === 'All Stores' ? 'All Stores' : Number(e.target.value))}
                       className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-1 focus:ring-black dark:focus:ring-white min-w-[140px]"
@@ -3538,7 +3462,6 @@ export default function OrdersDashboard() {
                         </option>
                       ))}
                     </select>
-                  )}
 
                   <select
                     value={paymentStatusFilter}
@@ -3754,7 +3677,7 @@ export default function OrdersDashboard() {
 
                         <button
                           onClick={handleBulkSendToPathao}
-                          disabled={isSendingBulk || isRole('branch-manager')}
+                          disabled={isSendingBulk}
                           className="flex items-center gap-1 px-2 py-1 bg-black dark:bg-white hover:bg-gray-800 dark:hover:bg-gray-200 text-white dark:text-black rounded transition-colors disabled:opacity-50 text-[10px] font-medium"
                         >
                           <Truck className="w-3 h-3" />
@@ -3810,41 +3733,7 @@ export default function OrdersDashboard() {
                   </div>
                 )}
 
-                {/* Bulk Progress: Pathao */}
-                {pathaoProgress.show && (
-                  <div className="mb-2 border border-gray-300 dark:border-gray-700 rounded px-3 py-1.5">
-                    <div className="flex items-center justify-between mb-1">
-                      <p className="text-[10px] font-semibold text-black dark:text-white flex items-center gap-1">
-                        <Package className="w-3 h-3" />
-                        Pathao {pathaoProgress.current}/{pathaoProgress.total}
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <div className="flex items-center gap-0.5">
-                          <CheckCircle className="w-3 h-3 text-black dark:text-white" />
-                          <span className="text-[10px] font-medium text-black dark:text-white">{pathaoProgress.success}</span>
-                        </div>
-                        <div className="flex items-center gap-0.5">
-                          <XCircle className="w-3 h-3 text-gray-500" />
-                          <span className="text-[10px] font-medium text-gray-500">{pathaoProgress.failed}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-1">
-                      <div
-                        className="bg-black dark:bg-white h-1 rounded-full transition-all"
-                        style={{
-                          width: `${pathaoProgress.total > 0 ? (pathaoProgress.current / pathaoProgress.total) * 100 : 0}%`,
-                        }}
-                      />
-                    </div>
-                    {pathaoProgress.batchCode ? (
-                      <p className="mt-1 text-[10px] text-gray-600 dark:text-gray-400">
-                        Batch: <span className="font-mono">{pathaoProgress.batchCode}</span>
-                        {pathaoProgress.batchStatus ? ` • ${pathaoProgress.batchStatus}` : ''}
-                      </p>
-                    ) : null}
-                  </div>
-                )}
+
 
                 {/* Bulk Progress: Print */}
                 {bulkPrintProgress.show && (
@@ -4344,11 +4233,21 @@ export default function OrdersDashboard() {
         </div>
       )}
 
+      {/* Click outside to close menu */}
+      {activeMenu !== null && (
+        <div
+          className="fixed inset-0"
+          style={{ zIndex: 50 }}
+          onClick={() => setActiveMenu(null)}
+        />
+      )}
+
       {/* Fixed Position Dropdown Menu */}
       {activeMenu !== null && menuPosition && (
         <div
           className="fixed bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-2xl w-56 z-[60]"
-          style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px` }}
+          style={{ top: `${menuPosition.top}px`, left: `${menuPosition.left}px`, zIndex: 60 }}
+          onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={(e) => {
@@ -4368,8 +4267,7 @@ export default function OrdersDashboard() {
               const order = filteredOrders.find((o) => o.id === activeMenu);
               if (order) handleEditOrder(order);
             }}
-            disabled={isBranchManager}
-            className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+            className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
           >
             <Edit className="h-5 w-5 flex-shrink-0" />
             <span>Edit Order</span>
@@ -4387,8 +4285,7 @@ export default function OrdersDashboard() {
                     e.stopPropagation();
                     openCourierEditor(order);
                   }}
-                  disabled={isBranchManager}
-                  className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+                  className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
                 >
                   <Truck className="h-5 w-5 flex-shrink-0" />
                   <span>{hasMarker ? 'Update Marker' : 'Add Marker'}</span>
@@ -4410,8 +4307,7 @@ export default function OrdersDashboard() {
                         }
                       }
                     }}
-                    disabled={isBranchManager}
-                    className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+                    className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
                   >
                     <X className="h-5 w-5 flex-shrink-0" />
                     <span>Remove Marker</span>
@@ -4440,8 +4336,7 @@ export default function OrdersDashboard() {
             );
           })()}
 
-          {(isRole('online-moderator') || isRole('admin') || isRole('super-admin')) && (
-            <button
+          <button
               onClick={(e) => {
                 e.stopPropagation();
                 const order = filteredOrders.find((o) => o.id === activeMenu);
@@ -4451,7 +4346,7 @@ export default function OrdersDashboard() {
                 const order = filteredOrders.find((o) => o.id === activeMenu);
                 return order ? isSingleLoading(order.id, 'revert') : false;
               })()}
-              className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+              className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
             >
               <RotateCcw className="h-5 w-5 flex-shrink-0" />
               <span>
@@ -4461,15 +4356,14 @@ export default function OrdersDashboard() {
                 })()}
               </span>
             </button>
-          )}
 
           {(() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
             if (!order) return null;
             
-            const canMarkDelivered = (isRole('online-moderator') || isRole('admin') || isRole('super-admin')) && 
-                                   (order.status === 'confirmed' || order.fulfillmentStatus === 'fulfilled') &&
-                                   order.status !== 'delivered';
+            const canMarkDelivered =
+              (order.status === 'confirmed' || order.fulfillmentStatus === 'fulfilled') &&
+              order.status !== 'delivered';
 
             if (!canMarkDelivered) return null;
 
@@ -4480,7 +4374,7 @@ export default function OrdersDashboard() {
                   handleMarkAsDelivered(order.id);
                 }}
                 disabled={isSingleLoading(order.id, 'deliver')}
-                className="w-full px-4 py-3 text-left text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-50"
+                className="w-full px-4 py-3 text-left text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
               >
                 <Package className="h-5 w-5 flex-shrink-0" />
                 <span>
@@ -4497,8 +4391,7 @@ export default function OrdersDashboard() {
               const order = filteredOrders.find((o) => o.id === activeMenu);
               if (order) handleCancelOrder(order.id);
             }}
-            disabled={isBranchManager}
-            className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-3 rounded-b-lg disabled:opacity-50"
+            className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-3 rounded-b-lg"
           >
             <XCircle className="h-5 w-5 flex-shrink-0" />
             <span>Cancel Order</span>
@@ -5784,11 +5677,119 @@ export default function OrdersDashboard() {
         />
       )}
 
-      {/* Click outside to close menu */}
-      {activeMenu !== null && <div className="fixed inset-0 z-[55]" onClick={() => setActiveMenu(null)} />}
 
       {/* Click outside to close printer select */}
       {showPrinterSelect && <div className="fixed inset-0 z-40" onClick={() => setShowPrinterSelect(false)} />}
+
+      {/* Pathao Bulk Loading Screen */}
+      {pathaoProgress.show && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100] p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl max-w-lg w-full overflow-hidden border border-gray-200 dark:border-gray-800 shadow-2xl animate-in fade-in zoom-in duration-300">
+            <div className="bg-black dark:bg-white px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Truck className="h-5 w-5 text-white dark:text-black animate-bounce" />
+                <h3 className="text-lg font-bold text-white dark:text-black">Sending to Pathao</h3>
+              </div>
+              <div className="px-2 py-1 bg-white/20 dark:bg-black/20 rounded text-[10px] font-mono text-white dark:text-black">
+                {pathaoProgress.batchStatus?.toUpperCase() || 'PREPARING'}
+              </div>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {/* Main Progress */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400 font-medium">Processing shipments...</span>
+                  <span className="text-black dark:text-white font-bold">
+                    {pathaoProgress.current} / {pathaoProgress.total}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-100 dark:bg-gray-800 rounded-full h-3 overflow-hidden border border-gray-200 dark:border-gray-700">
+                  <div
+                    className="bg-black dark:bg-white h-full transition-all duration-500 ease-out"
+                    style={{
+                      width: `${pathaoProgress.total > 0 ? (pathaoProgress.current / pathaoProgress.total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* Stats Grid */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-800 text-center">
+                  <p className="text-2xl font-bold text-black dark:text-white">{pathaoProgress.success}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1 mt-1">
+                    <CheckCircle className="h-3 w-3 text-green-500" /> Success
+                  </p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-800/50 p-4 rounded-xl border border-gray-100 dark:border-gray-800 text-center">
+                  <p className="text-2xl font-bold text-black dark:text-white">{pathaoProgress.failed}</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1 mt-1">
+                    <XCircle className="h-3 w-3 text-red-500" /> Failed
+                  </p>
+                </div>
+              </div>
+
+              {/* Batch Info */}
+              {pathaoProgress.batchCode && (
+                <div className="flex items-center justify-between py-2 px-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800/30">
+                  <span className="text-[10px] text-blue-700 dark:text-blue-300 font-medium uppercase tracking-wider">Batch Reference</span>
+                  <span className="text-xs font-mono font-bold text-blue-800 dark:text-blue-200">{pathaoProgress.batchCode}</span>
+                </div>
+              )}
+
+              {/* Detailed Logs */}
+              <div className="space-y-2">
+                <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Operation Details</h4>
+                <div className="bg-gray-50 dark:bg-black/20 rounded-xl border border-gray-100 dark:border-gray-800 h-40 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                  {pathaoProgress.details.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center p-4">
+                      <Loader className="h-5 w-5 text-gray-300 animate-spin mb-2" />
+                      <p className="text-[10px] text-gray-400">Waiting for first result...</p>
+                    </div>
+                  ) : (
+                    pathaoProgress.details.slice().reverse().map((detail, idx) => (
+                      <div key={idx} className="flex items-start justify-between gap-3 text-[11px] animate-in fade-in slide-in-from-top-1">
+                        <div className="flex items-start gap-2 min-w-0">
+                          {detail.status === 'success' ? (
+                            <CheckCircle className="h-3 w-3 text-green-500 mt-0.5 flex-shrink-0" />
+                          ) : (
+                            <AlertCircle className="h-3 w-3 text-red-500 mt-0.5 flex-shrink-0" />
+                          )}
+                          <span className="font-bold text-black dark:text-white flex-shrink-0">{detail.orderNumber}</span>
+                          <span className="text-gray-500 truncate">{detail.message}</span>
+                        </div>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
+                          detail.status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                        }`}>
+                          {detail.status === 'success' ? 'SENT' : 'FAIL'}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
+                {(pathaoProgress.batchStatus === 'completed' || pathaoProgress.batchStatus === 'cancelled' || pathaoProgress.batchStatus === 'error') ? (
+                  <button
+                    onClick={() => setPathaoProgress(prev => ({ ...prev, show: false }))}
+                    className="w-full bg-black dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold text-sm hover:opacity-90 transition-opacity"
+                  >
+                    Close Window
+                  </button>
+                ) : (
+                  <div className="flex items-center justify-center gap-2 text-gray-500 py-2">
+                    <Loader className="h-3 w-3 animate-spin" />
+                    <span className="text-[11px]">Please keep this window open while we work...</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx>{`
         .overflow-y-auto::-webkit-scrollbar {
