@@ -194,7 +194,7 @@ async function renderLabelBase64(opts: { code: string; productName: string; pric
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.font = `900 ${Math.round(hPx * 0.11)}px Arial`;
-  ctx.fillText("ERRUM BD", centerX, topPad);
+  ctx.fillText("Deshio", centerX, topPad);
 
   // Product name — up to 3 lines, shrinking font as needed
   const nameY = topPad + Math.round(hPx * 0.14);
@@ -982,7 +982,7 @@ export default function LookupPage() {
         productName: (params.productName || 'Product').trim(),
         price: safeNum(params.price),
         dpi,
-        brandName: "ERRUM BD",
+        brandName: "Deshio",
       });
 
       const config = qz.configs.create(printer, {

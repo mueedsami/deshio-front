@@ -40,15 +40,15 @@ class SSLCommerzService {
     const payloadVariants = [
       {
         ...basePayload,
-        status: 'pending_assignment',
-        order_status: 'pending_assignment',
+        status: 'pending',
+        order_status: 'pending',
         assignment_status: 'unassigned',
         auto_assign_store: false,
         requires_store_assignment: true,
       },
       {
         ...basePayload,
-        status: 'pending_assignment',
+        status: 'pending',
       },
       {
         ...basePayload,

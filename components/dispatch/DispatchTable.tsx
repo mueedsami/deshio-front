@@ -1,6 +1,6 @@
 import React from 'react';
 import { ProductDispatch } from '@/services/dispatchService';
-import { Eye, Truck, CheckCircle, XCircle, Ban, Scan } from 'lucide-react';
+import { Eye, Truck, CheckCircle, XCircle, Ban, Scan, FileText } from 'lucide-react';
 
 interface DispatchTableProps {
   dispatches: ProductDispatch[];
@@ -176,6 +176,12 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                       {dispatch.status === 'in_transit' && currentStoreId && atDestination && (
                         <div className="text-xs text-purple-600 dark:text-purple-400 font-medium mt-1">
                           📦 Receiving Store
+                        </div>
+                      )}
+                      {(dispatch.notes || (dispatch as any).note || (dispatch as any).remarks || (dispatch as any).remark || (dispatch as any).comment) && (
+                        <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-500 font-medium mt-1">
+                          <FileText className="w-3 h-3" />
+                          <span>Has Notes</span>
                         </div>
                       )}
                     </td>

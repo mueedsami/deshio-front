@@ -245,20 +245,20 @@ class CheckoutService {
       assigned_store_id: null,
     };
 
-    // Try explicit pending-assignment hints first; fall back gracefully
+    // Try explicit pending status hints first; fall back gracefully
     // so checkout never breaks on strict validators.
     const payloadVariants: CreateOrderRequest[] = [
       {
         ...basePayload,
-        status: 'pending_assignment',
-        order_status: 'pending_assignment',
+        status: 'pending',
+        order_status: 'pending',
         assignment_status: 'unassigned',
         auto_assign_store: false,
         requires_store_assignment: true,
       },
       {
         ...basePayload,
-        status: 'pending_assignment',
+        status: 'pending',
       },
       {
         ...basePayload,

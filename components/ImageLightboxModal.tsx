@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
-import { X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
 
 type Props = {
   open: boolean;
@@ -12,6 +12,16 @@ type Props = {
 };
 
 export default function ImageLightboxModal({ open, src, title, subtitle, onClose }: Props) {
+  const [scale, setScale] = useState(1);
+  const [isDragging, setIsDragging] = useState(false);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  useEffect(() => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  }, [src, open]);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -22,6 +32,40 @@ export default function ImageLightboxModal({ open, src, title, subtitle, onClose
   }, [open, onClose]);
 
   if (!open || !src) return null;
+
+  const handleZoomIn = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setScale((prev) => Math.min(prev + 0.5, 4));
+  };
+
+  const handleZoomOut = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setScale((prev) => Math.max(prev - 0.5, 0.5));
+  };
+
+  const handleReset = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (scale <= 1) return;
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setPosition({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y,
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-3 sm:p-4">
@@ -51,15 +95,54 @@ export default function ImageLightboxModal({ open, src, title, subtitle, onClose
         </div>
 
         <div className="p-4 sm:p-5">
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-950">
+          <div 
+            className="relative overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-950 flex items-center justify-center min-h-[50vh]"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            style={{ cursor: scale > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default' }}
+          >
             <img
               src={src}
               alt={subtitle || title || "Image"}
-              className="max-h-[75vh] w-full object-contain"
+              className={`max-h-[75vh] w-full object-contain ${isDragging ? '' : 'transition-transform duration-200'}`}
+              style={{
+                transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+                transformOrigin: 'center'
+              }}
+              draggable={false}
               onError={(e) => {
                 (e.currentTarget as HTMLImageElement).src = "/placeholder-product.png";
               }}
             />
+
+            {/* Zoom Controls */}
+            <div className="absolute bottom-4 right-4 flex items-center bg-black/70 backdrop-blur-md rounded-lg p-1.5 gap-1.5 z-10 shadow-lg border border-white/10">
+              <button 
+                onClick={handleZoomOut} 
+                className="p-1.5 text-white hover:bg-white/20 rounded transition-colors disabled:opacity-50"
+                disabled={scale <= 0.5}
+                title="Zoom Out"
+              >
+                <ZoomOut className="w-5 h-5" />
+              </button>
+              <button 
+                onClick={handleReset} 
+                className="p-1.5 text-white hover:bg-white/20 rounded min-w-[3.5rem] flex items-center justify-center transition-colors"
+                title="Reset Zoom"
+              >
+                <span className="text-xs font-semibold tabular-nums">{Math.round(scale * 100)}%</span>
+              </button>
+              <button 
+                onClick={handleZoomIn} 
+                className="p-1.5 text-white hover:bg-white/20 rounded transition-colors disabled:opacity-50"
+                disabled={scale >= 4}
+                title="Zoom In"
+              >
+                <ZoomIn className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
       </div>

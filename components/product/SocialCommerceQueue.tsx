@@ -33,7 +33,7 @@ export default function SocialCommerceQueue({
   const [isMinimized, setIsMinimized] = useState(false);
   const router = useRouter();
 
-  if (items.length === 0 && !isMinimized) return null;
+
 
   const totalProducts = items.length;
   const totalItems = items.reduce((sum, item) => sum + item.quantity, 0);

@@ -14,6 +14,7 @@ export interface CartItem {
   amount: number;
   availableQty: number;
   barcode?: string;
+  isService?: boolean;
 }
 
 interface CartTableProps {
@@ -143,9 +144,16 @@ export default function CartTable({
                     <p className="text-sm font-medium text-gray-900 dark:text-white">
                       {item.productName}
                     </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Batch: {item.batchNumber}
-                    </p>
+                    {!item.isService && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Batch: {item.batchNumber}
+                      </p>
+                    )}
+                    {item.isService && (
+                      <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+                        Service
+                      </span>
+                    )}
                     {item.barcode && (
                       <p className="text-xs text-gray-400 dark:text-gray-500">
                         {item.barcode}

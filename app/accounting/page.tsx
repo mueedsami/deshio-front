@@ -24,13 +24,13 @@ export default function AccountingSystem() {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('journal');
-  const [dateRange, setDateRange] = useState({ 
+  const [dateRange, setDateRange] = useState({
     start: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
     end: new Date().toISOString().split('T')[0]
   });
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
-  
+
   // State for accounting data
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -84,7 +84,7 @@ export default function AccountingSystem() {
   const fetchInitialData = async () => {
     try {
       setLoading(true);
-      
+
       // Fetch ALL accounts for reference (used by journal/trial balance account name lookups)
       const accountsRes: any = await accountingService.accounts.getAccounts();
       const accountsData = accountsRes?.success
@@ -107,10 +107,10 @@ export default function AccountingSystem() {
         setLeafAccounts(leafData);
         console.log('✅ Loaded leaf accounts:', leafData.length);
       }
-      
+
       // Fetch journal entries by default
       await fetchJournalEntries();
-      
+
     } catch (error: any) {
       console.error('Error fetching initial data:', error);
       alert(error.response?.data?.message || 'Failed to fetch accounting data');
@@ -128,51 +128,51 @@ export default function AccountingSystem() {
     }
   };
 
-const fetchJournalEntries = async () => {
-  try {
-    setLoading(true);
-    
-    const response = await accountingService.reports.getJournalEntries({
-      date_from: dateRange.start,
-      date_to: dateRange.end,
-      store_id: selectedStoreId,
-    });
-    
-    if (response.success) {
-      console.log('🔍 RAW TRANSACTIONS FROM BACKEND:', response);
-      
-      // Sort by date descending (most recent first)
-      const sortedEntries = response.data.sort((a: JournalEntry, b: JournalEntry) => 
-        new Date(b.date).getTime() - new Date(a.date).getTime()
-      );
-      
-      console.log('📝 GROUPED JOURNAL ENTRIES:', sortedEntries);
-      
-      setJournalEntries(sortedEntries);
-      console.log('✅ Loaded journal entries:', sortedEntries.length);
+  const fetchJournalEntries = async () => {
+    try {
+      setLoading(true);
+
+      const response = await accountingService.reports.getJournalEntries({
+        date_from: dateRange.start,
+        date_to: dateRange.end,
+        store_id: selectedStoreId,
+      });
+
+      if (response.success) {
+        console.log('🔍 RAW TRANSACTIONS FROM BACKEND:', response);
+
+        // Sort by date descending (most recent first)
+        const sortedEntries = response.data.sort((a: JournalEntry, b: JournalEntry) =>
+          new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        console.log('📝 GROUPED JOURNAL ENTRIES:', sortedEntries);
+
+        setJournalEntries(sortedEntries);
+        console.log('✅ Loaded journal entries:', sortedEntries.length);
+      }
+    } catch (error: any) {
+      console.error('Error fetching journal entries:', error);
+      alert(error.response?.data?.message || 'Failed to fetch journal entries');
+    } finally {
+      setLoading(false);
     }
-  } catch (error: any) {
-    console.error('Error fetching journal entries:', error);
-    alert(error.response?.data?.message || 'Failed to fetch journal entries');
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const fetchTrialBalance = async () => {
     try {
       setLoading(true);
-      
+
       console.log('🔄 Fetching trial balance with date range:', dateRange);
-      
+
       const response = await accountingService.reports.getTrialBalance({
         start_date: dateRange.start,
         end_date: dateRange.end,
         store_id: selectedStoreId,
       });
-      
+
       console.log('📊 Trial balance response:', response);
-      
+
       if (response.success) {
         setTrialBalance(response.data);
         console.log('✅ Trial balance loaded:', {
@@ -196,7 +196,7 @@ const fetchJournalEntries = async () => {
   const fetchTransactions = async () => {
     try {
       setLoading(true);
-      
+
       const response = await accountingService.transactions.getTransactions({
         date_from: dateRange.start,
         date_to: dateRange.end,
@@ -206,14 +206,14 @@ const fetchJournalEntries = async () => {
         per_page: 1000,
         store_id: selectedStoreId,
       });
-      
+
       if (response.success) {
         const txnData = response.data.data || response.data;
         const txnArray = Array.isArray(txnData) ? txnData : (txnData?.data || []);
-        
+
         // Sort by date descending (most recent first)
         const sortedTransactions = txnArray.sort(
-          (a: Transaction, b: Transaction) => 
+          (a: Transaction, b: Transaction) =>
             new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime()
         );
         setTransactions(sortedTransactions);
@@ -230,13 +230,13 @@ const fetchJournalEntries = async () => {
   const fetchLedger = async (accountId: number) => {
     try {
       setLoading(true);
-      
+
       const response = await accountingService.reports.getAccountLedger(accountId, {
         date_from: dateRange.start,
         date_to: dateRange.end,
         store_id: selectedStoreId,
       });
-      
+
       if (response.success) {
         setLedgerData(response.data);
         console.log('✅ Loaded ledger:', {
@@ -265,10 +265,10 @@ const fetchJournalEntries = async () => {
   };
 
   const formatCurrency = (amount: number): string => {
-    return new Intl.NumberFormat('en-BD', { 
-      style: 'currency', 
+    return new Intl.NumberFormat('en-BD', {
+      style: 'currency',
       currency: 'BDT',
-      minimumFractionDigits: 2 
+      minimumFractionDigits: 2
     }).format(amount);
   };
 
@@ -286,7 +286,7 @@ const fetchJournalEntries = async () => {
     try {
       if (type === 'journal') {
         // Convert journal entries to flat format for CSV
-        const flatData = journalEntries.flatMap(entry => 
+        const flatData = journalEntries.flatMap(entry =>
           entry.lines.map(line => ({
             date: entry.date,
             reference: `${entry.reference_type}-${entry.reference_id}`,
@@ -338,12 +338,12 @@ const fetchJournalEntries = async () => {
       <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header 
-            darkMode={darkMode} 
-            setDarkMode={setDarkMode} 
-            toggleSidebar={() => setSidebarOpen(!sidebarOpen)} 
+          <Header
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
+            toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
-          
+
           <main className="flex-1 overflow-auto p-6">
             <div className="max-w-7xl mx-auto">
               {/* Header */}
@@ -361,44 +361,40 @@ const fetchJournalEntries = async () => {
                 <div className="flex border-b border-gray-200 dark:border-gray-700">
                   <button
                     onClick={() => setActiveTab('journal')}
-                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${
-                      activeTab === 'journal'
+                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${activeTab === 'journal'
                         ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
                         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                    }`}
+                      }`}
                   >
                     <FileText className="w-5 h-5" />
                     Journal Entries
                   </button>
                   <button
                     onClick={() => setActiveTab('trial-balance')}
-                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${
-                      activeTab === 'trial-balance'
+                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${activeTab === 'trial-balance'
                         ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
                         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                    }`}
+                      }`}
                   >
                     <TrendingUp className="w-5 h-5" />
                     Trial Balance
                   </button>
                   <button
                     onClick={() => setActiveTab('transactions')}
-                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${
-                      activeTab === 'transactions'
+                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${activeTab === 'transactions'
                         ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
                         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                    }`}
+                      }`}
                   >
                     <FileText className="w-5 h-5" />
                     Transactions
                   </button>
                   <button
                     onClick={() => setActiveTab('ledger')}
-                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${
-                      activeTab === 'ledger'
+                    className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors ${activeTab === 'ledger'
                         ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
                         : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                    }`}
+                      }`}
                   >
                     <BookOpen className="w-5 h-5" />
                     Account Ledger
@@ -410,7 +406,7 @@ const fetchJournalEntries = async () => {
               <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-6">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">Filters</h3>
-                  <button 
+                  <button
                     onClick={handleRefresh}
                     disabled={loading}
                     className="flex items-center gap-2 px-3 py-1.5 bg-black hover:bg-gray-900 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
@@ -419,7 +415,7 @@ const fetchJournalEntries = async () => {
                     Refresh
                   </button>
                 </div>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   {showStoreSelector && (
                     <div>
@@ -441,7 +437,7 @@ const fetchJournalEntries = async () => {
                         className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       >
                         <option value="">All Stores (Consolidated)</option>
-                        <option value="errum">Errum (Global HQ)</option>
+                        <option value="Deshio">Deshio (Global HQ)</option>
                         <option value="global">Global (Old Compatibility)</option>
                         {stores.map((store) => (
                           <option key={store.id} value={store.id}>
@@ -556,7 +552,7 @@ const fetchJournalEntries = async () => {
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                       Journal Entries ({journalEntries.length})
                     </h2>
-                    <button 
+                    <button
                       onClick={() => handleExport('journal')}
                       className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
                     >
@@ -583,7 +579,7 @@ const fetchJournalEntries = async () => {
                                   <span className="px-2 py-1 text-xs font-medium bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded">
                                     {entry.reference_type}
                                   </span>
-                                  <Link 
+                                  <Link
                                     href={`/accounting/transaction/${entry.group_id || entry.id || entry.lines[0]?.id}`}
                                     className="px-2 py-1 text-[10px] font-bold bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
                                   >
@@ -680,7 +676,7 @@ const fetchJournalEntries = async () => {
                           As of {formatDate(trialBalance.date_range.end_date)}
                         </p>
                       </div>
-                      <button 
+                      <button
                         onClick={() => handleExport('trial-balance')}
                         className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
                       >
@@ -741,13 +737,12 @@ const fetchJournalEntries = async () => {
                               {account.name || account.account_name}
                             </td>
                             <td className="px-4 py-3">
-                              <span className={`px-2 py-1 text-xs font-medium rounded ${
-                                account.type === 'asset' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
-                                account.type === 'liability' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
-                                account.type === 'equity' ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' :
-                                account.type === 'income' || account.type === 'revenue' ? 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300' :
-                                'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
-                              }`}>
+                              <span className={`px-2 py-1 text-xs font-medium rounded ${account.type === 'asset' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
+                                  account.type === 'liability' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
+                                    account.type === 'equity' ? 'bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300' :
+                                      account.type === 'income' || account.type === 'revenue' ? 'bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300' :
+                                        'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
+                                }`}>
                                 {account.type}
                               </span>
                             </td>
@@ -784,7 +779,7 @@ const fetchJournalEntries = async () => {
                     <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                       Transactions ({transactions.length})
                     </h2>
-                    <button 
+                    <button
                       onClick={() => handleExport('transactions')}
                       className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
                     >
@@ -814,7 +809,7 @@ const fetchJournalEntries = async () => {
                           {transactions.map((txn) => (
                             <tr key={txn.id} className="border-t border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-750">
                               <td className="px-4 py-3 text-sm font-medium text-gray-900 dark:text-white">
-                                <Link 
+                                <Link
                                   href={`/accounting/transaction/${txn.id}`}
                                   className="text-indigo-600 dark:text-indigo-400 hover:underline font-mono"
                                 >
@@ -836,11 +831,10 @@ const fetchJournalEntries = async () => {
                                 {txn.description}
                               </td>
                               <td className="px-4 py-3">
-                                <span className={`px-2 py-1 text-xs font-medium rounded ${
-                                  txn.type === 'debit' 
-                                    ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' 
+                                <span className={`px-2 py-1 text-xs font-medium rounded ${txn.type === 'debit'
+                                    ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300'
                                     : 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300'
-                                }`}>
+                                  }`}>
                                   {txn.type === 'debit' ? '+ Debit' : '- Credit'}
                                 </span>
                               </td>
@@ -848,12 +842,11 @@ const fetchJournalEntries = async () => {
                                 {formatCurrency(txn.amount)}
                               </td>
                               <td className="px-4 py-3">
-                                <span className={`px-2 py-1 text-xs font-medium rounded ${
-                                  txn.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
-                                  txn.status === 'pending' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
-                                  txn.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300' :
-                                  'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300'
-                                }`}>
+                                <span className={`px-2 py-1 text-xs font-medium rounded ${txn.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
+                                    txn.status === 'pending' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
+                                      txn.status === 'failed' ? 'bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300' :
+                                        'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300'
+                                  }`}>
                                   {txn.status}
                                 </span>
                               </td>
@@ -887,7 +880,7 @@ const fetchJournalEntries = async () => {
                               {formatDate(ledgerData.date_range.date_from)} - {formatDate(ledgerData.date_range.date_to)}
                             </p>
                           </div>
-                          <button 
+                          <button
                             onClick={() => handleExport('ledger')}
                             className="flex items-center gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600"
                           >
@@ -910,11 +903,10 @@ const fetchJournalEntries = async () => {
                           </div>
                           <div className="bg-white dark:bg-gray-800 rounded-lg p-3 border border-gray-200 dark:border-gray-700">
                             <p className="text-xs text-gray-500 dark:text-gray-400 uppercase mb-1">Net Change</p>
-                            <p className={`text-lg font-bold ${
-                              (ledgerData.closing_balance - ledgerData.opening_balance) >= 0 
-                                ? 'text-green-600 dark:text-green-400' 
+                            <p className={`text-lg font-bold ${(ledgerData.closing_balance - ledgerData.opening_balance) >= 0
+                                ? 'text-green-600 dark:text-green-400'
                                 : 'text-red-600 dark:text-red-400'
-                            }`}>
+                              }`}>
                               {formatCurrency(Math.abs(ledgerData.closing_balance - ledgerData.opening_balance))}
                             </p>
                           </div>
@@ -956,17 +948,15 @@ const fetchJournalEntries = async () => {
                                   <td className="px-4 py-3 text-sm text-right text-gray-900 dark:text-white">
                                     {entry.credit > 0 ? formatCurrency(entry.credit) : '-'}
                                   </td>
-                                  <td className={`px-4 py-3 text-sm text-right font-medium ${
-                                    entry.balance >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                                  }`}>
+                                  <td className={`px-4 py-3 text-sm text-right font-medium ${entry.balance >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                                    }`}>
                                     {formatCurrency(Math.abs(entry.balance))}
                                   </td>
                                   <td className="px-4 py-3">
-                                    <span className={`px-2 py-1 text-xs font-medium rounded ${
-                                      entry.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
-                                      entry.status === 'pending' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
-                                      'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300'
-                                    }`}>
+                                    <span className={`px-2 py-1 text-xs font-medium rounded ${entry.status === 'completed' ? 'bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300' :
+                                        entry.status === 'pending' ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-700 dark:text-yellow-300' :
+                                          'bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300'
+                                      }`}>
                                       {entry.status}
                                     </span>
                                   </td>

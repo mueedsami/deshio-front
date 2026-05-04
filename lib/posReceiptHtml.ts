@@ -1,6 +1,5 @@
 // lib/posReceiptHtml.ts
 // POS receipt template used by POS and Purchase History prints.
-// Styled template with ERRUM branding/details.
 
 import { normalizeOrderForReceipt, type ReceiptOrder } from '@/lib/receipt';
 
@@ -69,7 +68,9 @@ type PaymentMap = {
   OTHERS: Array<{ name: string; amount: number }>;
 };
 
-function normalizeMethodLabel(raw: unknown): 'CASH' | 'CARD' | 'BKASH' | 'NAGAD' | '' {
+type KnownPaymentLabel = 'CASH' | 'CARD' | 'BKASH' | 'NAGAD';
+
+function normalizeMethodLabel(raw: unknown): KnownPaymentLabel | '' {
   const m = String(raw || '').toLowerCase().trim();
   if (!m) return '';
 
@@ -102,7 +103,7 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
     if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return 0;
 
     let added = 0;
-    const pairs: Array<[keyof PaymentMap, any]> = [
+    const pairs: Array<[KnownPaymentLabel, any]> = [
       ['CASH', obj.cash ?? obj.cash_paid ?? obj.cashPaid],
       ['CARD', obj.card ?? obj.card_paid ?? obj.cardPaid],
       ['BKASH', obj.bkash ?? obj.bkash_paid ?? obj.bkashPaid],
@@ -169,67 +170,8 @@ function extractPaymentBreakdown(order: any, paidFallback: number): PaymentMap {
   return out;
 }
 
-
-function pickFirstNonEmpty(...vals: unknown[]): string {
-  for (const v of vals) {
-    if (v === null || v === undefined) continue;
-    if (typeof v === 'string') {
-      const t = v.trim();
-      if (t) return t;
-      continue;
-    }
-    if (typeof v === 'number') {
-      const t = String(v).trim();
-      if (t) return t;
-      continue;
-    }
-  }
-  return '';
-}
-
-function pickAddressFromObject(obj: any): string {
-  if (!obj || typeof obj !== 'object') return '';
-
-  const direct = pickFirstNonEmpty(
-    obj?.address,
-    obj?.full_address,
-    obj?.fullAddress,
-    obj?.location,
-    obj?.street,
-    obj?.street_address,
-    obj?.streetAddress,
-    obj?.line1,
-    obj?.line_1
-  );
-  if (direct) return direct;
-
-  const composed = [
-    obj?.area,
-    obj?.zone,
-    obj?.city,
-    obj?.district,
-    obj?.division,
-    obj?.postal_code || obj?.postalCode,
-  ]
-    .filter(Boolean)
-    .join(', ')
-    .trim();
-
-  return composed;
-}
-
-function resolveStoreDisplay(order: any, r: ReceiptOrder): { brand: string; tagline: string; address: string; phone: string } {
-  const brand = 'ERRUM BD';
-  const tagline = r.storeName || brand;
-  const address = r.storeAddress || '';
-  const phone = r.storePhone || '';
-
-  return { brand, tagline, address, phone };
-}
-
 function posReceiptBody(order: any) {
   const r: ReceiptOrder = normalizeOrderForReceipt(order);
-  const branch = resolveStoreDisplay(order, r);
 
   const rows = (r.items || [])
     .map((it) => {
@@ -309,10 +251,11 @@ function posReceiptBody(order: any) {
 
   return `
     <div class="top-center">
-      <div class="brand">${escapeHtml(branch.brand)}</div>
-      <div class="tagline">${escapeHtml(branch.tagline)}</div>
-      <div class="addr">${escapeHtml(branch.address)}</div>
-      <div class="hotline">Mobile: ${escapeHtml(branch.phone)}</div>
+      <div class="brand">DESHIO</div>
+      <div class="tagline">Deshio-দেশীয়</div>
+      <div class="addr">House: 4, Road: 1, Dhaka Housing, Adabor, Mohammadpur, Dhaka-1207.</div>
+      <div class="hotline">Mobile: 01711-585400</div>
+      <div class="hotline">BIN : 007243936-0402</div>
       <div class="underline"></div>
       <div class="order-no">Order No : ${escapeHtml(String(r.orderNo || r.id || '—'))}</div>
     </div>
@@ -351,7 +294,6 @@ function posReceiptBody(order: any) {
       <tbody>
         <tr><td>Subtotal</td><td class="right">${escapeHtml(money(subtotal))}</td></tr>
         <tr><td>VAT</td><td class="right">Inclusive</td></tr>
-        ${vat > 0 ? `<tr><td class="small muted">(Included VAT)</td><td class="right small muted">${escapeHtml(money(vat))}</td></tr>` : ''}
         <tr><td>Discount</td><td class="right">-${escapeHtml(money(discount))}</td></tr>
         ${shipping > 0 ? `<tr><td>Shipping</td><td class="right">${escapeHtml(money(shipping))}</td></tr>` : ''}
         <tr class="strong"><td>Net Amount</td><td class="right">${escapeHtml(money(netAmount))}</td></tr>
@@ -366,11 +308,11 @@ function posReceiptBody(order: any) {
     ${r.notes ? `<div class="note">Note: ${escapeHtml(r.notes)}</div>` : ''}
 
     <div class="policy">
-      Items sold cannot be returned but may only be exchanged in their unworn condition with tags and original receipt within 7 days. Discount &amp; Offer items cannot be exchanged.
+      Items sold cannot be returned but may only be exchanged in their unworn condition with tags and original receipt within 7 days. Discount &amp; Offer items cannot be exchanged.Jewellery items & Jamdani sarees cannot be exchanged.
     </div>
 
     <div class="footer">
-      Thank you for shopping at Errum BD.
+      Thank you for shopping at Deshio.
     </div>
     <div class="credits">Software solution from mADestic Digital</div>
   `;
@@ -502,8 +444,8 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     .credits {
       margin-top: 4px;
       text-align: center;
-      font-size: 10px;
-      font-weight: 600;
+      font-size: 11px;
+      font-weight: 700;
       color: #444;
     }
 

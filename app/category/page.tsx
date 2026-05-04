@@ -15,16 +15,16 @@ import { useTheme } from "@/contexts/ThemeContext";
 
 export default function CategoryPageWrapper() {
   const { hasAnyPermission, hasPermission, permissionsResolved, isRole } = useAuth();
-  
-  // Role-based access control (canonical Errum V2 pattern)
+
+  // Role-based access control (canonical Deshio V2 pattern)
   const isPowerUser = isRole(['super-admin', 'admin']);
   const isModerator = isRole('online-moderator');
-  
+
   const canView = isPowerUser || isModerator || hasAnyPermission(['categories.view', 'categories.create', 'categories.edit', 'categories.delete']);
   const canCreate = isPowerUser || isModerator || hasPermission('categories.create');
   const canEdit = isPowerUser || isModerator || hasPermission('categories.edit');
   const canDelete = isPowerUser || hasPermission('categories.delete'); // Note: Moderator EXCLUDED here
-  
+
   const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -57,7 +57,7 @@ export default function CategoryPageWrapper() {
       setLoading(true);
       // Load tree structure to show nested categories
       const result = await categoryService.getTree(true);
-      
+
       // Transform all_children to children
       const transformCategories = (cats: Category[]): Category[] => {
         return cats
@@ -67,7 +67,7 @@ export default function CategoryPageWrapper() {
             children: cat.all_children ? transformCategories(cat.all_children) : []
           }));
       };
-      
+
       setCategories(transformCategories(result));
     } catch (error: any) {
       console.error('Failed to load categories:', error);
@@ -83,7 +83,7 @@ export default function CategoryPageWrapper() {
       return;
     }
     if (!confirm('Are you sure you want to delete this category?')) return;
-    
+
     try {
       await categoryService.delete(id);
       showToast('Category deleted successfully!', 'success');
@@ -158,7 +158,7 @@ export default function CategoryPageWrapper() {
         await categoryService.create(formData);
         showToast('Category created successfully!', 'success');
       }
-      
+
       setEditCategory(null);
       setParentId(null);
       setDialogOpen(false);
@@ -172,17 +172,17 @@ export default function CategoryPageWrapper() {
   // Filter categories based on search query
   const filterCategories = (cats: Category[], query: string): Category[] => {
     if (!query) return cats;
-    
+
     const lowerQuery = query.toLowerCase();
-    
+
     return cats.reduce((acc: Category[], cat) => {
       const matchesTitle = cat.title.toLowerCase().includes(lowerQuery);
       const matchesDescription = cat.description?.toLowerCase().includes(lowerQuery);
       const matchesSlug = cat.slug.toLowerCase().includes(lowerQuery);
-      
+
       // Check if children match
       const filteredChildren = cat.children ? filterCategories(cat.children, query) : [];
-      
+
       // Include if this category matches OR if any children match
       if (matchesTitle || matchesDescription || matchesSlug || filteredChildren.length > 0) {
         acc.push({
@@ -190,7 +190,7 @@ export default function CategoryPageWrapper() {
           children: filteredChildren.length > 0 ? filteredChildren : cat.children
         });
       }
-      
+
       return acc;
     }, []);
   };

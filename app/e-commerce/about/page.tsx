@@ -6,16 +6,16 @@ import Link from 'next/link';
 import { CheckCircle2, Truck, Gem, HeartHandshake, MapPin, Phone } from 'lucide-react';
 
 const STORES = [
-  { name: 'Mirpur 12',       address: 'Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12', phone: '01942565664' },
-  { name: 'Jamuna Future Park', address: '3C-17A, Level 3, Jamuna Future Park',              phone: '01307130535' },
-  { name: 'Bashundhara City',   address: '38, 39, 40, Block D, Level 5, Bashundhara City',  phone: '01336041064' },
+  { name: 'Mirpur 12', address: 'Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12', phone: '01942565664' },
+  { name: 'Jamuna Future Park', address: '3C-17A, Level 3, Jamuna Future Park', phone: '01307130535' },
+  { name: 'Bashundhara City', address: '38, 39, 40, Block D, Level 5, Bashundhara City', phone: '01336041064' },
 ];
 
 const VALUES = [
-  { icon: Gem,           title: 'Premium Quality',    desc: 'Every product is hand-selected for craftsmanship, material quality, and lasting durability.' },
-  { icon: CheckCircle2,  title: 'Authentic Sourcing', desc: 'We source directly from verified suppliers — no counterfeits, ever.' },
-  { icon: Truck,         title: 'Fast Nationwide Delivery', desc: 'Reliable delivery across all of Bangladesh, with real-time order tracking.' },
-  { icon: HeartHandshake,title: 'Customer First',     desc: 'Responsive support before, during, and after every purchase.' },
+  { icon: Gem, title: 'Premium Quality', desc: 'Every product is hand-selected for craftsmanship, material quality, and lasting durability.' },
+  { icon: CheckCircle2, title: 'Authentic Sourcing', desc: 'We source directly from verified suppliers — no counterfeits, ever.' },
+  { icon: Truck, title: 'Fast Nationwide Delivery', desc: 'Reliable delivery across all of Bangladesh, with real-time order tracking.' },
+  { icon: HeartHandshake, title: 'Customer First', desc: 'Responsive support before, during, and after every purchase.' },
 ];
 
 export default function AboutPage() {
@@ -31,24 +31,24 @@ export default function AboutPage() {
         </div>
 
         <div className="ec-container relative py-12">
-          <div className="ec-dark-tag mb-6">About Errum</div>
+          <div className="ec-dark-tag mb-6">About Deshio</div>
           <h1 className="text-[var(--text-primary)]"
-              style={{
-                fontFamily: "'Poppins', sans-serif",
-                fontSize: 'clamp(44px, 8vw, 96px)',
-                fontWeight: 300,
-                lineHeight: 0.9,
-                letterSpacing: '-0.02em'
-              }}>
+            style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: 'clamp(44px, 8vw, 96px)',
+              fontWeight: 300,
+              lineHeight: 0.9,
+              letterSpacing: '-0.02em'
+            }}>
             More Than<br />
             <span className="italic" style={{ fontWeight: 600, color: 'var(--gold)' }}>a Brand</span>
           </h1>
           <p className="mt-8 max-w-xl text-[var(--text-secondary)] text-[16px] leading-relaxed">
-            Errum is Bangladesh&apos;s premium lifestyle destination — fashion, footwear, accessories, and fragrances, curated for those who refuse to compromise on style or quality.
+            Deshio is Bangladesh&apos;s premium lifestyle destination — fashion, footwear, accessories, and fragrances, curated for those who refuse to compromise on style or quality.
           </p>
           <div className="mt-10 flex gap-4 flex-wrap">
             <Link href="/e-commerce/products" className="ec-btn ec-btn-gold">Shop Collection</Link>
-            <Link href="/e-commerce/contact"  className="ec-btn ec-btn-ghost">Find a Store</Link>
+            <Link href="/e-commerce/contact" className="ec-btn ec-btn-ghost">Find a Store</Link>
           </div>
         </div>
       </section>
@@ -58,13 +58,13 @@ export default function AboutPage() {
         <div className="ec-container">
           <p className="ec-eyebrow mb-6 text-[var(--cyan)]">Our Promise</p>
           <h2 className="mb-12 text-[var(--text-primary)]"
-              style={{
-                fontFamily: "'Poppins', sans-serif",
-                fontSize: 'clamp(32px, 5vw, 56px)',
-                fontWeight: 500,
-                letterSpacing: '-0.01em',
-                lineHeight: 1
-              }}>
+            style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: 'clamp(32px, 5vw, 56px)',
+              fontWeight: 500,
+              letterSpacing: '-0.01em',
+              lineHeight: 1
+            }}>
             What We Stand For
           </h2>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -88,18 +88,18 @@ export default function AboutPage() {
             <div className="ec-anim-fade-up">
               <p className="ec-eyebrow mb-6">Our Story</p>
               <h2 className="mb-8 text-[var(--text-primary)]"
-                  style={{
-                    fontFamily: "'Poppins', sans-serif",
-                    fontSize: 'clamp(32px, 5vw, 64px)',
-                    fontWeight: 500,
-                    letterSpacing: '-0.01em',
-                    lineHeight: 0.95
-                  }}>
+                style={{
+                  fontFamily: "'Poppins', sans-serif",
+                  fontSize: 'clamp(32px, 5vw, 64px)',
+                  fontWeight: 500,
+                  letterSpacing: '-0.01em',
+                  lineHeight: 0.95
+                }}>
                 Born in Dhaka,<br />
                 <span className="italic" style={{ color: 'var(--gold)' }}>Built for You</span>
               </h2>
               <div className="space-y-6 text-[15px] leading-relaxed text-[var(--text-secondary)]">
-                <p>Errum was founded with a simple belief: everyone deserves access to premium fashion without the premium price tag. We started small — a single store in Mirpur — and grew into a brand trusted by thousands across Bangladesh.</p>
+                <p>Deshio was founded with a simple belief: everyone deserves access to premium fashion without the premium price tag. We started small — a single store in Mirpur — and grew into a brand trusted by thousands across Bangladesh.</p>
                 <p>Today, with three physical locations and a growing online presence, we continue to handpick every product in our catalogue, ensuring authenticity, quality, and style that stands the test of time.</p>
               </div>
             </div>
@@ -111,14 +111,14 @@ export default function AboutPage() {
                 ['10k+', 'Customers']
               ].map(([val, lbl], i) => (
                 <div key={lbl}
-                     className="ec-surface p-8 text-center bg-[var(--bg-root)] ec-anim-fade-up"
-                     style={{ animationDelay: `${0.2 + i * 0.1}s` }}>
+                  className="ec-surface p-8 text-center bg-[var(--bg-root)] ec-anim-fade-up"
+                  style={{ animationDelay: `${0.2 + i * 0.1}s` }}>
                   <div className="text-5xl font-bold mb-2 text-[var(--gold)]"
-                       style={{ fontFamily: "'Poppins', sans-serif" }}>
+                    style={{ fontFamily: "'Poppins', sans-serif" }}>
                     {val}
                   </div>
                   <div className="text-[10px] uppercase font-bold tracking-[0.2em] text-[var(--text-muted)]"
-                       style={{ fontFamily: "'Poppins', sans-serif" }}>
+                    style={{ fontFamily: "'Poppins', sans-serif" }}>
                     {lbl}
                   </div>
                 </div>
@@ -133,12 +133,12 @@ export default function AboutPage() {
         <div className="ec-container">
           <p className="ec-eyebrow mb-6">Visit Us</p>
           <h2 className="mb-10 text-[var(--text-primary)]"
-              style={{
-                fontFamily: "'Poppins', sans-serif",
-                fontSize: 'clamp(32px, 5vw, 56px)',
-                fontWeight: 500,
-                letterSpacing: '-0.01em'
-              }}>
+            style={{
+              fontFamily: "'Poppins', sans-serif",
+              fontSize: 'clamp(32px, 5vw, 56px)',
+              fontWeight: 500,
+              letterSpacing: '-0.01em'
+            }}>
             Our Stores
           </h2>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">

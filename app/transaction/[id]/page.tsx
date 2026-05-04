@@ -2,15 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { 
-  ArrowLeft, 
-  Calendar, 
-  DollarSign, 
-  Tag, 
-  FileText, 
-  Image as ImageIcon, 
-  Download, 
-  Printer, 
+import {
+  ArrowLeft,
+  Calendar,
+  DollarSign,
+  Tag,
+  FileText,
+  Image as ImageIcon,
+  Download,
+  Printer,
   ChevronRight,
   User,
   Store,
@@ -29,7 +29,7 @@ export default function TransactionDetailPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { id } = useParams();
   const router = useRouter();
-  
+
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [relatedTransactions, setRelatedTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,7 +67,7 @@ export default function TransactionDetailPage() {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
     if (isNaN(date.getTime())) return 'Invalid Date';
-    
+
     // Handle midnight UTC dates (likely date-only from backend)
     if (dateString.endsWith('T00:00:00.000000Z') || dateString.endsWith(' 00:00:00')) {
       return date.toLocaleDateString('en-US', {
@@ -99,24 +99,24 @@ export default function TransactionDetailPage() {
       <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header 
-            darkMode={darkMode} 
-            setDarkMode={setDarkMode} 
-            toggleSidebar={() => setSidebarOpen(!sidebarOpen)} 
+          <Header
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
+            toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
           />
-          
+
           <main className="flex-1 overflow-auto p-6">
             <div className="max-w-5xl mx-auto">
               {/* Top Navigation */}
               <div className="flex items-center justify-between mb-8">
-                <button 
+                <button
                   onClick={() => router.back()}
                   className="flex items-center gap-2 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
                   <span>Back to List</span>
                 </button>
-                
+
                 <div className="flex items-center gap-3">
                   <button className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium hover:bg-gray-50 dark:hover:bg-gray-750 transition-all shadow-sm">
                     <Printer className="w-4 h-4" />
@@ -151,11 +151,10 @@ export default function TransactionDetailPage() {
                               {transaction.name}
                             </h1>
                           </div>
-                          <div className={`px-4 py-1.5 rounded-full text-sm font-bold capitalize ${
-                            transaction.type === 'expense' 
-                              ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300' 
+                          <div className={`px-4 py-1.5 rounded-full text-sm font-bold capitalize ${transaction.type === 'expense'
+                              ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300'
                               : 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
-                          }`}>
+                            }`}>
                             {transaction.type}
                           </div>
                         </div>
@@ -210,7 +209,7 @@ export default function TransactionDetailPage() {
                             <div>
                               <p className="text-xs text-gray-500 uppercase font-semibold">Store Context</p>
                               <p className="text-sm font-medium text-gray-900 dark:text-white">
-                                {transaction.store_name || (transaction.store_id === null ? 'Errum (Global HQ)' : `Store #${transaction.store_id}`)}
+                                {transaction.store_name || (transaction.store_id === null ? 'Deshio (Global HQ)' : `Store #${transaction.store_id}`)}
                               </p>
                             </div>
                           </div>
@@ -260,7 +259,7 @@ export default function TransactionDetailPage() {
                             </thead>
                             <tbody className="divide-y divide-gray-50 dark:divide-gray-750">
                               {relatedTransactions.map((related: any) => (
-                                <tr 
+                                <tr
                                   key={related.id}
                                   onClick={() => router.push(`/transaction/${related.id}`)}
                                   className={`group cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-750/50 transition-colors ${related.id === Number(id) ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''}`}
@@ -276,11 +275,10 @@ export default function TransactionDetailPage() {
                                     <div className="text-[10px] text-gray-500">Code: {related.account?.account_code || 'N/A'}</div>
                                   </td>
                                   <td className="py-4 pr-4">
-                                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                                      related.type === 'credit'
+                                    <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${related.type === 'credit'
                                         ? 'bg-orange-50 dark:bg-orange-950/30 text-orange-600 dark:text-orange-400 border border-orange-100 dark:border-orange-900/50'
                                         : 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-600 dark:text-emerald-400 border border-emerald-100 dark:border-emerald-900/50'
-                                    }`}>
+                                      }`}>
                                       {related.type}
                                     </span>
                                   </td>
@@ -301,7 +299,7 @@ export default function TransactionDetailPage() {
                         <FileText className="w-5 h-5 text-gray-400" />
                         Details & Description
                       </h3>
-                      
+
                       <div className="space-y-6">
                         {transaction.description && (
                           <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-100 dark:border-gray-800">
@@ -327,7 +325,7 @@ export default function TransactionDetailPage() {
                                 <ExternalLink className="w-3 h-3" />
                                 Referenced Document ID: <span className="font-mono bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-gray-900 dark:text-white">{transaction.referenceId}</span>
                               </div>
-                              <button 
+                              <button
                                 onClick={() => loadTransaction()}
                                 className="text-xs text-blue-600 font-bold hover:underline flex items-center gap-1"
                               >
@@ -350,9 +348,9 @@ export default function TransactionDetailPage() {
                           Receipt Copy
                         </h3>
                         {transaction.receiptImage && (
-                          <a 
-                            href={transaction.receiptImage} 
-                            target="_blank" 
+                          <a
+                            href={transaction.receiptImage}
+                            target="_blank"
                             rel="noopener noreferrer"
                             className="p-1.5 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 hover:text-blue-600 transition-colors"
                           >
@@ -363,9 +361,9 @@ export default function TransactionDetailPage() {
                       <div className="p-6">
                         {transaction.receiptImage ? (
                           <div className="relative group cursor-zoom-in">
-                            <img 
-                              src={transaction.receiptImage} 
-                              alt="Receipt" 
+                            <img
+                              src={transaction.receiptImage}
+                              alt="Receipt"
                               className="w-full h-auto rounded-xl shadow-inner border border-gray-100 dark:border-gray-700 group-hover:opacity-95 transition-opacity"
                             />
                             <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/5 rounded-xl">

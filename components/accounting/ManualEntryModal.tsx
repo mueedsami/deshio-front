@@ -25,7 +25,7 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
     account_id: '', // Primary account (e.g. Cash)
     counter_account_id: '', // Secondary account (e.g. Expense)
     description: '',
-    store_id: isAdmin ? 'errum' : (userStoreId?.toString() || ''),
+    store_id: isAdmin ? 'Deshio' : (userStoreId?.toString() || ''),
     note: '',
     reference_note: '',
     receipt_image: ''
@@ -49,7 +49,7 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
         account_id: '',
         counter_account_id: '',
         description: '',
-        store_id: isAdmin ? 'errum' : (userStoreId?.toString() || ''),
+        store_id: isAdmin ? 'Deshio' : (userStoreId?.toString() || ''),
         note: '',
         reference_note: '',
         receipt_image: ''
@@ -65,7 +65,7 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
         accountingService.accounts.getAccounts({ per_page: 500, active: true }),
         isAdmin ? storeService.getAllStores() : Promise.resolve([])
       ]);
-      
+
       const allAccounts = accountsRes?.data?.data || accountsRes?.data || [];
       setAccounts(allAccounts);
       setStores(storesList);
@@ -136,10 +136,10 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
         amount: parseFloat(formData.amount),
         account_id: parseInt(formData.account_id),
         counter_account_id: parseInt(formData.counter_account_id),
-        // If store_id is 'errum', send null to backend for global scoping
-        store_id: formData.store_id === 'errum' ? null : formData.store_id
+        // If store_id is 'Deshio', send null to backend for global scoping
+        store_id: formData.store_id === 'Deshio' ? null : formData.store_id
       };
-      
+
       await transactionService.createTransaction(payload as any);
       toast.success('Balanced journal entries created successfully');
       onSuccess();
@@ -166,7 +166,7 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
             </h2>
             <p className="text-xs text-gray-500 dark:text-gray-400">Record a financial movement manually</p>
           </div>
-          <button 
+          <button
             onClick={onClose}
             className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors text-gray-500"
           >
@@ -226,29 +226,27 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
                     <button
                       type="button"
                       onClick={() => handleInputChange('type', 'debit')}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
-                        formData.type === 'debit'
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${formData.type === 'debit'
                           ? 'bg-white dark:bg-gray-800 text-blue-600 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                      }`}
+                        }`}
                     >
                       Money In (Income)
                     </button>
                     <button
                       type="button"
                       onClick={() => handleInputChange('type', 'credit')}
-                      className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${
-                        formData.type === 'credit'
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${formData.type === 'credit'
                           ? 'bg-white dark:bg-gray-800 text-orange-600 shadow-sm'
                           : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                      }`}
+                        }`}
                     >
                       Money Out (Expense)
                     </button>
                   </div>
                   <p className="text-[10px] text-gray-400 mt-1 italic">
-                    {formData.type === 'debit' 
-                      ? "Increases Bank/Cash balance (Debit Asset)" 
+                    {formData.type === 'debit'
+                      ? "Increases Bank/Cash balance (Debit Asset)"
                       : "Decreases Bank/Cash balance (Credit Asset)"}
                   </p>
                 </div>
@@ -325,7 +323,7 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
                       disabled={!isAdmin}
                       className={`w-full pl-10 pr-3 py-2.5 bg-white dark:bg-black border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all text-sm text-gray-900 dark:text-white appearance-none ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}`}
                     >
-                      {isAdmin && <option value="errum">Errum (Global HQ)</option>}
+                      {isAdmin && <option value="Deshio">Deshio (Global HQ)</option>}
                       {stores.map(store => (
                         <option key={store.id} value={store.id}>{store.name}</option>
                       ))}
@@ -382,20 +380,19 @@ export default function ManualEntryModal({ isOpen, onClose, onSuccess }: ManualE
                     onDragLeave={handleDrag}
                     onDragOver={handleDrag}
                     onDrop={handleDrop}
-                    className={`relative border-2 border-dashed rounded-2xl transition-all flex flex-col items-center justify-center p-6 min-h-[160px] ${
-                      preview 
-                        ? 'border-blue-500/50 bg-blue-50/5 dark:bg-blue-900/5' 
-                        : dragActive 
-                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-inner' 
+                    className={`relative border-2 border-dashed rounded-2xl transition-all flex flex-col items-center justify-center p-6 min-h-[160px] ${preview
+                        ? 'border-blue-500/50 bg-blue-50/5 dark:bg-blue-900/5'
+                        : dragActive
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 shadow-inner'
                           : 'border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700 bg-gray-50/50 dark:bg-black/50'
-                    }`}
+                      }`}
                   >
                     {preview ? (
                       <div className="relative group w-full aspect-video">
-                        <img 
-                          src={preview} 
-                          alt="Receipt preview" 
-                          className="w-full h-full object-contain rounded-lg" 
+                        <img
+                          src={preview}
+                          alt="Receipt preview"
+                          className="w-full h-full object-contain rounded-lg"
                         />
                         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center rounded-lg">
                           <button

@@ -142,11 +142,12 @@ class BatchService {
 
   /**
    * Get batches as array (helper method for easier data access)
-   * This extracts the array from the paginated response
+   * This extracts the array from the paginated response.
+   * Default per_page set to 2000 to avoid common pagination pitfalls in POS/Social.
    */
   async getBatchesArray(filters?: BatchFilters): Promise<Batch[]> {
-    const response = await this.getBatches(filters);
-    return response.data.data;
+    const response = await this.getBatches({ per_page: 2000, ...filters });
+    return response.data?.data || (Array.isArray(response.data) ? response.data : []);
   }
 
   async getBatchesAll(

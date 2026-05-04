@@ -4,7 +4,7 @@ import React from "react";
 import Link from "next/link";
 import { Facebook, Instagram, Youtube, MapPin, Phone, MessageCircle } from "lucide-react";
 
-const BRAND = "Errum";
+const BRAND = "Deshio";
 
 const stores = [
   { name: "Mirpur 12", address: "Level 3, Hazi Kujrat Ali Mollah Market, Mirpur 12", phone: "01942565664" },
@@ -84,7 +84,7 @@ export default function Footer() {
           <div>
             <Link href="/e-commerce" style={{ display: 'inline-block', marginBottom: '16px', textDecoration: 'none' }}>
               <span style={{ fontFamily: "'Poppins', sans-serif", fontSize: '24px', fontWeight: 800, letterSpacing: '0.05em', color: '#111111' }}>
-                ERRUM
+                Deshio
               </span>
             </Link>
             <p style={{ fontSize: '13px', lineHeight: 1.7, color: '#555555', maxWidth: '300px', fontFamily: "'Poppins', sans-serif", marginBottom: '24px' }}>
@@ -113,9 +113,9 @@ export default function Footer() {
             {/* Social Icons */}
             <div style={{ display: 'flex', gap: '8px' }}>
               {[
-                { Icon: Facebook, href: 'https://facebook.com/errum', label: 'Facebook' },
-                { Icon: Instagram, href: 'https://instagram.com/errum', label: 'Instagram' },
-                { Icon: Youtube, href: 'https://youtube.com/errum', label: 'YouTube' },
+                { Icon: Facebook, href: 'https://facebook.com/Deshio', label: 'Facebook' },
+                { Icon: Instagram, href: 'https://instagram.com/Deshio', label: 'Instagram' },
+                { Icon: Youtube, href: 'https://youtube.com/Deshio', label: 'YouTube' },
               ].map(({ Icon, href, label }) => (
                 <a key={label} href={href} target="_blank" rel="noreferrer" aria-label={label}
                   style={{
@@ -212,7 +212,7 @@ export default function Footer() {
         {/* ── Bottom bar ── */}
         <div style={{ marginTop: '48px', paddingTop: '24px', borderTop: '1px solid rgba(0,0,0,0.08)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '16px' }}>
           <p style={{ fontSize: '12px', color: '#999999', fontFamily: "'Poppins', sans-serif", margin: 0 }}>
-            © {year} Errum STORE — Handcrafted for Confidence.
+            © {year} Deshio STORE — Handcrafted for Confidence.
           </p>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             {['bKash', 'Nagad', 'Visa', 'Mastercard'].map(m => (

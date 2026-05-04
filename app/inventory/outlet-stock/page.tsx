@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useTheme } from "@/contexts/ThemeContext";
-import { Package, TruckIcon, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { Package, TruckIcon, CheckCircle2, AlertCircle, X, FileText } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import storeService, { Store } from '@/services/storeService';
@@ -479,14 +479,14 @@ export default function DispatchManagementPage() {
                 </div>
               </div>
 
-              {selectedDispatch.notes && (
+              {(selectedDispatch.notes || (selectedDispatch as any).note || (selectedDispatch as any).remarks || (selectedDispatch as any).remark || (selectedDispatch as any).comment) && (
                 <div className="mb-6 bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4">
                   <h3 className="text-xs font-bold text-amber-800 dark:text-amber-300 uppercase tracking-wide mb-2 flex items-center gap-2">
                     <Package className="w-3.5 h-3.5" />
                     Dispatch Notes
                   </h3>
                   <p className="text-sm text-amber-900 dark:text-amber-100 whitespace-pre-wrap leading-relaxed">
-                    {selectedDispatch.notes}
+                    {selectedDispatch.notes || (selectedDispatch as any).note || (selectedDispatch as any).remarks || (selectedDispatch as any).remark || (selectedDispatch as any).comment}
                   </p>
                 </div>
               )}

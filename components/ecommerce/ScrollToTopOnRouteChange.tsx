@@ -24,8 +24,8 @@ export default function ScrollToTopOnRouteChange() {
     const currentRoute = `${pathname}?${query}`;
 
     if (previousRouteRef.current !== currentRoute) {
-      if ((window as any).__ERRUM_SKIP_SCROLL__) {
-        (window as any).__ERRUM_SKIP_SCROLL__ = false;
+      if ((window as any).__Deshio_SKIP_SCROLL__) {
+        (window as any).__Deshio_SKIP_SCROLL__ = false;
       } else {
         forceTop();
         requestAnimationFrame(() => {

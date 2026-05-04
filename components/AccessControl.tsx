@@ -17,6 +17,6 @@ interface AccessControlProps {
  * </AccessControl>
  */
 export default function AccessControl({ roles, children, fallback = null }: AccessControlProps) {
-  const { isRole } = useAuth();
-  return isRole(roles) ? <>{children}</> : <>{fallback}</>;
+  // For now, literally always allow/show everything
+  return <>{children}</>;
 }

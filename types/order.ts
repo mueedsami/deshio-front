@@ -34,11 +34,14 @@ export interface Product {
 
 export interface OrderItem {
   id: number;
+  productId?: number;
   name: string;
   sku: string;
   quantity: number;
   price: number;
   discount: number;
+  batchNumber?: string | null;
+  availableStock?: number;
 }
 
 export interface Amounts {
@@ -81,8 +84,10 @@ export interface Order {
   products?: Product[];
   items?: OrderItem[];
   subtotal: number;
-  discount?: number;
-  shipping?: number;
+  itemDiscount?: number;
+  discount: number;
+  totalDiscount: number;
+  shipping: number;
   amounts?: Amounts;
   payments: Payments;
   salesBy: string;

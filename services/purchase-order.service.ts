@@ -1,6 +1,5 @@
 import axiosInstance from '@/lib/axios';
 import { AxiosResponse } from 'axios';
-
 // Types
 export interface PurchaseOrderItem {
   id?: number;
@@ -17,7 +16,6 @@ export interface PurchaseOrderItem {
   product?: any;
   productBatch?: any;
 }
-
 export interface CreatePurchaseOrderData {
   vendor_id: number;
   store_id: number;
@@ -29,7 +27,6 @@ export interface CreatePurchaseOrderData {
   terms_and_conditions?: string;
   items: PurchaseOrderItem[];
 }
-
 export interface UpdatePurchaseOrderData {
   vendor_id?: number;
   expected_delivery_date?: string;
@@ -39,7 +36,6 @@ export interface UpdatePurchaseOrderData {
   notes?: string;
   terms_and_conditions?: string;
 }
-
 export interface PurchaseOrder {
   id: number;
   po_number: string;
@@ -75,7 +71,6 @@ export interface PurchaseOrder {
   items?: PurchaseOrderItem[];
   payments?: any[];
 }
-
 export interface PurchaseOrderFilters {
   vendor_id?: number;
   store_id?: number;
@@ -89,7 +84,6 @@ export interface PurchaseOrderFilters {
   per_page?: number;
   page?: number;
 }
-
 export interface ReceiveItemData {
   item_id: number;
   quantity_received: number;
@@ -97,17 +91,14 @@ export interface ReceiveItemData {
   manufactured_date?: string;
   expiry_date?: string;
 }
-
 export interface ReceivePurchaseOrderData {
   items: ReceiveItemData[];
 }
-
 export interface ApiResponse<T> {
   success: boolean;
   message?: string;
   data?: T;
 }
-
 export interface PaginatedResponse<T> {
   success: boolean;
   data: {
@@ -125,7 +116,6 @@ export interface PaginatedResponse<T> {
     total: number;
   };
 }
-
 export interface PurchaseOrderStatistics {
   total_purchase_orders: number;
   by_status: Array<{ status: string; count: number }>;
@@ -136,10 +126,8 @@ export interface PurchaseOrderStatistics {
   overdue_orders: number;
   recent_orders: PurchaseOrder[];
 }
-
 class PurchaseOrderService {
   private readonly baseURL = '/purchase-orders';
-
   /**
    * Create a new purchase order
    */
@@ -150,14 +138,13 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Get all purchase orders with filters and pagination
    */
   async getAll(filters?: PurchaseOrderFilters): Promise<PaginatedResponse<PurchaseOrder>> {
     // Clean up filters - remove empty values
     const cleanFilters: any = {};
-    
+
     if (filters) {
       if (filters.vendor_id) cleanFilters.vendor_id = filters.vendor_id;
       if (filters.store_id) cleanFilters.store_id = filters.store_id;
@@ -176,20 +163,19 @@ class PurchaseOrderService {
       }
       if (filters.page) cleanFilters.page = filters.page;
     }
-
     const response: AxiosResponse<any> = await axiosInstance.get(
       this.baseURL,
       { params: cleanFilters }
     );
-    
+
     // Laravel returns: { success: true, data: { current_page, data: [...], ... } }
     return {
       success: response.data.success || true,
-      data: response.data.data || { 
-        data: [], 
-        current_page: 1, 
-        last_page: 1, 
-        per_page: 15, 
+      data: response.data.data || {
+        data: [],
+        current_page: 1,
+        last_page: 1,
+        per_page: 15,
         total: 0,
         from: 0,
         to: 0,
@@ -201,7 +187,6 @@ class PurchaseOrderService {
       }
     };
   }
-
   /**
    * Get single purchase order by ID
    */
@@ -211,7 +196,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Update purchase order (only draft status)
    */
@@ -222,7 +206,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Add item to purchase order
    */
@@ -233,7 +216,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Update item in purchase order
    */
@@ -248,7 +230,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Remove item from purchase order
    */
@@ -258,7 +239,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Approve purchase order
    */
@@ -268,7 +248,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Receive purchase order (create product batches)
    */
@@ -279,7 +258,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Cancel purchase order
    */
@@ -290,7 +268,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Get purchase order statistics
    */
@@ -304,7 +281,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Export purchase orders (optional - add if backend supports)
    */
@@ -318,7 +294,6 @@ class PurchaseOrderService {
     );
     return response.data;
   }
-
   /**
    * Download purchase order PDF (optional - add if backend supports)
    */
@@ -331,8 +306,17 @@ class PurchaseOrderService {
     );
     return response.data;
   }
+  /**
+   * Delete purchase order
+   */
+  async delete(id: number, password?: string): Promise<ApiResponse<void>> {
+    const response: AxiosResponse<ApiResponse<void>> = await axiosInstance.delete(
+      `${this.baseURL}/${id}`,
+      { data: { password } }
+    );
+    return response.data;
+  }
 }
-
 // Export singleton instance
 const purchaseOrderService = new PurchaseOrderService();
 export default purchaseOrderService;
