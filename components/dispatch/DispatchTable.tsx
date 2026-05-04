@@ -7,11 +7,16 @@ interface DispatchTableProps {
   loading: boolean;
   onViewDetails: (dispatch: ProductDispatch) => void;
   onApprove: (id: number) => void;
+  onSubmit: (id: number) => void;
+  onReject: (id: number, notes?: string) => void;
   onMarkDispatched: (id: number) => void;
   onMarkDelivered: (id: number) => void;
   onCancel: (id: number) => void;
   onScanBarcodes?: (dispatch: ProductDispatch, mode: 'send' | 'receive') => void;
   currentStoreId?: number;
+  selectedIds?: Set<number>;
+  onSelectChange?: (id: number, selected: boolean) => void;
+  onSelectAll?: (ids: number[]) => void;
 }
 
 const DispatchTable: React.FC<DispatchTableProps> = ({
@@ -19,11 +24,16 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
   loading,
   onViewDetails,
   onApprove,
+  onSubmit,
+  onReject,
   onMarkDispatched,
   onMarkDelivered,
   onCancel,
   onScanBarcodes,
   currentStoreId,
+  selectedIds = new Set(),
+  onSelectChange,
+  onSelectAll,
 }) => {
   const getStatusBadge = (status: string) => {
     const badges: Record<string, { bg: string; text: string; label: string }> = {
@@ -61,6 +71,11 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
         bg: 'bg-gray-100 dark:bg-gray-700',
         text: 'text-gray-800 dark:text-gray-300',
         label: 'Cancelled',
+      },
+      rejected: {
+        bg: 'bg-red-100 dark:bg-red-900/30',
+        text: 'text-red-800 dark:text-red-300',
+        label: 'Rejected',
       },
     };
 
@@ -121,6 +136,16 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
         <table className="w-full">
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700">
+              {onSelectChange && onSelectAll && (
+                <th className="py-3 px-4 text-left">
+                  <input
+                    type="checkbox"
+                    checked={dispatches.length > 0 && selectedIds.size === dispatches.length}
+                    onChange={(e) => onSelectAll(dispatches.map(d => d.id))}
+                    className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                  />
+                </th>
+              )}
               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-900 dark:text-white">
                 Dispatch #
               </th>
@@ -148,7 +173,7 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
             {dispatches.length === 0 ? (
               <tr>
                 <td
-                  colSpan={7}
+                  colSpan={onSelectChange ? 8 : 7}
                   className="text-center py-8 text-gray-500 dark:text-gray-400"
                 >
                   No dispatches found
@@ -164,6 +189,16 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                     key={dispatch.id}
                     className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/50"
                   >
+                    {onSelectChange && (
+                      <td className="py-3 px-4">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(dispatch.id)}
+                          onChange={(e) => onSelectChange(dispatch.id, e.target.checked)}
+                          className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500"
+                        />
+                      </td>
+                    )}
                     <td className="py-3 px-4">
                       <div className="text-sm font-medium text-gray-900 dark:text-white">
                         {dispatch.dispatch_number}
@@ -230,14 +265,15 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                         </button>
 
                         {/* SOURCE STORE ACTIONS */}
-                        {atSource && ['pending', 'pending_approval'].includes(dispatch.status) && !dispatch.approved_by && (
+                        {atSource && dispatch.status === 'pending' && (
                           <>
                             <button
-                              onClick={() => onApprove(dispatch.id)}
-                              className="p-1.5 hover:bg-green-100 dark:hover:bg-green-900/30 rounded"
-                              title="Approve"
+                              onClick={() => onSubmit(dispatch.id)}
+                              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium flex items-center gap-1"
+                              title="Submit for Approval"
                             >
-                              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                              <FileText className="w-3 h-3" />
+                              Submit
                             </button>
                             <button
                               onClick={() => onCancel(dispatch.id)}
@@ -247,6 +283,28 @@ const DispatchTable: React.FC<DispatchTableProps> = ({
                               <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
                             </button>
                           </>
+                        )}
+
+                        {atSource && dispatch.status === 'pending_approval' && (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => onApprove(dispatch.id)}
+                              className="p-1.5 hover:bg-green-100 dark:hover:bg-green-900/30 rounded"
+                              title="Approve"
+                            >
+                              <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                const notes = prompt('Enter rejection reason:');
+                                if (notes !== null) onReject(dispatch.id, notes);
+                              }}
+                              className="p-1.5 hover:bg-red-100 dark:hover:bg-red-900/30 rounded"
+                              title="Reject"
+                            >
+                              <Ban className="w-4 h-4 text-red-600 dark:text-red-400" />
+                            </button>
+                          </div>
                         )}
 
                         {atSource && (

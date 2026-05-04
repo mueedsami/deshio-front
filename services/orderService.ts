@@ -147,11 +147,13 @@ export interface OrderFilters {
   status?: string;
   payment_status?: string;
   fulfillment_status?: string;
-  store_id?: number;
+  store_id?: number | string;
   customer_id?: number;
   created_by?: number;
   date_from?: string;
   date_to?: string;
+  date_type?: string;
+  today?: boolean;
   search?: string;
   overdue?: boolean;
   installment_only?: boolean;
@@ -160,6 +162,7 @@ export interface OrderFilters {
   per_page?: number;
   page?: number;
   skipStoreScope?: boolean;
+  intended_courier?: string;
 }
 
 export interface OrderStatistics {

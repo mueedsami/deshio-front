@@ -33,6 +33,9 @@ import {
   RotateCcw,
   FileSpreadsheet,
   AlertCircle,
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
@@ -339,6 +342,13 @@ export default function OrdersDashboard() {
 
   // ✅ NEW: Order type filter (All / Social / E-Com)
   const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
+  const [todayOnly, setTodayOnly] = useState(false);
+
+  // Pagination state
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [totalResults, setTotalResults] = useState(0);
+  const [perPage, setPerPage] = useState(25);
 
   // ✅ Separate filters
   const [orderStatusFilter, setOrderStatusFilter] = useState('All Order Status');
@@ -605,14 +615,34 @@ export default function OrdersDashboard() {
   useEffect(() => {
     const name = localStorage.getItem('userName') || '';
     setUserName(name);
-    loadOrders();
     if (viewMode === 'online') {
-      // Courier dropdown options (safe if endpoint is missing)
       loadAvailableCouriers();
     }
     checkPrinterStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, storeFilter]);
+  }, [viewMode]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [
+    viewMode,
+    storeFilter,
+    paymentStatusFilter,
+    orderStatusFilter,
+    courierFilter,
+    orderTypeFilter,
+    search,
+    todayOnly,
+    dateFilter,
+    startDate,
+    endDate,
+    dateFilterType
+  ]);
+
+  useEffect(() => {
+    loadOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, perPage, viewMode, storeFilter, paymentStatusFilter, orderStatusFilter, courierFilter, orderTypeFilter, search, todayOnly, dateFilter, startDate, endDate, dateFilterType]);
 
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
@@ -1187,45 +1217,36 @@ export default function OrdersDashboard() {
   const loadOrders = async () => {
     setIsLoading(true);
     try {
-      let allOrders: any[] = [];
-      const commonParams: any = {
+      const params: any = {
+        page,
+        per_page: perPage,
         store_id: storeFilter === 'All Stores' ? undefined : storeFilter,
+        payment_status: paymentStatusFilter === 'All Payment Status' ? undefined : paymentStatusFilter,
+        status: orderStatusFilter === 'All Order Status' ? undefined : orderStatusFilter,
+        intended_courier: courierFilter === 'All Couriers' ? undefined : courierFilter,
+        order_type: orderTypeFilter === 'All Types' ? undefined : orderTypeFilter,
+        search: search.trim() || undefined,
+        today: todayOnly || undefined,
+        date_from: (!todayOnly && (dateFilter || startDate)) ? (dateFilter || startDate) : undefined,
+        date_to: (!todayOnly && (dateFilter || endDate)) ? (dateFilter || endDate) : undefined,
+        date_type: dateFilterType,
         sort_by: dateFilterType === 'updated_at' ? 'updated_at' : 'created_at',
         sort_order: 'desc',
-        per_page: 1000,
-        date_filter_type: dateFilterType,
       };
 
       if (viewMode === 'installments') {
-        const inst = await orderService.getAll({
-          ...commonParams,
-          order_type: 'counter',
-          installment_only: true,
-        });
-
-        allOrders = inst.data || [];
-      } else {
-        const [social, ecommerce] = await Promise.all([
-          orderService.getAll({
-            ...commonParams,
-            order_type: 'social_commerce',
-          }),
-          orderService.getAll({
-            ...commonParams,
-            order_type: 'ecommerce',
-          }),
-        ]);
-
-        allOrders = [...(social.data || []), ...(ecommerce.data || [])];
+        params.order_type = 'counter';
+        params.installment_only = true;
       }
 
-      allOrders.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-      const transformedOrders = allOrders.map((o: any) => transformOrder(o));
-      const hydrated = await hydrateCouriersFromDB(transformedOrders);
-
-      setOrders(hydrated);
-      setFilteredOrders(hydrated);
+      const res = await orderService.getAll(params);
+      
+      const transformed = (res.data || []).map((o: any) => transformOrder(o));
+      
+      setOrders(transformed);
+      setFilteredOrders(transformed);
+      setTotalResults(res.total);
+      setTotalPages(res.last_page);
     } catch (error: any) {
       console.error('Get orders error:', error);
       alert('Failed to fetch orders: ' + (error?.message || 'Unknown error'));
@@ -1287,71 +1308,8 @@ export default function OrdersDashboard() {
 
 
   useEffect(() => {
-    let filtered = orders;
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      filtered = filtered.filter(
-        (o) =>
-          o.id.toString().includes(q) ||
-          o.orderNumber?.toLowerCase().includes(q) ||
-          o.customer.name.toLowerCase().includes(q) ||
-          o.customer.phone.includes(search.trim())
-      );
-    }
-
-    if (dateFilter.trim()) {
-      filtered = filtered.filter((o) => {
-        let orderDate = o.date;
-        if (dateFilterType === 'updated_at' && o.updatedAt) {
-          const ud = new Date(o.updatedAt);
-          orderDate = `${String(ud.getDate()).padStart(2, '0')}/${String(ud.getMonth() + 1).padStart(2, '0')}/${ud.getFullYear()}`;
-        }
-        let filterDateFormatted = dateFilter;
-        if (dateFilter.includes('-') && dateFilter.split('-')[0].length === 4) {
-          const [year, month, day] = dateFilter.split('-');
-          filterDateFormatted = `${day}/${month}/${year}`;
-        }
-        return orderDate === filterDateFormatted;
-      });
-    } else if (startDate.trim() || endDate.trim()) {
-      const start = startDate.trim() ? new Date(startDate.trim()) : null;
-      const end = endDate.trim() ? new Date(endDate.trim() + "T23:59:59") : null;
-
-      filtered = filtered.filter((o) => {
-        const oDateStr = dateFilterType === 'updated_at' ? o.updatedAt : (o.orderDateRaw || o.createdAt);
-        if (!oDateStr) return false;
-        const oTime = new Date(oDateStr).getTime();
-        if (start && oTime < start.getTime()) return false;
-        if (end && oTime > end.getTime()) return false;
-        return true;
-      });
-    }
-
-    // ✅ NEW: order type filter
-    if (orderTypeFilter !== 'All Types') {
-      const target = normalize(orderTypeFilter);
-      filtered = filtered.filter((o) => normalize(o.orderType) === target);
-    }
-
-    if (orderStatusFilter !== 'All Order Status') {
-      const target = normalize(orderStatusFilter);
-      filtered = filtered.filter((o) => normalize(o.status) === target);
-    }
-
-    if (paymentStatusFilter !== 'All Payment Status') {
-      const target = normalize(paymentStatusFilter);
-      filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
-    }
-
-    // ✅ Courier marker filter
-    if (courierFilter !== 'All Couriers') {
-      const target = normalizeCourier(courierFilter);
-      filtered = filtered.filter((o) => normalizeCourier(o.intendedCourier) === target);
-    }
-
-    setFilteredOrders(filtered);
-  }, [search, dateFilter, startDate, endDate, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
+    setFilteredOrders(orders);
+  }, [orders]);
 
   // 🧾 Bulk lookup Pathao status for displayed orders
   const filteredOrderNumbers = useMemo(() => {
@@ -3439,6 +3397,47 @@ export default function OrdersDashboard() {
                 ))}
               </div>
 
+              {/* ✅ Type Quick Filters */}
+              <div className="flex flex-wrap items-center gap-1.5 mb-4">
+                <span className="text-[10px] font-bold text-gray-400 dark:text-gray-600 uppercase mr-1">Type:</span>
+                {[
+                  { label: 'All', value: 'All Types' },
+                  ...(viewMode === 'online' ? [
+                    { label: 'Social Commerce', value: 'social_commerce' },
+                    { label: 'E-Commerce', value: 'ecommerce' }
+                  ] : [
+                    { label: 'Counter', value: 'counter' }
+                  ])
+                ].map((t) => (
+                  <button
+                    key={t.value}
+                    onClick={() => setOrderTypeFilter(t.value)}
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
+                      orderTypeFilter === t.value
+                        ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
+                        : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* ✅ Today Toggle */}
+              <div className="flex items-center gap-2 mb-4">
+                <button
+                  onClick={() => setTodayOnly(!todayOnly)}
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[10px] font-bold transition-all border ${
+                    todayOnly
+                      ? 'bg-green-600 text-white border-green-600 shadow-sm'
+                      : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
+                  }`}
+                >
+                  <Calendar className="w-3 h-3" />
+                  Today
+                </button>
+              </div>
+
               {/* Main Search & Primary Filters */}
               <div className="flex flex-col lg:flex-row lg:items-center gap-3">
                 <div className="relative flex-1">
@@ -3561,24 +3560,7 @@ export default function OrdersDashboard() {
                     />
                   </div>
 
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-500 dark:text-gray-500 uppercase mb-1.5 ml-1">Type</label>
-                    <select
-                      value={orderTypeFilter}
-                      onChange={(e) => setOrderTypeFilter(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-1 focus:ring-black dark:focus:ring-white"
-                    >
-                      <option value="All Types">All Types</option>
-                      {viewMode === 'online' ? (
-                        <>
-                          <option value="social_commerce">Social Commerce</option>
-                          <option value="ecommerce">E-Commerce</option>
-                        </>
-                      ) : (
-                        <option value="counter">Counter</option>
-                      )}
-                    </select>
-                  </div>
+
                 </div>
               )}
 
@@ -4073,6 +4055,31 @@ export default function OrdersDashboard() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                  {/* Pagination */}
+                  <div className="px-4 py-3 border-t border-gray-100 dark:border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-4 bg-gray-50/50 dark:bg-gray-800/30">
+                    <p className="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400">
+                      Showing <span className="font-bold text-black dark:text-white">{orders.length}</span> of <span className="font-bold text-black dark:text-white">{totalResults}</span> orders
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setPage(p => Math.max(1, p - 1))}
+                        disabled={page === 1}
+                        className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-50 hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black transition-all"
+                      >
+                        <ChevronLeft className="h-4 w-4" />
+                      </button>
+                      <span className="text-[10px] sm:text-xs font-bold text-black dark:text-white px-2">
+                        Page {page} of {totalPages}
+                      </span>
+                      <button
+                        onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                        disabled={page === totalPages}
+                        className="p-1.5 rounded-lg border border-gray-200 dark:border-gray-700 disabled:opacity-50 hover:bg-black hover:text-white dark:hover:bg-white dark:hover:text-black transition-all"
+                      >
+                        <ChevronRight className="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}

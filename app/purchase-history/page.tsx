@@ -314,7 +314,7 @@ export default function PurchaseHistoryPage() {
       }
 
       const fullOrder = await orderService.getById(order.id);
-      await printReceipt(fullOrder, undefined, { template: 'pos_receipt' });
+      await printReceipt(fullOrder, undefined, { template: 'pos_receipt', title: 'POS Receipt' });
       alert(`✅ Receipt printed for order #${fullOrder.order_number || fullOrder.id}`);
     } catch (error: any) {
       console.error('Print receipt error:', error);

@@ -11,6 +11,10 @@ interface DispatchFiltersProps {
   setFilterSourceStore: (value: string) => void;
   filterDestStore: string;
   setFilterDestStore: (value: string) => void;
+  filterType: string;
+  setFilterType: (value: string) => void;
+  isToday: boolean;
+  setIsToday: (value: boolean) => void;
   stores: Store[];
 }
 
@@ -23,24 +27,52 @@ const DispatchFilters: React.FC<DispatchFiltersProps> = ({
   setFilterSourceStore,
   filterDestStore,
   setFilterDestStore,
+  filterType,
+  setFilterType,
+  isToday,
+  setIsToday,
   stores,
 }) => {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6 mb-6">
-      <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-        Filters
-      </h3>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+          Filters
+        </h3>
+        <button
+          onClick={() => setIsToday(!isToday)}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors border ${
+            isToday
+              ? 'bg-blue-600 border-blue-600 text-white hover:bg-blue-700'
+              : 'bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-600'
+          }`}
+        >
+          Today
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             type="text"
-            placeholder="Search by Dispatch #"
+            placeholder="Search..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-9 pr-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+
+        <select
+          value={filterType}
+          onChange={(e) => setFilterType(e.target.value)}
+          className="px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="">All Types</option>
+          <option value="social_commerce">Social Commerce</option>
+          <option value="e_commerce">E-Commerce</option>
+          <option value="store_transfer">Store Transfer</option>
+        </select>
 
         <select
           value={filterStatus}
@@ -49,10 +81,12 @@ const DispatchFilters: React.FC<DispatchFiltersProps> = ({
         >
           <option value="">All Statuses</option>
           <option value="pending">Pending</option>
+          <option value="pending_approval">Pending Approval</option>
           <option value="approved">Approved</option>
           <option value="in_transit">In Transit</option>
           <option value="delivered">Delivered</option>
           <option value="cancelled">Cancelled</option>
+          <option value="rejected">Rejected</option>
         </select>
 
         <select
