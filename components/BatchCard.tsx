@@ -107,7 +107,21 @@ export default function BatchCard({ batch, onDelete, onEdit }: BatchCardProps) {
     <>
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md hover:shadow-xl transition-all duration-200 p-5 border border-gray-100 dark:border-gray-700">
         {/* Header */}
-        <div className="flex items-start justify-between mb-4">
+        <div className="flex items-start gap-4 mb-4">
+          <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700 flex-shrink-0">
+            <img
+              src={
+                batch.product.primary_image?.url || 
+                (batch.product.images && batch.product.images[0]?.image_url) ||
+                'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400'
+              }
+              alt={batch.product.name}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400';
+              }}
+            />
+          </div>
           <div className="flex-1">
             <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Product</div>
             <div className="font-semibold text-gray-900 dark:text-white text-lg">

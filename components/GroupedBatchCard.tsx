@@ -142,7 +142,22 @@ export default function GroupedBatchCard({ group }: { group: BatchSkuGroup }) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md border border-gray-100 dark:border-gray-700 p-5">
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="flex items-start gap-4 min-w-0">
+          <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700 flex-shrink-0">
+            <img
+              src={
+                group.variants[0]?.latestBatch?.product?.primary_image?.url ||
+                (group.variants[0]?.latestBatch?.product?.images && group.variants[0].latestBatch.product.images[0]?.image_url) ||
+                'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400'
+              }
+              alt={group.baseName}
+              className="w-full h-full object-cover"
+              onError={(e) => {
+                e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400';
+              }}
+            />
+          </div>
+          <div className="min-w-0">
           <div className="text-xs text-gray-500 dark:text-gray-400">SKU</div>
           <div className="font-semibold text-gray-900 dark:text-white text-lg truncate">
             {group.baseName || group.sku || "(No name)"}

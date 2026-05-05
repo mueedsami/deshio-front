@@ -163,8 +163,44 @@ export default function SocialCommercePage() {
   const [imageModalSrc, setImageModalSrc] = useState<string | null>(null);
   const [imageModalTitle, setImageModalTitle] = useState<string>('');
 
-  // 🧩 Cache product thumbnails for recent orders (by product_id)
   const [recentThumbsByProductId, setRecentThumbsByProductId] = useState<Record<number, string>>({});
+
+  // 🖼️ Hover expansion logic
+  const [isPreviewFromHover, setIsPreviewFromHover] = useState(false);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const leaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isOverModalRef = useRef(false);
+
+  const handleMouseEnterProduct = (product: any) => {
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current);
+      leaveTimeoutRef.current = null;
+    }
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    hoverTimeoutRef.current = setTimeout(() => {
+      setProductPreview(product);
+      setProductPreviewOpen(true);
+      setIsPreviewFromHover(true);
+    }, 500);
+  };
+
+  const handleMouseLeaveProduct = () => {
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    
+    if (isPreviewFromHover) {
+      if (leaveTimeoutRef.current) clearTimeout(leaveTimeoutRef.current);
+      leaveTimeoutRef.current = setTimeout(() => {
+        if (!isOverModalRef.current) {
+          setProductPreviewOpen(false);
+          setIsPreviewFromHover(false);
+          setProductPreview(null);
+        }
+      }, 100);
+    }
+  };
 
   // ✅ Reuse lookup hook for consistent phone lookup behavior (debounced)
   const customerLookup = useCustomerLookup({ debounceMs: 500, minLength: 6 });
@@ -460,9 +496,25 @@ export default function SocialCommercePage() {
   };
 
   const getRecentItemThumbSrc = (it: any): string => {
+    // 1) Direct image fields
     const raw = it?.product_image || it?.image_url || it?.image;
     if (raw) return normalizeImageUrl(String(raw));
 
+    // 2) Nested product primary image
+    const prod = it?.product;
+    if (prod) {
+      const pi = prod.primary_image;
+      const piUrl = pi?.url || pi?.image_url || pi?.image_path;
+      if (piUrl) return normalizeImageUrl(String(piUrl));
+
+      // Fallback to images array
+      const imgs = Array.isArray(prod.images) ? prod.images : [];
+      const primary = imgs.find(img => img.is_primary) || imgs[0];
+      const u = primary?.image_url || primary?.url || primary?.image_path;
+      if (u) return normalizeImageUrl(String(u));
+    }
+
+    // 3) Cache
     const pid = Number(it?.product_id ?? it?.productId ?? it?.product?.id ?? 0) || 0;
     if (pid && recentThumbsByProductId[pid]) return recentThumbsByProductId[pid];
 
@@ -585,6 +637,15 @@ export default function SocialCommercePage() {
   const closeProductPreview = () => {
     setProductPreviewOpen(false);
     setProductPreview(null);
+    setIsPreviewFromHover(false);
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    if (leaveTimeoutRef.current) {
+      clearTimeout(leaveTimeoutRef.current);
+      leaveTimeoutRef.current = null;
+    }
   };
 
   const orderPreviewItems = orderPreview ? normalizeOrderItemsForPreview(orderPreview) : [];
@@ -2592,12 +2653,14 @@ export default function SocialCommercePage() {
 
                     {searchResults.length > 0 && (
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-h-[28rem] overflow-y-auto mb-4 p-2">
-                        {searchResults.map((product) => (
-                          <div
-                            key={`${product.id}`}
-                            onClick={() => handleProductSelect(product)}
-                            className="group relative flex flex-col border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 p-3 shadow-sm cursor-pointer hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200"
-                          >
+                          {searchResults.map((product) => (
+                            <div
+                              key={`${product.id}`}
+                              onClick={() => handleProductSelect(product)}
+                              onMouseEnter={() => handleMouseEnterProduct(product)}
+                              onMouseLeave={handleMouseLeaveProduct}
+                              className="group relative flex flex-col border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 p-3 shadow-sm cursor-pointer hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200"
+                            >
                             <div className="relative w-full aspect-square mb-3 overflow-hidden rounded bg-gray-50 dark:bg-gray-900/50">
                               <button
                                 type="button"
@@ -2615,6 +2678,9 @@ export default function SocialCommercePage() {
                                 src={product.attributes.mainImage}
                                 alt={product.name}
                                 className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                onError={(e) => {
+                                  e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=400';
+                                }}
                               />
                             </div>
                             <div className="flex-1 flex flex-col justify-between">
@@ -3000,14 +3066,29 @@ export default function SocialCommercePage() {
 
           {/* 🖼️ Product Image Preview (before selecting) */}
           {productPreviewOpen && productPreview && (
-            <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4">
+            <div 
+              className={`fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 ${isPreviewFromHover ? 'pointer-events-none' : ''}`}
+            >
               <div
-                className="absolute inset-0 bg-black/50"
+                className={`absolute inset-0 transition-opacity duration-300 ${isPreviewFromHover ? 'bg-transparent' : 'bg-black/50'}`}
                 onClick={closeProductPreview}
                 aria-hidden="true"
               />
 
-              <div className="relative w-full max-w-xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800">
+              <div 
+                className="relative w-full max-w-xl overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-800 pointer-events-auto"
+                onMouseEnter={() => {
+                  isOverModalRef.current = true;
+                  if (leaveTimeoutRef.current) {
+                    clearTimeout(leaveTimeoutRef.current);
+                    leaveTimeoutRef.current = null;
+                  }
+                }}
+                onMouseLeave={() => {
+                  isOverModalRef.current = false;
+                  if (isPreviewFromHover) handleMouseLeaveProduct();
+                }}
+              >
                 <div className="flex items-start justify-between gap-4 border-b border-gray-200 p-4 dark:border-gray-700">
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-gray-900 dark:text-white">Product preview</p>
@@ -3029,6 +3110,9 @@ export default function SocialCommercePage() {
                       src={productPreview?.attributes?.mainImage}
                       alt={productPreview?.name}
                       className="h-72 w-full object-cover"
+                      onError={(e) => {
+                        e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800';
+                      }}
                     />
                   </div>
 

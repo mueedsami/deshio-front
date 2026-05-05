@@ -4,6 +4,13 @@ export interface Product {
   id: number;
   name: string;
   sku?: string;
+  primary_image?: {
+    url: string;
+  };
+  images?: Array<{
+    image_url: string;
+    is_primary: boolean;
+  }>;
 }
 
 export interface Store {
