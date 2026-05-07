@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef, type ReactNode } from 'react';
-import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -165,8 +165,12 @@ export default function SocialCommercePage() {
 
   const [recentThumbsByProductId, setRecentThumbsByProductId] = useState<Record<number, string>>({});
 
-  // 🖼️ Hover expansion logic
+  // 🖼️ Hover expansion logic (Disabled as per request, but kept state to avoid ref errors)
   const [isPreviewFromHover, setIsPreviewFromHover] = useState(false);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [zoomPos, setZoomPos] = useState({ x: 0, y: 0 });
+  const [isZoomed, setIsZoomed] = useState(false);
+
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const leaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isOverModalRef = useRef(false);
@@ -632,7 +636,47 @@ export default function SocialCommercePage() {
   const openProductPreview = (product: any) => {
     setProductPreview(product);
     setProductPreviewOpen(true);
+    setIsPreviewFromHover(false);
+    setActiveImageIndex(0);
+    setIsZoomed(false);
   };
+
+  const handleZoomMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const { left, top, width, height } = e.currentTarget.getBoundingClientRect();
+    const x = ((e.pageX - left) / width) * 100;
+    const y = ((e.pageY - top) / height) * 100;
+    setZoomPos({ x, y });
+  };
+
+  const allPreviewImages = useMemo(() => {
+    if (!productPreview) return [];
+    const images: string[] = [];
+    
+    // 1) Main image from attributes
+    if (productPreview.attributes?.mainImage) {
+      images.push(productPreview.attributes.mainImage);
+    } else if (productPreview.primary_image) {
+      const u = pickProductImage(productPreview);
+      if (u) images.push(normalizeImageUrl(u));
+    }
+
+    // 2) Other images
+    const otherImages = productPreview.images || productPreview.attributes?.images || [];
+    if (Array.isArray(otherImages)) {
+      otherImages.forEach((img: any) => {
+        const url = typeof img === 'string' ? img : img.image_url || img.image_path || img.url || img.image;
+        if (url) {
+          const fullUrl = normalizeImageUrl(url);
+          if (!images.includes(fullUrl)) {
+            images.push(fullUrl);
+          }
+        }
+      });
+    }
+
+    return images.length > 0 ? images : ['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800'];
+  }, [productPreview]);
+
 
   const closeProductPreview = () => {
     setProductPreviewOpen(false);
@@ -2657,11 +2701,16 @@ export default function SocialCommercePage() {
                             <div
                               key={`${product.id}`}
                               onClick={() => handleProductSelect(product)}
-                              onMouseEnter={() => handleMouseEnterProduct(product)}
-                              onMouseLeave={handleMouseLeaveProduct}
                               className="group relative flex flex-col border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 p-3 shadow-sm cursor-pointer hover:shadow-md hover:border-blue-400 dark:hover:border-blue-500 transition-all duration-200"
                             >
-                            <div className="relative w-full aspect-square mb-3 overflow-hidden rounded bg-gray-50 dark:bg-gray-900/50">
+                            <div 
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                openProductPreview(product);
+                              }}
+                              className="relative w-full aspect-square mb-3 overflow-hidden rounded bg-gray-50 dark:bg-gray-900/50"
+                            >
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -3105,15 +3154,62 @@ export default function SocialCommercePage() {
                 </div>
 
                 <div className="p-4">
-                  <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
-                    <img
-                      src={productPreview?.attributes?.mainImage}
-                      alt={productPreview?.name}
-                      className="h-72 w-full object-cover"
-                      onError={(e) => {
-                        e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800';
-                      }}
-                    />
+                  <div className="relative group overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700 aspect-square bg-gray-100 dark:bg-gray-900 mb-4">
+                    <div 
+                      className="w-full h-full cursor-zoom-in overflow-hidden flex items-center justify-center"
+                      onMouseEnter={() => setIsZoomed(true)}
+                      onMouseLeave={() => setIsZoomed(false)}
+                      onMouseMove={handleZoomMouseMove}
+                    >
+                      <img
+                        src={allPreviewImages[activeImageIndex]}
+                        alt={productPreview?.name}
+                        className={`max-w-full max-h-full object-contain transition-transform duration-200 ${isZoomed ? 'scale-[2.5]' : 'scale-100'}`}
+                        style={isZoomed ? { transformOrigin: `${zoomPos.x}% ${zoomPos.y}%` } : {}}
+                        onError={(e) => {
+                          e.currentTarget.src = 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800';
+                        }}
+                      />
+                    </div>
+
+                    {/* Navigation buttons */}
+                    {allPreviewImages.length > 1 && (
+                      <>
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveImageIndex(prev => (prev > 0 ? prev - 1 : allPreviewImages.length - 1));
+                          }}
+                          className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/20 hover:bg-black/40 text-white transition-colors backdrop-blur-sm"
+                        >
+                          <ChevronLeft size={24} />
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveImageIndex(prev => (prev < allPreviewImages.length - 1 ? prev + 1 : 0));
+                          }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/20 hover:bg-black/40 text-white transition-colors backdrop-blur-sm"
+                        >
+                          <ChevronRight size={24} />
+                        </button>
+                        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5">
+                          {allPreviewImages.map((_, i) => (
+                            <button
+                              key={i}
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveImageIndex(i);
+                              }}
+                              className={`w-2 h-2 rounded-full transition-all ${i === activeImageIndex ? 'bg-white scale-125' : 'bg-white/40'}`}
+                            />
+                          ))}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-gray-700 dark:text-gray-200">

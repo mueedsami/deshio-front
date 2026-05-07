@@ -14,6 +14,7 @@ import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/Grou
 type UpdateRow = {
   batch_id: number;
   batch_number: string | null;
+  product_name?: string;
   store: string;
   old_price: string;
   new_price: string;
@@ -255,12 +256,19 @@ export default function BatchPriceUpdatePage() {
 
       let firstSuccess: any = null;
 
+      const allUpdates: UpdateRow[] = [];
+
       for (const pid of targetIds) {
         const res = await batchService.updateAllBatchPrices(pid, priceNum);
         if (!res?.success) {
           throw new Error(res?.message || `Failed to update batch prices for product ${pid}.`);
         }
         if (!firstSuccess) firstSuccess = res;
+        
+        // Collect updates from ALL variations
+        if (Array.isArray(res.data?.updates)) {
+          allUpdates.push(...res.data.updates);
+        }
       }
 
       setSuccessMsg(
@@ -271,8 +279,8 @@ export default function BatchPriceUpdatePage() {
 
 
       sessionStorage.setItem('product_list_refresh_needed', '1');
-      // Show update rows from the first response (usually enough for verification)
-      setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
+      // Show ALL collected update rows
+      setUpdates(allUpdates);
 
       // Reload batches for the currently selected product (so table reflects new price)
       const list = await batchService.getBatchesArray({
@@ -291,7 +299,7 @@ export default function BatchPriceUpdatePage() {
     if (!updates.length || !selectedProduct) return [];
     return updates.map((u) => ({
       batchId: u.batch_id,
-      productName: selectedProduct.name,
+      productName: u.product_name || selectedProduct.name,
       price: Number(String(u.new_price).replace(/[^\d.]/g, '')),
       fallbackCode: u.batch_number || String(u.batch_id),
     }));

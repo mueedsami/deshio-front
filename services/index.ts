@@ -6,6 +6,7 @@ export { default as orderService } from './orderService';
 export { default as paymentService } from './paymentService';
 export { default as employeeService } from './employeeService';
 export { default as productService } from './productService';
+export { default as barcodeTransferService } from './barcodeTransferService';
 
 // Re-export all types
 export type * from './api.types';
@@ -16,3 +17,4 @@ export type * from './orderService';
 export type * from './paymentService';
 export type * from './employeeService';
 //export type * from './productService';
+export type * from './barcodeTransferService';

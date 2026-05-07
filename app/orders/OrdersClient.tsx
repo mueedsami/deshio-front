@@ -372,11 +372,13 @@ export default function OrdersDashboard() {
 
     if (initialViewMode === 'online') {
       setOrderStatusFilter('All Order Status');
+      // Preselect today, social_commerce, and pathao as requested
+      setDateFilter(getTodayFilterValue());
+      setOrderTypeFilter('social_commerce');
+      setCourierFilter('pathao');
     } else {
       setOrderStatusFilter('All Order Status');
     }
-
-    setCourierFilter('All Couriers');
   }, [initialViewMode]);
 
 
