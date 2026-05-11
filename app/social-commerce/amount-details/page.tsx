@@ -102,6 +102,13 @@ export default function AmountDetailsPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<'success' | 'error' | 'info' | 'warning'>('success');
 
+  // Existing payment info (for Edit mode)
+  const [alreadyPaid, setAlreadyPaid] = useState<number>(0);
+  const [totalAmountState, setTotalAmountState] = useState<number>(0);
+  const [outstandingAmountState, setOutstandingAmountState] = useState<number>(0);
+  const [originalDiscountAmount, setOriginalDiscountAmount] = useState<number>(0);
+  const [originalShippingAmount, setOriginalShippingAmount] = useState<number>(0);
+
   const displayToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToastMessage(message);
     setToastType(type);
@@ -139,6 +146,19 @@ export default function AmountDetailsPage() {
       }
     } catch {
       // ignore bad session data
+    }
+
+    // Load payment/amount metadata for existing orders
+    if (parsedOrder.paid_amount !== undefined) setAlreadyPaid(parseNumber(parsedOrder.paid_amount));
+    if (parsedOrder.total_amount !== undefined) setTotalAmountState(parseNumber(parsedOrder.total_amount));
+    if (parsedOrder.outstanding_amount !== undefined) setOutstandingAmountState(parseNumber(parsedOrder.outstanding_amount));
+    if (parsedOrder.original_discount_amount !== undefined) {
+      setOriginalDiscountAmount(parseNumber(parsedOrder.original_discount_amount));
+      setOrderDiscountAmount(String(parsedOrder.original_discount_amount));
+    }
+    if (parsedOrder.original_shipping_amount !== undefined) {
+      setOriginalShippingAmount(parseNumber(parsedOrder.original_shipping_amount));
+      setTransportCost(String(parsedOrder.original_shipping_amount));
     }
 
     const processedItems = (parsedOrder.items || []).map((item: any) => ({
@@ -214,6 +234,8 @@ export default function AmountDetailsPage() {
   const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
   const total = useMemo(() => Math.max(0, subtotal - orderDiscount + transport), [subtotal, orderDiscount, transport]);
+  
+  
 
   const selectedMethod = useMemo(
     () => paymentMethods.find((m) => String(m.id) === String(selectedPaymentMethod)),
@@ -227,9 +249,10 @@ export default function AmountDetailsPage() {
   const suggestedInstallmentAmount = useMemo(() => {
     if (paymentOption !== 'installment') return 0;
     const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-    if (total <= 0) return 0;
-    return Math.ceil((total / n) * 100) / 100;
-  }, [paymentOption, installmentCount, total]);
+    const remaining = total - alreadyPaid;
+    if (remaining <= 0) return 0;
+    return Number((remaining / n).toFixed(2));
+  }, [total, alreadyPaid, paymentOption, installmentCount]);
 
   const [installmentPayNow, setInstallmentPayNow] = useState('');
 
@@ -248,17 +271,20 @@ export default function AmountDetailsPage() {
 
   const advance = useMemo(() => {
     if (paymentOption === 'none') return 0;
-    if (paymentOption === 'full') return total;
+    const remaining = total - alreadyPaid;
+    if (paymentOption === 'full') return Math.max(0, remaining);
     if (paymentOption === 'installment') return parseNumber(installmentPayNow);
     return parseNumber(advanceAmount);
-  }, [paymentOption, total, advanceAmount, installmentPayNow]);
+  }, [paymentOption, total, alreadyPaid, advanceAmount, installmentPayNow]);
+
+  const finalDue = useMemo(() => Math.max(0, total - alreadyPaid - advance), [total, alreadyPaid, advance]);
 
   const codAmount = useMemo(() => {
     if (paymentOption === 'full') return 0;
-    if (paymentOption === 'none') return total;
+    if (paymentOption === 'none') return Math.max(0, total - alreadyPaid);
     if (paymentOption === 'installment') return 0;
-    return Math.max(0, total - advance);
-  }, [paymentOption, total, advance]);
+    return Math.max(0, total - alreadyPaid - advance);
+  }, [paymentOption, total, alreadyPaid, advance]);
 
   const advanceFee = useMemo(() => {
     if (!selectedMethod || paymentOption === 'none') return 0;
@@ -552,10 +578,10 @@ export default function AmountDetailsPage() {
       }
 
       // 4) Payments
-      if (!isEditMode && paymentOption === 'full') {
+      if (paymentOption === 'full' && (total - alreadyPaid) > 0) {
         const paymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
-          amount: total,
+          amount: total - alreadyPaid,
           payment_type: 'full',
           auto_complete: true,
           notes: paymentNotes || `Social Commerce full payment via ${selectedMethod?.name}`,
@@ -595,13 +621,13 @@ export default function AmountDetailsPage() {
         }
       }
 
-      if (!isEditMode && paymentOption === 'partial') {
+      if (paymentOption === 'partial' && advance > 0) {
         const advancePaymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
           amount: advance,
           payment_type: 'partial',
           auto_complete: true,
-          notes: paymentNotes || `Advance via ${selectedMethod?.name}. COD remaining: ৳${codAmount.toFixed(2)}`,
+          notes: paymentNotes || `Advance via ${selectedMethod?.name}. COD remaining: ৳${(total - alreadyPaid - advance).toFixed(2)}`,
           payment_data: {},
         };
 
@@ -643,7 +669,7 @@ export default function AmountDetailsPage() {
       }
 
 
-      if (!isEditMode && paymentOption === 'installment') {
+      if (paymentOption === 'installment' && advance > 0) {
         const firstPayment: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
           amount: advance,
@@ -875,9 +901,22 @@ export default function AmountDetailsPage() {
                       <span className="text-gray-900 dark:text-white">৳{transport.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between text-base font-semibold mt-2">
-                      <span className="text-gray-900 dark:text-white">Total</span>
+                      <span className="text-gray-900 dark:text-white">Total Amount</span>
                       <span className="text-gray-900 dark:text-white">৳{total.toFixed(2)}</span>
                     </div>
+
+                    {alreadyPaid > 0 && (
+                      <div className="flex justify-between text-sm mt-1">
+                        <span className="text-green-700 dark:text-green-400 font-medium">Already Paid</span>
+                        <span className="text-green-700 dark:text-green-400 font-medium">৳{alreadyPaid.toFixed(2)}</span>
+                      </div>
+                    )}
+
+                    <div className="flex justify-between text-lg font-bold mt-2 pt-2 border-t border-dashed border-gray-300 dark:border-gray-600">
+                      <span className="text-gray-900 dark:text-white">Final Due</span>
+                      <span className="text-indigo-600 dark:text-indigo-400">৳{finalDue.toFixed(2)}</span>
+                    </div>
+
                     {totalFees > 0 && (
                       <div className="flex justify-between text-xs mt-1">
                         <span className="text-gray-600 dark:text-gray-400">Estimated gateway fees</span>
@@ -942,6 +981,19 @@ export default function AmountDetailsPage() {
 
                   {/* Payment Option */}
                   <div className="mb-4">
+                    {alreadyPaid > 0 && (
+                      <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                        <div className="flex items-center gap-2 text-blue-800 dark:text-blue-300">
+                          <DollarSign className="w-4 h-4" />
+                          <span className="text-sm font-semibold">Previous Payments: ৳{alreadyPaid.toFixed(2)}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-blue-600 dark:text-blue-400">
+                          This order already has recorded payments. The "Final Due" below accounts for these. 
+                          Selecting a payment option now will add a NEW payment record.
+                        </p>
+                      </div>
+                    )}
+
                     <p className="text-xs font-semibold text-gray-800 dark:text-gray-200 mb-2">Payment Option</p>
 
                     <div className="space-y-2">
@@ -1056,7 +1108,7 @@ export default function AmountDetailsPage() {
                               placeholder="e.g. 500"
                             />
                             <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-400">
-                              COD will be: <span className="font-semibold">৳{codAmount.toFixed(2)}</span>
+                              COD will be: <span className="font-semibold">৳{finalDue.toFixed(2)}</span>
                             </p>
                           </div>
                         )}

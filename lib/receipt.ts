@@ -402,7 +402,7 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
   const finalItems = mergedItems;
 
   // Totals
-  const itemsSubtotal = finalItems.reduce((s, i) => s + i.lineTotal, 0);
+  const itemsSubtotal = finalItems.reduce((s, i) => s + (i.qty * i.unitPrice), 0);
   const itemsDiscount = finalItems.reduce((s, i) => s + parseMoney(i.discount), 0);
 
   const subtotalRaw =

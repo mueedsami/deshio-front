@@ -331,10 +331,11 @@ export default function WarehouseFulfillmentPage() {
       // Initialize scanned items tracking
       const initialScanned: Record<number, ScannedItemTracking> = {};
       order.items?.forEach((item: any) => {
+        const hasBarcode = item.barcode;
         initialScanned[item.id] = {
           required: item.quantity,
-          scanned: [],
-          barcodes: [],
+          scanned: hasBarcode ? [item.product_name || 'Product'] : [],
+          barcodes: hasBarcode ? [item.barcode] : [],
         };
       });
       setScannedItems(initialScanned);
@@ -556,10 +557,13 @@ if (!matchingItem) {
 
     try {
       // Prepare fulfillment payload
-      const fulfillments = orderDetails.items.map((item: any) => ({
-        order_item_id: item.id,
-        barcodes: scannedItems[item.id].barcodes,
-      }));
+      // Filter out items that already have a barcode (were fulfilled in a previous session)
+      const fulfillments = orderDetails.items
+        .filter((item: any) => !item.barcode)
+        .map((item: any) => ({
+          order_item_id: item.id,
+          barcodes: scannedItems[item.id].barcodes,
+        }));
 
       console.log('📦 Fulfilling order:', orderDetails.order_number);
       console.log('Fulfillments:', fulfillments);

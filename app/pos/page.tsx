@@ -569,6 +569,7 @@ export default function POSPage() {
   // ============ CALCULATIONS ============
 
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
+  const grossSubtotal = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
   const totalDiscount = cart.reduce((sum, item) => sum + item.discount, 0);
   const total = subtotal + transportCost;
 
@@ -1005,12 +1006,21 @@ export default function POSPage() {
 
             const printableOrder = {
               ...(fullOrder as any),
-              payment_breakdown: receiptPaymentBreakdown,
+              payment_breakdown: {
+                cash: cashPaid,
+                card: cardPaid,
+                bkash: bkashPaid,
+                nagad: nagadPaid,
+              },
               change_amount: change,
-              cashPaid: receiptPaymentBreakdown.cash,
-              cardPaid: receiptPaymentBreakdown.card,
-              bkashPaid: receiptPaymentBreakdown.bkash,
-              nagadPaid: receiptPaymentBreakdown.nagad,
+              cashPaid: cashPaid,
+              cardPaid: cardPaid,
+              bkashPaid: bkashPaid,
+              nagadPaid: nagadPaid,
+              amounts: {
+                ...(fullOrder as any)?.amounts,
+                paid: totalPaid,
+              },
               ...(!hasServiceInServerOrder && serviceFallbackFromCart.length > 0
                 ? { services: serviceFallbackFromCart }
                 : {}),
@@ -1980,7 +1990,7 @@ export default function POSPage() {
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-700 dark:text-gray-300">Sub Total</span>
                       <span className="text-gray-900 dark:text-white font-medium">
-                        ৳{subtotal.toFixed(2)}
+                        ৳{grossSubtotal.toFixed(2)}
                       </span>
                     </div>
 

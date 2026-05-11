@@ -145,6 +145,13 @@ export default function SocialCommercePage() {
   const [isCheckingCustomer, setIsCheckingCustomer] = useState(false);
   const [customerCheckError, setCustomerCheckError] = useState<string | null>(null);
   const [lastPrefilledOrderId, setLastPrefilledOrderId] = useState<number | null>(null);
+  
+  // Payment states for edit mode
+  const [paidAmount, setPaidAmount] = useState<number>(0);
+  const [outstandingAmount, setOutstandingAmount] = useState<number>(0);
+  const [totalAmountState, setTotalAmountState] = useState<number>(0);
+  const [discountAmountState, setDiscountAmountState] = useState<number>(0);
+  const [shippingAmountState, setShippingAmountState] = useState<number>(0);
 
   // 🔎 Order preview (from Last 5 Orders)
   const [orderPreviewOpen, setOrderPreviewOpen] = useState(false);
@@ -261,6 +268,11 @@ export default function SocialCommercePage() {
         maxPrice,
         exactPrice,
         cart,
+        paidAmount,
+        totalAmountState,
+        outstandingAmount,
+        discountAmountState,
+        shippingAmountState,
       };
       sessionStorage.setItem(SC_DRAFT_STORAGE_KEY, JSON.stringify(draft));
     } catch (e) {
@@ -357,6 +369,11 @@ export default function SocialCommercePage() {
     setInternationalPostalCode('');
     setDeliveryAddress('');
     setCart([]);
+    setPaidAmount(0);
+    setOutstandingAmount(0);
+    setTotalAmountState(0);
+    setDiscountAmountState(0);
+    setShippingAmountState(0);
     setSearchQuery('');
     setMinPrice('');
     setMaxPrice('');
@@ -1223,6 +1240,11 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
           if (Array.isArray(ep.cart)) setCart(ep.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
+          if (typeof ep.paidAmount === 'number') setPaidAmount(ep.paidAmount);
+          if (typeof ep.totalAmount === 'number') setTotalAmountState(ep.totalAmount);
+          if (typeof ep.outstandingAmount === 'number') setOutstandingAmount(ep.outstandingAmount);
+          if (typeof ep.discountAmount === 'number') setDiscountAmountState(ep.discountAmount);
+          if (typeof ep.shippingAmount === 'number') setShippingAmountState(ep.shippingAmount);
         }
         draftHydratedRef.current = true;
         return;
@@ -1270,6 +1292,11 @@ export default function SocialCommercePage() {
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
         if (typeof d.exactPrice === 'string') setExactPrice(d.exactPrice);
         if (Array.isArray(d.cart)) setCart(d.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
+        if (typeof d.paidAmount === 'number') setPaidAmount(d.paidAmount);
+        if (typeof d.totalAmountState === 'number') setTotalAmountState(d.totalAmountState);
+        if (typeof d.outstandingAmount === 'number') setOutstandingAmount(d.outstandingAmount);
+        if (typeof d.discountAmountState === 'number') setDiscountAmountState(d.discountAmountState);
+        if (typeof d.shippingAmountState === 'number') setShippingAmountState(d.shippingAmountState);
       }
     } catch (e) {
       console.warn('Failed to restore social commerce draft', e);
@@ -1309,6 +1336,11 @@ export default function SocialCommercePage() {
     cart,
     editOrderId,
     editOrderNumber,
+    paidAmount,
+    totalAmountState,
+    outstandingAmount,
+    discountAmountState,
+    shippingAmountState,
   ]);
 
   useEffect(() => {
@@ -2042,7 +2074,8 @@ export default function SocialCommercePage() {
             total_amount: item.amount,
             category: item.serviceCategory,
           })),
-        shipping_amount: 0,
+        shipping_amount: shippingAmountState || 0,
+        discount_amount: discountAmountState || 0,
         notes: orderNotes?.trim() || '',
       };
 
@@ -2063,6 +2096,11 @@ export default function SocialCommercePage() {
               price: item.unit_price,
               productName: item.productName,
             })),
+          paid_amount: paidAmount,
+          outstanding_amount: outstandingAmount,
+          total_amount: totalAmountState,
+          original_discount_amount: discountAmountState,
+          original_shipping_amount: shippingAmountState,
         })
       );
 

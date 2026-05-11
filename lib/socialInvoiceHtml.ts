@@ -198,6 +198,8 @@ function render(order: any) {
         <td class="right">${i + 1}</td>
         <td>${escapeHtml(desc)}</td>
         <td class="right"><span class="qtyBadge">${escapeHtml(it.qty)}</span></td>
+        <td class="right">${escapeHtml(money(it.unitPrice))}</td>
+        <td class="right">${escapeHtml(money(it.lineTotal))}</td>
       </tr>
     `;
   }).join('');
@@ -251,11 +253,13 @@ function render(order: any) {
           <tr>
             <th style="width: 30px;" class="right">#</th>
             <th>Item</th>
-            <th style="width: 56px;" class="right">Qty</th>
+            <th style="width: 44px;" class="right">Qty</th>
+            <th style="width: 70px;" class="right">Price</th>
+            <th style="width: 80px;" class="right">Amount</th>
           </tr>
         </thead>
         <tbody>
-          ${items || `<tr><td colspan="3" class="muted">No items</td></tr>`}
+          ${items || `<tr><td colspan="5" class="muted">No items</td></tr>`}
         </tbody>
       </table>
 

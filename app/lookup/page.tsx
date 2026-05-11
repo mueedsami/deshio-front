@@ -1834,14 +1834,11 @@ export default function LookupPage() {
       };
 
       // Use the atomic quickComplete endpoint
-      await productReturnService.quickComplete(returnRequest);
+      const res = await productReturnService.quickComplete(returnRequest);
+      const returnId = res.data.id;
 
       // Handle refund if needed
       if (returnData.refundMethods && returnData.refundMethods.total > 0) {
-        // Need return ID for refund - quickComplete returns the product return object
-        const res = await productReturnService.quickComplete(returnRequest);
-        const returnId = res.data.id;
-
         const refundRequest: CreateRefundRequest = {
           return_id: returnId,
           refund_type: 'full',
@@ -1895,6 +1892,7 @@ export default function LookupPage() {
             unit_price: unitPrice,
             total_price: unitPrice * item.quantity,
             product_barcode_id: item.product_barcode_id,
+            barcode_id: item.product_barcode_id, // Compatibility with controller
             return_reason: 'other', // Default reason
             quality_check_passed: true, // Defaulting for quick exchange
           };

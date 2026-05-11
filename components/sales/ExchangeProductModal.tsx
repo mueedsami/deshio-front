@@ -1,976 +1,495 @@
-import { useState, useEffect } from 'react';
-import { X, ArrowRightLeft, Calculator, ChevronDown, Loader2, AlertCircle } from 'lucide-react';
-import BarcodeScanner, { ScannedProduct } from '@/components/pos/BarcodeScanner';
+import { useState, useEffect, useRef } from 'react';
+import { X, Search, ArrowRightLeft, Calculator, ChevronDown, Barcode, Trash2, CheckCircle2, AlertCircle, RotateCcw, Loader2 } from 'lucide-react';
+import axiosInstance from '@/lib/axios';
 import storeService, { type Store } from '@/services/storeService';
 
-interface OrderItem {
-  id: number;
-  product_id: number;
-  product_name: string;
-  product_sku: string;
-  batch_id: number;
-  batch_number?: string;
-  barcode_id?: number;
-  barcode?: string;
-  quantity: number;
-  unit_price: string;
-  discount_amount: string;
-  tax_amount: string;
-  total_amount: string;
-  total_price: string;
-}
-
-interface Order {
-  id: number;
-  order_number: string;
-  customer?: {
-    id: number;
-    name: string;
-    phone: string;
-  };
-  store: {
-    id: number;
-    name: string;
-  };
-  items: OrderItem[];
-  subtotal_amount: string;
-  tax_amount: string;
-  total_amount: string;
-  paid_amount: string;
-}
-
 interface ExchangeProductModalProps {
-  order: Order;
+  order: any;
   onClose: () => void;
-  onExchange: (exchangeData: {
-    removedProducts: Array<{
-      order_item_id: number;
-      quantity: number;
-      product_barcode_id?: number;
-    }>;
-    replacementProducts: Array<{
-      product_id: number;
-      batch_id: number;
-      quantity: number;
-      unit_price: number;
-      barcode?: string;
-      barcode_id?: number;
-    }>;
-    paymentRefund: {
-      type: 'payment' | 'refund' | 'none';
-      cash: number;
-      card: number;
-      bkash: number;
-      nagad: number;
-      total: number;
-    };
-    exchangeAtStoreId: number; // ✅ NEW FIELD
-  }) => Promise<void>;
-}
-
-interface ReplacementProduct {
-  id: number | string;
-  product_id: number;
-  batch_id: number;
-  name: string;
-  batchNumber?: string;
-  price: number;
-  quantity: number;
-  amount: number;
-  available: number;
-  barcode?: string;
-  barcode_id?: number; // Optional since it may not be available from scanner
+  onExchange: (exchangeData: any) => Promise<void>;
 }
 
 export default function ExchangeProductModal({ order, onClose, onExchange }: ExchangeProductModalProps) {
-  const [selectedProducts, setSelectedProducts] = useState<number[]>([]);
-  const [exchangeQuantities, setExchangeQuantities] = useState<{ [key: number]: number }>({});
-  const [replacementProducts, setReplacementProducts] = useState<ReplacementProduct[]>([]);
+  const [removedItems, setRemovedItems] = useState<any[]>([]);
+  const [replacementItems, setReplacementItems] = useState<any[]>([]);
+  
   const [isProcessing, setIsProcessing] = useState(false);
+  const [barcodeInput, setBarcodeInput] = useState('');
+  const [replacementBarcodeInput, setReplacementBarcodeInput] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [scanningMode, setScanningMode] = useState<'return' | 'replacement'>('return');
 
-  // ✅ NEW: Store selection
+  const returnInputRef = useRef<HTMLInputElement>(null);
+  const replacementInputRef = useRef<HTMLInputElement>(null);
+
+  // Store selection
   const [stores, setStores] = useState<Store[]>([]);
-  const [exchangeAtStoreId, setExchangeAtStoreId] = useState<number>(order.store.id);
-  const [inventoryWarnings, setInventoryWarnings] = useState<{ [key: number]: string }>({});
-  const [isCheckingInventory, setIsCheckingInventory] = useState(false);
+  const [exchangeAtStoreId, setExchangeAtStoreId] = useState<number>(order.store?.id || 1);
 
   // Payment/Refund states
-  const [cashAmount, setCashAmount] = useState(0);
-  const [cardAmount, setCardAmount] = useState(0);
-  const [bkashAmount, setBkashAmount] = useState(0);
-  const [nagadAmount, setNagadAmount] = useState(0);
+  const [paymentDetails, setPaymentDetails] = useState({
+    cash: 0,
+    card: 0,
+    bkash: 0,
+    nagad: 0,
+    transactionFee: 0
+  });
+
   const [showNoteCounter, setShowNoteCounter] = useState(false);
+  const [notes, setNotes] = useState({
+    1000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 2: 0, 1: 0
+  });
 
-  // Note counter states
-  const [note1000, setNote1000] = useState(0);
-  const [note500, setNote500] = useState(0);
-  const [note200, setNote200] = useState(0);
-  const [note100, setNote100] = useState(0);
-  const [note50, setNote50] = useState(0);
-  const [note20, setNote20] = useState(0);
-  const [note10, setNote10] = useState(0);
-  const [note5, setNote5] = useState(0);
-  const [note2, setNote2] = useState(0);
-  const [note1, setNote1] = useState(0);
-
-  // ✅ NEW: Fetch stores on mount
   useEffect(() => {
     fetchStores();
+    if (returnInputRef.current) returnInputRef.current.focus();
   }, []);
-
-  // ✅ NEW: Check inventory when store or selected products change
-  useEffect(() => {
-    if (selectedProducts.length > 0) {
-      checkInventoryAvailability();
-    } else {
-      setInventoryWarnings({});
-    }
-  }, [exchangeAtStoreId, selectedProducts, exchangeQuantities]);
 
   const fetchStores = async () => {
     try {
       const response = await storeService.getStores({ is_active: true });
-      console.log('🏪 Store service response:', response);
-      
       let storesData: Store[] = [];
       if (response?.success && response?.data) {
-        if (Array.isArray(response.data.data)) {
-          storesData = response.data.data;
-        } else if (Array.isArray(response.data)) {
-          storesData = response.data;
-        }
-      } else if (response?.data && Array.isArray(response.data)) {
-        storesData = response.data;
+        storesData = Array.isArray(response.data.data) ? response.data.data : (Array.isArray(response.data) ? response.data : []);
       } else if (Array.isArray(response)) {
         storesData = response;
       }
-      
-      console.log('✅ Parsed stores:', storesData);
       setStores(storesData);
-      
-      if (storesData.length === 0) {
-        console.warn('⚠️ No stores available');
-      }
     } catch (error) {
-      console.error('❌ Failed to fetch stores:', error);
-      setStores([]);
+      console.error('Failed to fetch stores:', error);
     }
   };
 
-  // ✅ NEW: Check if selected products have sufficient inventory in the selected store
-  const checkInventoryAvailability = async () => {
-    if (selectedProducts.length === 0) return;
+  const handleReturnScan = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const code = barcodeInput.trim();
+    if (!code) return;
 
-    setIsCheckingInventory(true);
-    const warnings: { [key: number]: string } = {};
-
-    try {
-      // Here you would call your inventory service to check availability
-      // For now, we'll show a placeholder implementation
-      
-      for (const itemId of selectedProducts) {
-        const item = order.items.find(i => i.id === itemId);
-        const exchangeQty = exchangeQuantities[itemId] || 0;
-        
-        if (!item || exchangeQty === 0) continue;
-
-        // TODO: Replace with actual API call to check inventory
-        // Example: const inventory = await inventoryService.checkStock({
-        //   store_id: exchangeAtStoreId,
-        //   product_id: item.product_id,
-        //   batch_id: item.batch_id
-        // });
-
-        // Placeholder: If exchange is at a different store, show warning
-        if (exchangeAtStoreId !== order.store.id) {
-          warnings[itemId] = `⚠️ Please verify inventory at ${stores.find(s => s.id === exchangeAtStoreId)?.name || 'selected store'}`;
-        }
-      }
-
-      setInventoryWarnings(warnings);
-    } catch (error) {
-      console.error('Failed to check inventory:', error);
-    } finally {
-      setIsCheckingInventory(false);
-    }
-  };
-
-  // Handle barcode scanned
-  const handleProductScanned = (scannedProduct: ScannedProduct) => {
-    const newItem: ReplacementProduct = {
-      id: Date.now() + Math.random(),
-      product_id: scannedProduct.productId,
-      batch_id: scannedProduct.batchId,
-      name: scannedProduct.productName,
-      batchNumber: scannedProduct.batchNumber,
-      price: scannedProduct.price,
-      quantity: 1,
-      amount: scannedProduct.price,
-      available: scannedProduct.availableQty,
-      barcode: scannedProduct.barcode,
-      // barcode_id will be handled by backend or can be omitted if not available
-    };
-
-    setReplacementProducts(prev => [...prev, newItem]);
-  };
-
-  const handleProductCheckbox = (itemId: number) => {
-    setSelectedProducts(prev => {
-      if (prev.includes(itemId)) {
-        const newSelected = prev.filter(id => id !== itemId);
-        const newQuantities = { ...exchangeQuantities };
-        delete newQuantities[itemId];
-        setExchangeQuantities(newQuantities);
-        return newSelected;
-      } else {
-        return [...prev, itemId];
-      }
-    });
-  };
-
-  const handleQuantityChange = (itemId: number, qty: number, maxQty: number) => {
-    if (qty < 1 || qty > maxQty) return;
-    setExchangeQuantities(prev => ({ ...prev, [itemId]: qty }));
-  };
-
-  const handleRemoveReplacement = (id: number | string) => {
-    setReplacementProducts(prev => prev.filter(p => p.id !== id));
-  };
-
-  const handleUpdateReplacementQty = (id: number | string, newQty: number) => {
-    if (newQty < 1) {
-      handleRemoveReplacement(id);
+    setError(null);
+    
+    if (removedItems.some(item => item.barcode === code)) {
+      setError('Item already scanned for return');
+      setBarcodeInput('');
       return;
     }
 
-    setReplacementProducts(prev =>
-      prev.map(p => {
-        if (p.id === id) {
-          if (newQty > p.available) {
-            alert(`Only ${p.available} units available`);
-            return p;
-          }
-          return {
-            ...p,
-            quantity: newQty,
-            amount: p.price * newQty,
-          };
-        }
-        return p;
-      })
+    const orderItem = order.items?.find((item: any) => 
+      item.barcode === code || 
+      item.product_barcode?.barcode === code ||
+      item.barcode_number === code
     );
+    
+    if (!orderItem) {
+      setError('This barcode does not belong to the current order');
+      setBarcodeInput('');
+      return;
+    }
+
+    const newItem = {
+      order_item_id: orderItem.id,
+      product_id: orderItem.product_id,
+      product_name: orderItem.product_name || orderItem.product?.name,
+      barcode: code,
+      product_barcode_id: orderItem.product_barcode_id || orderItem.product_barcode?.id,
+      unit_price: parseFloat(orderItem.unit_price || '0'),
+      quantity: 1,
+      total_price: parseFloat(orderItem.unit_price || '0'),
+      return_reason: 'exchange',
+      quality_check_passed: true
+    };
+
+    setRemovedItems(prev => [...prev, newItem]);
+    setBarcodeInput('');
   };
 
-  const parsePrice = (value: any) => {
-    if (value == null) return 0;
-    const n = parseFloat(String(value).replace(/[^0-9.-]/g, ''));
-    return isNaN(n) ? 0 : n;
+  const handleReplacementScan = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const code = replacementBarcodeInput.trim();
+    if (!code) return;
+
+    setError(null);
+
+    if (replacementItems.some(item => item.barcode === code)) {
+      setError('Item already scanned as replacement');
+      setReplacementBarcodeInput('');
+      return;
+    }
+
+    try {
+      const response = await axiosInstance.get(`/lookup/barcode/${code}`);
+      const barcodeData = response.data.data;
+
+      if (!barcodeData) {
+        setError('Barcode not found in inventory');
+        return;
+      }
+
+      const status = String(barcodeData.current_status || '').toLowerCase();
+      if (status !== 'available' && status !== 'in_warehouse') {
+        setError(`Barcode status is ${status}. Cannot sell.`);
+        return;
+      }
+
+      const batch = barcodeData.batch || barcodeData.current_location?.batch;
+      if (!batch) {
+        setError('Batch information not found for this barcode');
+        return;
+      }
+
+      const newItem = {
+        product_id: barcodeData.product_id,
+        batch_id: batch.id,
+        name: barcodeData.product?.name || 'Unknown Product',
+        barcode: code,
+        barcode_id: barcodeData.id,
+        unit_price: parseFloat(batch.sell_price || batch.selling_price || '0'),
+        quantity: 1,
+        total_price: parseFloat(batch.sell_price || batch.selling_price || '0'),
+        discount_amount: 0
+      };
+
+      setReplacementItems(prev => [...prev, newItem]);
+      setReplacementBarcodeInput('');
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Failed to fetch barcode details');
+    }
+  };
+
+  const removeReturnItem = (index: number) => {
+    setRemovedItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const removeReplacementItem = (index: number) => {
+    setReplacementItems(prev => prev.filter((_, i) => i !== index));
   };
 
   const calculateTotals = () => {
-    // Calculate original amount for exchanged items
-    const originalAmount = selectedProducts.reduce((sum, itemId) => {
-      const item = order.items.find(i => i.id === itemId);
-      if (!item) return sum;
-      const qty = exchangeQuantities[itemId] || 0;
-      const price = parsePrice(item.unit_price);
-      return sum + (price * qty);
-    }, 0);
-
-    // Calculate new products subtotal
-    const newSubtotal = replacementProducts.reduce((sum, p) => sum + p.amount, 0);
-
-    // Calculate VAT based on order's VAT rate
-    const orderSubtotal = parsePrice(order.subtotal_amount);
-    const orderTotal = parsePrice(order.total_amount);
-    const orderVat = orderTotal - orderSubtotal;
-    const vatRate = orderSubtotal > 0 ? (orderVat / orderSubtotal) : 0;
-
-    const vatAmount = newSubtotal * vatRate;
-    const totalNewAmount = newSubtotal + vatAmount;
-    const difference = totalNewAmount - originalAmount;
+    const returnTotal = removedItems.reduce((sum, item) => sum + item.total_price, 0);
+    const replacementTotal = replacementItems.reduce((sum, item) => sum + item.total_price, 0);
+    const difference = replacementTotal - returnTotal;
 
     return {
-      originalAmount,
-      newSubtotal,
-      vatRate: vatRate * 100,
-      vatAmount,
-      totalNewAmount,
-      difference,
+      returnTotal,
+      replacementTotal,
+      difference
     };
   };
 
   const totals = calculateTotals();
 
-  const cashFromNotes = 
-    (note1000 * 1000) + (note500 * 500) + (note200 * 200) + 
-    (note100 * 100) + (note50 * 50) + (note20 * 20) + 
-    (note10 * 10) + (note5 * 5) + (note2 * 2) + (note1 * 1);
-
-  const effectiveCash = cashFromNotes > 0 ? cashFromNotes : cashAmount;
-  const totalPaymentRefund = effectiveCash + cardAmount + bkashAmount + nagadAmount;
+  const cashFromNotes = Object.entries(notes).reduce((sum, [val, count]) => sum + (Number(val) * count), 0);
+  const effectiveCash = cashFromNotes > 0 ? cashFromNotes : paymentDetails.cash;
+  const totalPaid = effectiveCash + paymentDetails.card + paymentDetails.bkash + paymentDetails.nagad;
   
-  const due = totals.difference > 0 
-    ? Math.max(0, totals.difference - totalPaymentRefund)
-    : Math.max(0, Math.abs(totals.difference) - totalPaymentRefund);
+  const remainingDue = totals.difference > 0 
+    ? Math.max(0, totals.difference - totalPaid + paymentDetails.transactionFee)
+    : 0;
+
+  const refundDue = totals.difference < 0 
+    ? Math.abs(totals.difference) - totalPaid
+    : 0;
 
   const handleProcessExchange = async () => {
-    if (selectedProducts.length === 0) {
-      alert('Please select at least one product to exchange');
+    if (removedItems.length === 0) {
+      setError('Please scan at least one item to return');
       return;
     }
 
-    if (replacementProducts.length === 0) {
-      alert('Please add replacement products');
+    if (replacementItems.length === 0) {
+      setError('Please scan at least one replacement item');
       return;
     }
-
-    const hasInvalidQuantities = selectedProducts.some(id => {
-      const qty = exchangeQuantities[id];
-      return !qty || qty <= 0;
-    });
-
-    if (hasInvalidQuantities) {
-      alert('Please set valid quantities for all selected products');
-      return;
-    }
-
-    // ✅ NEW: Check for inventory warnings
-    const hasWarnings = Object.keys(inventoryWarnings).length > 0;
-    if (hasWarnings) {
-      const warningMessage = Object.values(inventoryWarnings).join('\n');
-      if (!confirm(`⚠️ INVENTORY WARNINGS:\n\n${warningMessage}\n\nDo you want to proceed anyway?`)) {
-        return;
-      }
-    }
-
-    let confirmMessage = `Process exchange for order ${order.order_number}?\n\n`;
-    confirmMessage += `Exchange Location: ${stores.find(s => s.id === exchangeAtStoreId)?.name || 'N/A'}\n`;
-    confirmMessage += `Exchanging ${selectedProducts.length} item(s)\n`;
-    confirmMessage += `Adding ${replacementProducts.length} replacement item(s)\n\n`;
-
-    if (totals.difference > 0) {
-      confirmMessage += `Customer owes: ৳${totals.difference.toLocaleString()}\n`;
-      confirmMessage += `Collected: ৳${totalPaymentRefund.toLocaleString()}\n`;
-      if (due > 0) {
-        confirmMessage += `Remaining: ৳${due.toLocaleString()} (can pay later)`;
-      } else {
-        confirmMessage += `✓ Fully paid`;
-      }
-    } else if (totals.difference < 0) {
-      const refundRequired = Math.abs(totals.difference);
-      confirmMessage += `Refund required: ৳${refundRequired.toLocaleString()}\n`;
-      confirmMessage += `Refunded: ৳${totalPaymentRefund.toLocaleString()}\n`;
-      if (due > 0) {
-        confirmMessage += `Remaining: ৳${due.toLocaleString()} (can refund later)`;
-      } else {
-        confirmMessage += `✓ Fully refunded`;
-      }
-    } else {
-      confirmMessage += 'No payment difference - even exchange';
-    }
-
-    if (!confirm(confirmMessage)) return;
 
     setIsProcessing(true);
     try {
-      const exchangeData = {
-        removedProducts: selectedProducts.map(itemId => {
-          const item = order.items.find(i => i.id === itemId);
-          return {
-            order_item_id: itemId,
-            quantity: exchangeQuantities[itemId],
-            product_barcode_id: item?.barcode_id,
-          };
-        }),
-        replacementProducts: replacementProducts.map(p => ({
-          product_id: p.product_id,
-          batch_id: p.batch_id,
-          quantity: p.quantity,
-          unit_price: p.price,
-          barcode: p.barcode,
-          barcode_id: p.barcode_id,
-        })),
+      await onExchange({
+        orderId: order.id,
+        exchangeAtStoreId: exchangeAtStoreId,
+        removedProducts: removedItems,
+        replacementProducts: replacementItems,
         paymentRefund: {
-          type: (totals.difference > 0 ? 'payment' : totals.difference < 0 ? 'refund' : 'none') as 'payment' | 'refund' | 'none',
+          type: totals.difference > 0 ? 'payment' : totals.difference < 0 ? 'refund' : 'none',
+          ...paymentDetails,
           cash: effectiveCash,
-          card: cardAmount,
-          bkash: bkashAmount,
-          nagad: nagadAmount,
-          total: totalPaymentRefund,
-        },
-        exchangeAtStoreId, // ✅ NEW: Pass the selected store ID
-      };
-
-      await onExchange(exchangeData);
-        
-    } catch (error: any) {
-      console.error('Exchange failed:', error);
-      alert(error.message || 'Failed to process exchange');
+          total: totalPaid
+        }
+      });
+      onClose();
+    } catch (err: any) {
+      setError(err.response?.data?.message || err.message || 'Failed to process exchange');
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const NoteInput = ({ value, state, setState }: any) => (
-    <div>
-      <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">৳{value}</label>
-      <input
-        type="number"
-        min="0"
-        value={state}
-        onChange={(e) => setState(Number(e.target.value))}
-        className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-      />
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-y-auto border border-gray-200 dark:border-gray-800">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl max-w-6xl w-full max-h-[90vh] overflow-hidden border border-gray-200 dark:border-gray-800 flex flex-col animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="sticky top-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-5 flex items-center justify-between rounded-t-2xl z-10">
+        <div className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-6 py-5 flex items-center justify-between z-10">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-lg flex items-center justify-center">
+            <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/20 rounded-xl flex items-center justify-center">
               <ArrowRightLeft className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Exchange Products</h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order #{order.order_number}</p>
+              <h2 className="text-xl font-black text-gray-900 dark:text-white uppercase tracking-tight">Exchange - Order #{order.order_number || order.id}</h2>
+              <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mt-0.5">Barcode-Driven Atomic Workflow</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
-          >
-            <X className="w-6 h-6 text-gray-600 dark:text-gray-400" />
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-all">
+            <X className="w-6 h-6 text-gray-400" />
           </button>
         </div>
 
-        <div className="p-6">
-          <div className="grid grid-cols-3 gap-6">
-            {/* Left Column - Select Items to Exchange */}
-            <div className="col-span-2 space-y-6">
-              {/* Customer Info */}
-              <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Customer</p>
-                    <p className="font-semibold text-gray-900 dark:text-white">
-                      {order.customer?.name || 'Walk-in Customer'}
-                    </p>
-                    {order.customer?.phone && (
-                      <p className="text-sm text-gray-600 dark:text-gray-400">{order.customer.phone}</p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm text-gray-600 dark:text-gray-400">Order Total</p>
-                    <p className="text-lg font-bold text-gray-900 dark:text-white">
-                      ৳{parsePrice(order.total_amount).toLocaleString()}
-                    </p>
+        <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl flex items-center gap-3 text-red-600 dark:text-red-400 animate-in slide-in-from-top-2">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <p className="text-sm font-bold">{error}</p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-12 gap-6">
+            <div className="col-span-12 lg:col-span-8 space-y-6">
+              
+              {/* Store Selection */}
+              <div className="bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800 rounded-2xl p-5 group transition-all">
+                <div className="flex items-center justify-between mb-4">
+                   <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-orange-100 dark:bg-orange-900/30 rounded-lg flex items-center justify-center text-orange-600">
+                      <Search className="w-4 h-4" />
+                    </div>
+                    <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-wider text-sm">Exchange Location</h3>
                   </div>
                 </div>
+                <select
+                  value={exchangeAtStoreId}
+                  onChange={(e) => setExchangeAtStoreId(Number(e.target.value))}
+                  className="w-full px-4 py-3 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-xl focus:border-orange-500 outline-none transition-all text-sm font-bold uppercase tracking-widest"
+                >
+                  {stores.map(store => (
+                    <option key={store.id} value={store.id}>
+                      {store.name} {store.is_warehouse ? '(WAREHOUSE)' : '(STORE)'}
+                      {store.id === order.store?.id ? ' - ORIGINAL LOCATION' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 ml-1">Items must be available at this location</p>
               </div>
 
-              {/* ✅ NEW: Store Selection */}
-              <div className="bg-orange-50 dark:bg-orange-900/10 border border-orange-200 dark:border-orange-800 rounded-xl p-5">
-                <div className="flex items-start gap-3">
-                  <AlertCircle className="w-5 h-5 text-orange-600 dark:text-orange-400 mt-0.5" />
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-2">
-                      Exchange Location
-                    </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
-                      Select the store where this exchange will be processed. Items must be available at the selected location.
-                    </p>
-                    
-                    {stores.length === 0 ? (
-                      <div className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
-                        Loading stores...
-                      </div>
-                    ) : (
-                      <select
-                        value={exchangeAtStoreId}
-                        onChange={(e) => setExchangeAtStoreId(Number(e.target.value))}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
-                      >
-                        {stores.map(store => (
-                          <option key={store.id} value={store.id}>
-                            {store.name} {store.is_warehouse ? '(Warehouse)' : '(Store)'}
-                            {store.id === order.store.id ? ' - Original Order Location' : ''}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      {stores.length} store(s) available • Original order location: {order.store.name}
-                    </p>
-                    
-                    {isCheckingInventory && (
-                      <div className="flex items-center gap-2 mt-2 text-sm text-blue-600 dark:text-blue-400">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Checking inventory availability...
-                      </div>
-                    )}
+              {/* Return Section */}
+              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-3xl p-6 border border-gray-200 dark:border-gray-700/50 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-red-500/5 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-red-500/10 transition-all duration-500" />
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-red-100 dark:bg-red-900/30 rounded-lg flex items-center justify-center">
+                      <RotateCcw className="w-4 h-4 text-red-600 dark:text-red-400" />
+                    </div>
+                    <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-wider text-sm">Returned Items</h3>
                   </div>
+                  <span className="px-3 py-1 bg-red-500 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg shadow-red-500/20">
+                    {removedItems.length} Unit{removedItems.length !== 1 ? 's' : ''}
+                  </span>
                 </div>
-              </div>
 
-              {/* Select Items to Exchange */}
-              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
-                <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-4">
-                  Select Items to Exchange
-                </h3>
-
-                {order.items && order.items.length > 0 ? (
-                  <div className="space-y-3">
-                    {order.items.map((item) => {
-                      const hasWarning = inventoryWarnings[item.id];
-                      
-                      return (
-                        <div
-                          key={item.id}
-                          className={`bg-white dark:bg-gray-900 rounded-lg p-4 border ${
-                            hasWarning 
-                              ? 'border-orange-300 dark:border-orange-700' 
-                              : 'border-gray-200 dark:border-gray-700'
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={selectedProducts.includes(item.id)}
-                              onChange={() => handleProductCheckbox(item.id)}
-                              className="mt-1 w-4 h-4 text-blue-600 rounded focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                            />
-                            <div className="flex-1">
-                              <div className="flex items-center justify-between mb-2">
-                                <div>
-                                  <p className="font-medium text-gray-900 dark:text-white">
-                                    {item.product_name}
-                                  </p>
-                                  <div className="flex items-center gap-3 mt-1">
-                                    <span className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                                      SKU: {item.product_sku}
-                                    </span>
-                                    {item.batch_number && (
-                                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                                        Batch: {item.batch_number}
-                                      </span>
-                                    )}
-                                    {item.barcode && (
-                                      <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded font-mono">
-                                        🏷️ {item.barcode}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <p className="font-bold text-gray-900 dark:text-white">
-                                  ৳{(parsePrice(item.unit_price) * item.quantity).toFixed(2)}
-                                </p>
-                              </div>
-                              <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
-                                Price: ৳{parsePrice(item.unit_price).toFixed(2)} × Qty: {item.quantity}
-                              </p>
-
-                              {/* ✅ NEW: Show inventory warning */}
-                              {hasWarning && selectedProducts.includes(item.id) && (
-                                <div className="mb-3 p-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-700 rounded-lg">
-                                  <div className="flex items-start gap-2">
-                                    <AlertCircle className="w-4 h-4 text-orange-600 dark:text-orange-400 mt-0.5 flex-shrink-0" />
-                                    <p className="text-xs text-orange-700 dark:text-orange-300">
-                                      {hasWarning}
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-
-                              {selectedProducts.includes(item.id) && (
-                                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-                                  <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                                        Available Qty
-                                      </label>
-                                      <input
-                                        type="number"
-                                        value={item.quantity}
-                                        readOnly
-                                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                                        Exchange Qty *
-                                      </label>
-                                      <input
-                                        type="number"
-                                        min="1"
-                                        max={item.quantity}
-                                        value={exchangeQuantities[item.id] || ''}
-                                        onChange={(e) =>
-                                          handleQuantityChange(item.id, parseInt(e.target.value) || 0, item.quantity)
-                                        }
-                                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                                        placeholder="Enter qty"
-                                      />
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                <form onSubmit={handleReturnScan} className="relative mb-6">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-red-400">
+                    <Barcode className="w-5 h-5" />
                   </div>
-                ) : (
-                  <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                    No items in this order
-                  </div>
-                )}
-              </div>
-
-              {/* Barcode Scanner for Replacement Products */}
-              {selectedProducts.length > 0 && (
-                <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
-                  <h3 className="font-semibold text-gray-900 dark:text-white text-lg mb-4">
-                    Scan Replacement Products
-                  </h3>
-
-                  <BarcodeScanner
-                    isEnabled={true}
-                    selectedOutlet={String(exchangeAtStoreId)}
-                    onProductScanned={handleProductScanned}
-                    onError={(msg) => alert(msg)}
+                  <input
+                    ref={returnInputRef}
+                    type="text"
+                    placeholder="SCAN BARCODE TO RETURN..."
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    onFocus={() => setScanningMode('return')}
+                    className="w-full pl-12 pr-4 py-4 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-red-500 outline-none transition-all text-sm font-bold placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
                   />
-
-                  {/* Replacement Products List */}
-                  {replacementProducts.length > 0 && (
-                    <div className="mt-4 space-y-2">
-                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">
-                        Replacement Products ({replacementProducts.length})
-                      </h4>
-                      {replacementProducts.map((product) => (
-                        <div
-                          key={product.id}
-                          className="bg-white dark:bg-gray-900 rounded-lg p-3 border border-gray-200 dark:border-gray-700"
-                        >
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1">
-                              <p className="text-sm font-medium text-gray-900 dark:text-white">
-                                {product.name}
-                              </p>
-                              <div className="flex items-center gap-2 mt-1">
-                                <p className="text-xs text-gray-600 dark:text-gray-400">
-                                  ৳{product.price.toLocaleString()} × {product.quantity}
-                                </p>
-                                {product.barcode && (
-                                  <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded font-mono">
-                                    {product.barcode}
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => handleUpdateReplacementQty(product.id, product.quantity - 1)}
-                                className="w-7 h-7 flex items-center justify-center border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-                              >
-                                −
-                              </button>
-                              <span className="w-8 text-center text-sm font-semibold text-gray-900 dark:text-white">
-                                {product.quantity}
-                              </span>
-                              <button
-                                onClick={() => handleUpdateReplacementQty(product.id, product.quantity + 1)}
-                                className="w-7 h-7 flex items-center justify-center border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-                              >
-                                +
-                              </button>
-                              <p className="font-bold text-gray-900 dark:text-white min-w-[80px] text-right">
-                                ৳{product.amount.toLocaleString()}
-                              </p>
-                              <button
-                                onClick={() => handleRemoveReplacement(product.id)}
-                                className="text-red-600 hover:text-red-700"
-                              >
-                                <X size={18} />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
+                  {scanningMode === 'return' && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                      <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Active</span>
                     </div>
                   )}
-                </div>
-              )}
-            </div>
+                </form>
 
-            {/* Right Column - Summary & Payment */}
-            <div className="space-y-4">
-              {/* Summary */}
-              <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-5 border border-gray-200 dark:border-gray-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-gray-900 dark:text-white text-lg">Summary</h3>
-                  <ChevronDown className="w-4 h-4 text-gray-500" />
-                </div>
-
-                <div className="space-y-3">
-                  {/* ✅ NEW: Show selected store */}
-                  <div className="flex justify-between text-sm pb-3 border-b border-gray-300 dark:border-gray-700">
-                    <span className="text-gray-600 dark:text-gray-400">Exchange at:</span>
-                    <span className="font-semibold text-gray-900 dark:text-white">
-                      {stores.find(s => s.id === exchangeAtStoreId)?.name || 'N/A'}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">Items to exchange:</span>
-                    <span className="font-semibold text-gray-900 dark:text-white">{selectedProducts.length}</span>
-                  </div>
-
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600 dark:text-gray-400">Replacement items:</span>
-                    <span className="font-semibold text-gray-900 dark:text-white">
-                      {replacementProducts.length}
-                    </span>
-                  </div>
-
-                  <div className="pt-3 border-t border-gray-300 dark:border-gray-700">
-                    <div className="flex justify-between items-center mb-2">
-                      <span className="text-sm text-gray-600 dark:text-gray-400">Original Amount:</span>
-                      <span className="font-semibold text-gray-900 dark:text-white">
-                        ৳{totals.originalAmount.toLocaleString()}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between text-sm mb-2">
-                      <span className="text-gray-600 dark:text-gray-400">New Subtotal:</span>
-                      <span className="font-semibold text-gray-900 dark:text-white">
-                        ৳{totals.newSubtotal.toLocaleString()}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between items-center text-sm mb-2">
-                      <span className="text-gray-600 dark:text-gray-400">VAT ({totals.vatRate.toFixed(1)}%):</span>
-                      <span className="font-semibold text-gray-900 dark:text-white">
-                        ৳{totals.vatAmount.toLocaleString()}
-                      </span>
-                    </div>
-
-                    <div className="flex justify-between text-sm mb-3">
-                      <span className="text-gray-600 dark:text-gray-400">New Total:</span>
-                      <span className="font-semibold text-gray-900 dark:text-white">
-                        ৳{totals.totalNewAmount.toLocaleString()}
-                      </span>
-                    </div>
-
-                    <div className="bg-white dark:bg-gray-900 rounded-lg p-3 border-2 border-gray-300 dark:border-gray-700">
-                      <div className="flex justify-between items-center">
-                        <span className="font-semibold text-gray-900 dark:text-white">Difference:</span>
-                        <span
-                          className={`font-bold text-lg ${
-                            totals.difference > 0
-                              ? 'text-orange-600 dark:text-orange-400'
-                              : totals.difference < 0
-                              ? 'text-green-600 dark:text-green-400'
-                              : 'text-gray-900 dark:text-white'
-                          }`}
-                        >
-                          {totals.difference > 0 ? '+' : ''}৳{totals.difference.toLocaleString()}
-                        </span>
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-2 scrollbar-thin">
+                  {removedItems.map((item, index) => (
+                    <div key={index} className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all group/item animate-in fade-in slide-in-from-left-4 duration-300">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-xs font-black text-gray-400 group-hover/item:bg-red-50 group-hover/item:text-red-500 transition-colors">
+                          {index + 1}
+                        </div>
+                        <div>
+                          <p className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight">{item.product_name}</p>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{item.barcode}</p>
+                        </div>
                       </div>
-                      {totals.difference > 0 && (
-                        <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                          Customer needs to pay additional
-                        </p>
-                      )}
-                      {totals.difference < 0 && (
-                        <p className="text-xs text-green-600 dark:text-green-400 mt-1">Refund to customer</p>
-                      )}
-                      {totals.difference === 0 && (
-                        <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Even exchange</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment/Refund Section */}
-              {totals.difference !== 0 && (
-                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
-                  <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                      {totals.difference > 0 ? 'Collect Payment' : 'Process Refund'}
-                    </h3>
-                    <ChevronDown className="w-4 h-4 text-gray-500" />
-                  </div>
-
-                  <div className="p-4 space-y-3">
-                    {/* Cash with Note Counter */}
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                          Cash {totals.difference > 0 ? 'Payment' : 'Refund'}
-                        </label>
-                        <button
-                          onClick={() => setShowNoteCounter(!showNoteCounter)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-100 dark:hover:bg-blue-900/30"
-                        >
-                          <Calculator className="w-3 h-3" />
-                          {showNoteCounter ? 'Hide' : 'Count Notes'}
+                      <div className="flex items-center gap-6">
+                        <p className="text-sm font-black text-gray-900 dark:text-white">৳{item.total_price.toLocaleString()}</p>
+                        <button onClick={() => removeReturnItem(index)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all">
+                          <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
+                    </div>
+                  ))}
+                  {removedItems.length === 0 && (
+                    <div className="text-center py-12 border-4 border-dotted border-gray-100 dark:border-gray-800 rounded-3xl">
+                      <Barcode className="w-12 h-12 text-gray-200 dark:text-gray-800 mx-auto mb-4" />
+                      <p className="text-xs font-black text-gray-300 dark:text-gray-700 uppercase tracking-widest">Scan item barcode to begin return</p>
+                    </div>
+                  )}
+                </div>
+              </div>
 
-                      {showNoteCounter ? (
-                        <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-lg p-3 space-y-2">
-                          <div className="grid grid-cols-3 gap-2">
-                            <NoteInput value={1000} state={note1000} setState={setNote1000} />
-                            <NoteInput value={500} state={note500} setState={setNote500} />
-                            <NoteInput value={200} state={note200} setState={setNote200} />
-                            <NoteInput value={100} state={note100} setState={setNote100} />
-                            <NoteInput value={50} state={note50} setState={setNote50} />
-                            <NoteInput value={20} state={note20} setState={setNote20} />
-                            <NoteInput value={10} state={note10} setState={setNote10} />
-                            <NoteInput value={5} state={note5} setState={setNote5} />
-                            <NoteInput value={2} state={note2} setState={setNote2} />
-                          </div>
-                          <div className="flex justify-between items-center pt-2 border-t border-blue-200 dark:border-blue-800">
-                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300">Total Cash:</span>
-                            <span className="text-sm font-bold text-blue-600 dark:text-blue-400">
-                              ৳{cashFromNotes.toLocaleString()}
-                            </span>
-                          </div>
+              {/* Replacement Section */}
+              <div className="bg-gray-50 dark:bg-gray-800/50 rounded-3xl p-6 border border-gray-200 dark:border-gray-700/50 relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/5 rounded-full -mr-16 -mt-16 blur-3xl group-hover:bg-green-500/10 transition-all duration-500" />
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
+                      <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                    </div>
+                    <h3 className="font-black text-gray-900 dark:text-white uppercase tracking-wider text-sm">Replacement Items</h3>
+                  </div>
+                  <span className="px-3 py-1 bg-green-500 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-lg shadow-green-500/20">
+                    {replacementItems.length} Unit{replacementItems.length !== 1 ? 's' : ''}
+                  </span>
+                </div>
+
+                <form onSubmit={handleReplacementScan} className="relative mb-6">
+                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-green-400">
+                    <Search className="w-5 h-5" />
+                  </div>
+                  <input
+                    ref={replacementInputRef}
+                    type="text"
+                    placeholder="SCAN REPLACEMENT BARCODE..."
+                    value={replacementBarcodeInput}
+                    onChange={(e) => setReplacementBarcodeInput(e.target.value)}
+                    onFocus={() => setScanningMode('replacement')}
+                    className="w-full pl-12 pr-4 py-4 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-green-500 outline-none transition-all text-sm font-bold placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
+                  />
+                  {scanningMode === 'replacement' && (
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                      <span className="text-[10px] font-black text-green-500 uppercase tracking-widest">Active</span>
+                    </div>
+                  )}
+                </form>
+
+                <div className="space-y-3 max-h-72 overflow-y-auto pr-2 scrollbar-thin">
+                  {replacementItems.map((item, index) => (
+                    <div key={index} className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all group/item animate-in fade-in slide-in-from-left-4 duration-300">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-xs font-black text-gray-400 group-hover/item:bg-green-50 group-hover/item:text-green-500 transition-colors">
+                          {index + 1}
                         </div>
-                      ) : (
                         <div>
-                          <input
-                            type="number"
-                            min="0"
-                            value={cashFromNotes > 0 ? cashFromNotes : cashAmount}
-                            onChange={(e) => {
-                              setCashAmount(Number(e.target.value));
-                              setNote1000(0); setNote500(0); setNote200(0); setNote100(0);
-                              setNote50(0); setNote20(0); setNote10(0); setNote5(0);
-                              setNote2(0); setNote1(0);
-                            }}
-                            className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                          />
+                          <p className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight">{item.name}</p>
+                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{item.barcode}</p>
                         </div>
-                      )}
-                    </div>
-
-                    {/* Other Payment Methods */}
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Card</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={cardAmount}
-                          onChange={(e) => setCardAmount(Number(e.target.value))}
-                          className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                        />
                       </div>
-                      <div>
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Bkash</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={bkashAmount}
-                          onChange={(e) => setBkashAmount(Number(e.target.value))}
-                          className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <label className="block text-xs text-gray-700 dark:text-gray-300 mb-1">Nagad</label>
-                        <input
-                          type="number"
-                          min="0"
-                          value={nagadAmount}
-                          onChange={(e) => setNagadAmount(Number(e.target.value))}
-                          className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
-                        />
+                      <div className="flex items-center gap-6">
+                        <p className="text-sm font-bold text-gray-900 dark:text-white">৳{item.total_price.toLocaleString()}</p>
+                        <button onClick={() => removeReplacementItem(index)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
                     </div>
+                  ))}
+                  {replacementItems.length === 0 && (
+                    <div className="text-center py-12 border-4 border-dotted border-gray-100 dark:border-gray-800 rounded-3xl">
+                      <Search className="w-12 h-12 text-gray-200 dark:text-gray-800 mx-auto mb-4" />
+                      <p className="text-xs font-black text-gray-300 dark:text-gray-700 uppercase tracking-widest">Scan replacement item barcode</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
 
-                    {/* Summary */}
-                    <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-gray-700 dark:text-gray-300">
-                          Total {totals.difference > 0 ? 'Collected' : 'Refunded'}
-                        </span>
-                        <span className="text-gray-900 dark:text-white font-medium">
-                          ৳{totalPaymentRefund.toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="text-gray-700 dark:text-gray-300">
-                          {totals.difference > 0 ? 'Amount Due' : 'Refund Required'}
-                        </span>
-                        <span className="text-gray-900 dark:text-white font-medium">
-                          ৳{Math.abs(totals.difference).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="flex justify-between text-base">
-                        <span className="font-semibold text-gray-900 dark:text-white">
-                          {totals.difference > 0 ? 'Outstanding' : 'Remaining Refund'}
-                        </span>
-                        <span
-                          className={`font-bold ${
-                            due > 0
-                              ? 'text-orange-600 dark:text-orange-400'
-                              : 'text-green-600 dark:text-green-400'
-                          }`}
-                        >
-                          ৳{due.toFixed(2)}
-                        </span>
-                      </div>
-                      {due > 0 && (
-                        <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
-                          Can {totals.difference > 0 ? 'pay' : 'refund'} later
-                        </p>
-                      )}
-                      {due === 0 && totalPaymentRefund > 0 && (
-                        <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                          ✓ Fully {totals.difference > 0 ? 'paid' : 'refunded'}
-                        </p>
-                      )}
+            <div className="col-span-12 lg:col-span-4">
+              <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] p-8 border border-gray-200 dark:border-gray-700 shadow-2xl sticky top-0">
+                <h3 className="font-black text-gray-900 dark:text-white text-lg mb-8 flex items-center gap-3 uppercase tracking-tighter">
+                  <Calculator className="w-6 h-6 text-blue-500" />
+                  Settlement
+                </h3>
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center group/summary">
+                    <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Returns</span>
+                    <span className="font-black text-red-500 text-lg group-hover/summary:scale-110 transition-transform">-৳{totals.returnTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center group/summary">
+                    <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Replacements</span>
+                    <span className="font-black text-green-500 text-lg group-hover/summary:scale-110 transition-transform">+৳{totals.replacementTotal.toLocaleString()}</span>
+                  </div>
+                  <div className="pt-6 border-t-4 border-gray-50 dark:border-gray-900">
+                    <div className="flex justify-between items-end mb-1">
+                      <span className="text-xs font-black text-gray-400 uppercase tracking-widest">Net Difference</span>
+                      <span className={`text-3xl font-black tracking-tighter ${totals.difference > 0 ? 'text-orange-500' : totals.difference < 0 ? 'text-green-500' : 'text-gray-900 dark:text-white'}`}>
+                        {totals.difference > 0 ? '+' : ''}৳{Math.abs(totals.difference).toLocaleString()}
+                      </span>
+                    </div>
+                    <div className={`text-[9px] font-black uppercase tracking-[0.2em] px-3 py-1 rounded-full inline-block ${totals.difference > 0 ? 'bg-orange-100 text-orange-600' : totals.difference < 0 ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600'}`}>
+                      {totals.difference > 0 ? 'Collect Surplus' : totals.difference < 0 ? 'Process Refund' : 'Even Swap'}
                     </div>
                   </div>
-                </div>
-              )}
 
-              {/* Action Buttons */}
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  disabled={isProcessing}
-                  className="flex-1 px-6 py-3 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors font-semibold disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleProcessExchange}
-                  disabled={isProcessing || selectedProducts.length === 0 || replacementProducts.length === 0}
-                  className="flex-1 flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
-                >
-                  {isProcessing ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      Processing...
-                    </>
-                  ) : (
-                    <>
-                      <ArrowRightLeft className="w-5 h-5" />
-                      Process Exchange
-                    </>
+                  {(totals.difference !== 0) && (
+                    <div className="pt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Payment Methods</h4>
+                        <button onClick={() => setShowNoteCounter(!showNoteCounter)} className={`text-[9px] px-3 py-1.5 rounded-full font-black uppercase tracking-widest transition-all ${showNoteCounter ? 'bg-black text-white' : 'bg-blue-50 text-blue-600'}`}>
+                          {showNoteCounter ? 'Close Counter' : 'Note Counter'}
+                        </button>
+                      </div>
+                      {showNoteCounter && (
+                        <div className="grid grid-cols-2 gap-2 p-4 bg-gray-50 dark:bg-gray-900 rounded-3xl border border-gray-100 dark:border-gray-700 animate-in zoom-in-95">
+                          {Object.keys(notes).reverse().map(val => (
+                            <div key={val} className="flex items-center justify-between gap-2">
+                              <span className="text-[9px] font-black text-gray-400 w-8">৳{val}</span>
+                              <input type="number" min="0" value={notes[val as unknown as keyof typeof notes]} onChange={(e) => setNotes(prev => ({ ...prev, [val]: parseInt(e.target.value) || 0 }))} className="w-16 px-2 py-1 bg-white dark:bg-black border border-gray-100 dark:border-gray-800 rounded-lg text-xs font-black text-center" />
+                            </div>
+                          ))}
+                          <div className="col-span-2 pt-3 mt-1 border-t border-gray-200 dark:border-gray-800 flex justify-between items-center">
+                            <span className="text-[10px] font-black text-gray-400 uppercase">Cash Total:</span>
+                            <span className="text-xs font-black text-blue-600">৳{cashFromNotes.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="space-y-4">
+                        {[
+                          { id: 'cash', label: 'CASH', val: effectiveCash, readOnly: cashFromNotes > 0 },
+                          { id: 'card', label: 'CARD', val: paymentDetails.card },
+                          { id: 'bkash', label: 'BKASH', val: paymentDetails.bkash },
+                          { id: 'nagad', label: 'NAGAD', val: paymentDetails.nagad }
+                        ].map((m) => (
+                          <div key={m.id} className="relative group">
+                            <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-blue-500 transition-colors">
+                              <span className="text-[9px] font-black uppercase tracking-tighter">{m.label}</span>
+                            </div>
+                            <input type="number" value={m.val === 0 ? '' : m.val} readOnly={m.readOnly} onChange={(e) => { setPaymentDetails(prev => ({ ...prev, [m.id]: parseFloat(e.target.value) || 0 })); if (m.id === 'cash') setNotes({ 1000: 0, 500: 0, 200: 0, 100: 0, 50: 0, 20: 0, 10: 0, 5: 0, 2: 0, 1: 0 }); }} className={`w-full pl-16 pr-4 py-3 bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-blue-500 rounded-2xl outline-none transition-all text-sm font-black text-right ${m.readOnly ? 'bg-blue-50/50' : ''}`} placeholder="0.00" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                </button>
+
+                  <button
+                    onClick={handleProcessExchange}
+                    disabled={isProcessing || removedItems.length === 0 || replacementItems.length === 0}
+                    className="w-full py-5 bg-black dark:bg-white text-white dark:text-black rounded-3xl font-black text-xl shadow-2xl shadow-black/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30 disabled:hover:scale-100 flex items-center justify-center gap-4 mt-8"
+                  >
+                    {isProcessing ? (
+                      <div className="w-6 h-6 border-4 border-gray-300 border-t-white dark:border-t-black rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <ArrowRightLeft className="w-6 h-6" />
+                        SUBMIT EXCHANGE
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
