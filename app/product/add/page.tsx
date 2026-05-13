@@ -18,6 +18,7 @@ import { productService, Field, Product } from '@/services/productService';
 import productImageService from '@/services/productImageService';
 import categoryService, { Category, CategoryTree } from '@/services/categoryService';
 import { vendorService, Vendor } from '@/services/vendorService';
+import { sizeService, Size } from '@/services/sizeService';
 import {
   FieldValue,
   CategorySelectionState,
@@ -153,9 +154,10 @@ export default function AddEditProductPage({
   const [variations, setVariations] = useState<VariationData[]>([]);
   const [categories, setCategories] = useState<CategoryTree[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [allSizes, setAllSizes] = useState<Size[]>([]);
 
 
-  // --- Size presets (Deshio): quickly select full size chart for a category ---
+  // --- Size presets (Errum): quickly select full size chart for a category ---
   const findCategoryNameById = (nodes: CategoryTree[], id: string): string => {
     const target = String(id || '').trim();
     if (!target) return '';
@@ -179,86 +181,50 @@ export default function AddEditProductPage({
     const name = String(selectedCategoryName || '').toLowerCase();
 
     const footwearKeywords = [
-      'shoe',
-      'shoes',
-      'sneaker',
-      'sneakers',
-      'footwear',
-      'boot',
-      'boots',
-      'sandal',
-      'sandals',
-      'loafer',
-      'loafers',
-      'heel',
-      'heels',
+      'shoe', 'shoes', 'sneaker', 'sneakers', 'footwear', 'boot', 'boots',
+      'sandal', 'sandals', 'loafer', 'loafers', 'heel', 'heels',
     ];
 
     const apparelKeywords = [
-      'dress',
-      'dresses',
-      'apparel',
-      'clothing',
-      't-shirt',
-      'tshirt',
-      'shirt',
-      'tops',
-      'top',
-      'pant',
-      'pants',
-      'trouser',
-      'trousers',
-      'jeans',
-      'kurti',
-      'kameez',
-      'salwar',
-      'saree',
-      'sari',
-      'jacket',
-      'hoodie',
-      'sweater',
-      'blouse',
-      'skirt',
-      'abaya',
+      'dress', 'dresses', 'apparel', 'clothing', 't-shirt', 'tshirt', 'shirt',
+      'tops', 'top', 'pant', 'pants', 'trouser', 'trousers', 'jeans', 'kurti',
+      'kameez', 'salwar', 'saree', 'sari', 'jacket', 'hoodie', 'sweater',
+      'blouse', 'skirt', 'abaya',
     ];
 
     const isFootwear = footwearKeywords.some((k) => name.includes(k));
     const isApparel = apparelKeywords.some((k) => name.includes(k));
 
-    if (isFootwear) return { options: SIZE_PRESETS.sneakers as readonly string[] };
-    if (isApparel) return { options: SIZE_PRESETS.dresses as readonly string[] };
-    return { options: null as readonly string[] | null };
+    // Combine hardcoded presets with DB sizes if they match
+    const dbSizes = allSizes.map(s => s.name);
+
+    if (isFootwear) return { options: [...new Set([...(SIZE_PRESETS.sneakers as any), ...dbSizes])] };
+    if (isApparel) return { options: [...new Set([...(SIZE_PRESETS.dresses as any), ...dbSizes])] };
+    return { options: dbSizes };
   })();
 
   const getSizeOptionsForVariation = (sizes: string[]): string[] | undefined => {
-    if (!sizeContext.options) return undefined;
+    const dbSizes = allSizes.map(s => s.name);
+    const contextOptions = sizeContext.options || [];
+    
     const existing = (Array.isArray(sizes) ? sizes : [])
       .map((s) => String(s || '').trim())
       .filter(Boolean);
 
-    return Array.from(new Set([...(sizeContext.options || []), ...existing]));
+    return Array.from(new Set([...contextOptions, ...dbSizes, ...existing]));
   };
 
-  const sizePresetButtons = [
-    { key: 'sneakers', label: getPresetLabel('sneakers') },
-    { key: 'dresses', label: getPresetLabel('dresses') },
-  ];
-
-  const applySizePreset = (variationId: string, presetKey: SizePresetKey) => {
-    const preset = Array.isArray(SIZE_PRESETS[presetKey]) ? Array.from(SIZE_PRESETS[presetKey]) : [];
-    if (preset.length === 0) return;
-
-    setVariations((prev) =>
-      prev.map((v) => {
-        if (v.id !== variationId) return v;
-        const existing = (Array.isArray(v.sizes) ? v.sizes : [])
-          .map((s) => String(s || '').trim())
-          .filter(Boolean);
-        const merged = Array.from(new Set([...existing, ...preset]));
-        return { ...v, sizes: merged.length > 0 ? merged : [''] };
-      })
-    );
-  };
+  useEffect(() => {
+    const fetchSizes = async () => {
+      try {
+        const sizes = await sizeService.getSizes();
+        setAllSizes(sizes);
+      } catch (error) {
+        console.error('Failed to fetch sizes:', error);
+      }
+    };
+    fetchSizes();
+  }, []);
 
   useEffect(() => {
     fetchInitialData();
@@ -628,7 +594,8 @@ export default function AddEditProductPage({
   const normalizeSuffix = (suffix: string): string => {
     const raw = String(suffix || '').trim();
     if (!raw) return '';
-    return raw.startsWith('-') ? raw : `-${raw}`;
+    if (raw.startsWith('-') || raw.startsWith(' - ')) return raw;
+    return ` - ${raw}`;
   };
 
   const updateRowEdit = (id: number, patch: Partial<{ variation_suffix: string; description: string }>) => {
@@ -915,6 +882,25 @@ export default function AddEditProductPage({
     ));
   };
 
+  const updateSizes = (variationId: string, sizes: string[]) => {
+    setVariations(variations.map(v =>
+      v.id === variationId ? { ...v, sizes } : v
+    ));
+  };
+
+  const handleCreateSize = async (name: string) => {
+    try {
+      const newSize = await sizeService.createSize(name);
+      setAllSizes(prev => [...prev, newSize]);
+      setToast({ message: `Size "${name}" created and added to list.`, type: 'success' });
+    } catch (error: any) {
+      console.error('Failed to create size:', error);
+      const msg = error.response?.data?.errors?.name?.[0] || 'Failed to create size';
+      setToast({ message: msg, type: 'error' });
+      throw error;
+    }
+  };
+
   const handleVariationImageChange = (variationId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
 
@@ -967,23 +953,15 @@ export default function AddEditProductPage({
     ));
   };
 
-  const slugify = (val: string): string => {
-    return String(val || '')
-      .toLowerCase()
-      .trim()
-      .replace(/\s+/g, '-')
-      .replace(/[^a-z0-9-]/g, '')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-  };
+
 
   const buildVariationSuffix = (color?: string, size?: string): string => {
     const parts: string[] = [];
-    const c = slugify(String(color || ''));
-    const s = slugify(String(size || ''));
+    const c = String(color || '').trim();
+    const s = String(size || '').trim();
     if (c) parts.push(c);
     if (s) parts.push(s);
-    return parts.length ? `-${parts.join('-')}` : '';
+    return parts.length ? ` - ${parts.join(' - ')}` : '';
   };
 
   const handleSubmit = async () => {
@@ -2061,9 +2039,9 @@ export default function AddEditProductPage({
                             onSizeAdd={() => addSize(variation.id)}
                             onSizeUpdate={(sizeIdx, value) => updateSizeValue(variation.id, sizeIdx, value)}
                             onSizeRemove={(sizeIdx) => removeSize(variation.id, sizeIdx)}
+                            onSizesUpdate={(sizes) => updateSizes(variation.id, sizes)}
+                            onCreateSize={handleCreateSize}
                             sizeOptions={getSizeOptionsForVariation(variation.sizes)}
-                            sizePresetButtons={sizePresetButtons}
-                            onApplySizePreset={(key) => applySizePreset(variation.id, key as SizePresetKey)}
                           />
                         ))}
                       </div>

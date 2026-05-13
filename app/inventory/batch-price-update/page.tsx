@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 
 import productService, { Product as FullProduct } from '@/services/productService';
+import catalogService from '@/services/catalogService';
 import batchService, { Batch } from '@/services/batchService';
 import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
 
@@ -53,6 +54,7 @@ export default function BatchPriceUpdatePage() {
 
   // Update price
   const [sellPrice, setSellPrice] = useState<string>('');
+  const [costPrice, setCostPrice] = useState<string>('');
   const [isSaving, setIsSaving] = useState(false);
 
   // UI messages
@@ -176,22 +178,18 @@ export default function BatchPriceUpdatePage() {
       try {
         setIsSearching(true);
 
-        // ✅ Fast autocomplete first
-        const quick = await productService.quickSearch(q, searchLimit);
+        // Use catalogService.getProducts instead of productService search methods
+        const res = await catalogService.getProducts({ 
+          q, 
+          per_page: searchLimit,
+          group_by_sku: true 
+        });
 
-        // Fallback to advanced search (better multi-language + fuzzy) if quick is empty
-        const list = (Array.isArray(quick) && quick.length > 0)
-          ? (quick as FullProduct[])
-          : ((await productService.advancedSearch({
-              query: q,
-              is_archived: false,
-              enable_fuzzy: true,
-              fuzzy_threshold: 60,
-              search_fields: ['name', 'sku', 'description', 'category', 'custom_fields'],
-              per_page: searchLimit,
-            })).items as FullProduct[]);
+        // catalogService flattens variants into .products when group_by_sku is true
+        const list = res.products || [];
+        
         const mapped: ProductPick[] = list.map((p) => ({
-          id: p.id,
+          id: p.id as number,
           name: p.name,
           sku: p.sku,
         }));
@@ -211,6 +209,21 @@ export default function BatchPriceUpdatePage() {
     return () => clearTimeout(t);
   }, [search, searchLimit]);
 
+  // Grouped products for search results
+  const groupedProducts = useMemo(() => {
+    const groups: Record<string, ProductPick[]> = {};
+    products.forEach((p) => {
+      const sku = p.sku || 'No SKU';
+      if (!groups[sku]) groups[sku] = [];
+      groups[sku].push(p);
+    });
+    return Object.entries(groups).sort((a, b) => {
+      if (a[0] === 'No SKU') return 1;
+      if (b[0] === 'No SKU') return -1;
+      return a[0].localeCompare(b[0]);
+    });
+  }, [products]);
+
   // Load batches when product selected
   useEffect(() => {
     const load = async () => {
@@ -227,21 +240,42 @@ export default function BatchPriceUpdatePage() {
         setSuccessMsg(null);
         setUpdates([]);
 
-        const list = await batchService.getBatchesArray({
-          product_id: selectedProduct.id,
-          per_page: 200,
-        });
+        const res = await productService.getEcommerceProduct(selectedProduct.id);
+        if (!res?.success || !res?.data?.product) {
+          throw new Error(res?.message || 'Product data not found in catalog.');
+        }
+
+        const productData = res.data.product;
+        // Ensure batches have product context for consistency with Batch interface
+        const list = (productData.batches || []).map((b: any) => ({
+          ...b,
+          product: b.product || {
+            id: productData.id,
+            name: productData.name,
+            sku: productData.sku
+          },
+          store: b.store || { id: b.store_id, name: `Store #${b.store_id}` }
+        }));
 
         setBatches(list);
 
-        // Prefill price if all batches have same sell_price
-        const prices = list
+        // Prefill selling price if all batches have same sell_price
+        const sellPrices = list
           .map((b) => (b.sell_price ?? '').toString().trim())
           .filter(Boolean);
 
-        const unique = Array.from(new Set(prices));
-        if (unique.length === 1) setSellPrice(unique[0]);
+        const uniqueSell = Array.from(new Set(sellPrices));
+        if (uniqueSell.length === 1) setSellPrice(uniqueSell[0]);
         else setSellPrice('');
+
+        // Prefill cost price if all batches have same cost_price
+        const costPrices = list
+          .map((b) => (b.cost_price ?? '').toString().trim())
+          .filter(Boolean);
+
+        const uniqueCost = Array.from(new Set(costPrices));
+        if (uniqueCost.length === 1) setCostPrice(uniqueCost[0]);
+        else setCostPrice('');
       } catch (e: any) {
         setError(e?.response?.data?.message || e?.message || 'Failed to load batches.');
         setBatches([]);
@@ -375,8 +409,19 @@ export default function BatchPriceUpdatePage() {
     }
 
     const priceNum = Number(sellPrice);
-    if (!sellPrice || Number.isNaN(priceNum) || priceNum < 0) {
+    const costNum = Number(costPrice);
+
+    if (sellPrice && (Number.isNaN(priceNum) || priceNum < 0)) {
       setError('Enter a valid selling price (0 or greater).');
+      return;
+    }
+    if (costPrice && (Number.isNaN(costNum) || costNum < 0)) {
+      setError('Enter a valid cost price (0 or greater).');
+      return;
+    }
+
+    if (!sellPrice && !costPrice) {
+      setError('Enter at least one price (Selling or Cost) to update.');
       return;
     }
 
@@ -388,26 +433,34 @@ export default function BatchPriceUpdatePage() {
 
       let firstSuccess: any = null;
 
+      const payload: any = {};
+      if (sellPrice) payload.sell_price = priceNum;
+      if (costPrice) payload.cost_price = costNum;
+
       for (const pid of targetIds) {
-        const res = await batchService.updateAllBatchPrices(pid, priceNum);
+        const res = await batchService.updateAllBatchPrices(pid, payload);
         if (!res?.success) {
           throw new Error(res?.message || `Failed to update batch prices for product ${pid}.`);
         }
         if (!firstSuccess) firstSuccess = res;
       }
 
+      let msg = '';
+      if (sellPrice && costPrice) msg = 'selling and cost prices';
+      else if (sellPrice) msg = 'selling price';
+      else msg = 'cost price';
+
       setSuccessMsg(
         targetIds.length > 1
-          ? `Updated selling price for all batches of ${targetIds.length} variations (same SKU).`
-          : (firstSuccess?.message || 'Updated selling price for all batches.')
+          ? `Updated ${msg} for all batches of ${targetIds.length} variations (same SKU).`
+          : (firstSuccess?.message || `Updated ${msg} for all batches.`)
       );
 
-      
       sessionStorage.setItem('product_list_refresh_needed', '1');
-// Show update rows from the first response (usually enough for verification)
+      // Show update rows from the first response
       setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
 
-      // Reload batches for the currently selected product (so table reflects new price)
+      // Reload batches for the currently selected product
       const list = await batchService.getBatchesArray({
         product_id: selectedProduct.id,
         per_page: 200,
@@ -475,22 +528,35 @@ export default function BatchPriceUpdatePage() {
                 </div>
 
                 {/* Search Results */}
-                {products.length > 0 && (
-                  <>
-                    <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                      {products.map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => onSelectProduct(p)}
-                          className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 border-b border-gray-200 dark:border-gray-700 last:border-b-0"
-                        >
-                          <div className="font-medium text-gray-900 dark:text-gray-100">{p.name}</div>
-                          <div className="text-xs text-gray-500 dark:text-gray-400">
-                            ID: {p.id} {p.sku ? `• SKU: ${p.sku}` : ''}
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+                {groupedProducts.length > 0 && (
+                  <div className="mt-3 space-y-3">
+                    {groupedProducts.map(([sku, group]) => (
+                      <div key={sku} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20 overflow-hidden">
+                        <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                          <span>SKU: {sku}</span>
+                          <span className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px]">{group.length} {group.length === 1 ? 'variant' : 'variants'}</span>
+                        </div>
+                        <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                          {group.map((p) => (
+                            <button
+                              key={p.id}
+                              onClick={() => onSelectProduct(p)}
+                              className="w-full text-left px-3 py-2.5 hover:bg-white dark:hover:bg-gray-700/40 transition-colors group"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="font-medium text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                  {p.name}
+                                </div>
+                                <div className="shrink-0 text-[10px] font-mono bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                                  ID: {p.id}
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+
                     {searchHasMore && !isSearching && (
                       <div className="mt-2">
                         <button
@@ -502,7 +568,7 @@ export default function BatchPriceUpdatePage() {
                         </button>
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
 
                 {/* Selected Product + Summary */}
@@ -631,9 +697,9 @@ export default function BatchPriceUpdatePage() {
                   </div>
                 )}
 
-                <div className="mt-4 flex flex-wrap items-end gap-3">
-                  <div className="flex-1 min-w-[220px]">
-                    <label className="block text-sm text-gray-700 dark:text-gray-300 mb-2">
+                <div className="mt-4 flex flex-wrap items-end gap-4">
+                  <div className="w-full sm:flex-1 min-w-[180px]">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
                       Selling Price (BDT)
                     </label>
                     <input
@@ -643,28 +709,48 @@ export default function BatchPriceUpdatePage() {
                       min={0}
                       step="0.01"
                       placeholder="e.g. 1299.00"
-                      className="w-full rounded-lg bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 px-3 py-2 outline-none focus:border-gray-400 dark:focus:border-gray-500 text-gray-900 dark:text-gray-100"
+                      className="w-full rounded-lg bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 px-3 py-2.5 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 text-gray-900 dark:text-gray-100 transition-all"
                       disabled={!selectedProduct || isSaving}
                     />
                   </div>
 
-                  <button
-                    onClick={onApply}
-                    disabled={!selectedProduct || isSaving}
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 font-semibold text-white"
-                  >
-                    {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                    Apply to all batches
-                  </button>
-                  <button
-                    onClick={prepareBarcodeSources}
-                    disabled={!selectedProduct || isSaving || isPreparingBarcodes}
-                    className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-2 font-semibold text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Open barcode printing (same logic as Purchase Order barcode printing)"
-                  >
-                    {isPreparingBarcodes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-4 w-4" />}
-                    Print barcodes
-                  </button>
+                  <div className="w-full sm:flex-1 min-w-[180px]">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">
+                      Cost Price (BDT)
+                    </label>
+                    <input
+                      value={costPrice}
+                      onChange={(e) => setCostPrice(e.target.value)}
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      placeholder="e.g. 850.00"
+                      className="w-full rounded-lg bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 px-3 py-2.5 outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-gray-900 dark:text-gray-100 transition-all"
+                      disabled={!selectedProduct || isSaving}
+                    />
+                    <p className="mt-1 text-[10px] text-gray-500 dark:text-gray-400 italic">
+                      Updates all batches at once.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2 w-full lg:w-auto">
+                    <button
+                      onClick={onApply}
+                      disabled={!selectedProduct || isSaving}
+                      className="flex-1 lg:flex-none inline-flex items-center justify-center gap-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed px-5 py-2.5 font-semibold shadow-sm transition-all"
+                    >
+                      {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                      Apply Changes
+                    </button>
+                    <button
+                      onClick={prepareBarcodeSources}
+                      disabled={!selectedProduct || isSaving || isPreparingBarcodes}
+                      className="inline-flex items-center justify-center p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-sm"
+                      title="Open barcode printing"
+                    >
+                      {isPreparingBarcodes ? <Loader2 className="h-4 w-4 animate-spin" /> : <Printer className="h-5 w-5" />}
+                    </button>
+                  </div>
                 </div>
 
                 {barcodePrepError ? (
