@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { Download } from "lucide-react";
 import { renderBarcodeLabelBase64 } from "./MultiBarcodePrinter";
 import { barcodeTrackingService } from "@/services/barcodeTrackingService";
 
@@ -17,6 +18,7 @@ type PrintItem = {
   productName: string;
   price: number;
   qty: number;
+  batchId?: number;
 };
 
 function clamp(n: number, min: number, max: number) {
@@ -33,6 +35,33 @@ function dedupeItems(items: PrintItem[]): PrintItem[] {
   }
   return out;
 }
+
+function csvCell(value: any) {
+  const text = value === null || value === undefined ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadBlob(filename: string, content: string, type = "text/csv;charset=utf-8;") {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function safeFileName(input: string) {
+  return (input || "barcodes")
+    .trim()
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 80) || "barcodes";
+}
+
 
 const LABEL_W_MM = 39;
 const LABEL_H_MM = 25;
@@ -76,6 +105,7 @@ export default function GroupedAllBarcodesPrinter({
   const [isOpen, setIsOpen] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [items, setItems] = useState<PrintItem[]>([]);
   const [qtyByCode, setQtyByCode] = useState<Record<string, number>>({});
@@ -125,17 +155,17 @@ export default function GroupedAllBarcodesPrinter({
             .filter(Boolean);
 
           if (codes.length === 0 && s.fallbackCode) {
-            collected.push({ code: s.fallbackCode, productName: s.productName, price: s.price, qty: 1 });
+            collected.push({ code: s.fallbackCode, productName: s.productName, price: s.price, qty: 1, batchId: s.batchId });
             continue;
           }
 
           for (const code of codes) {
-            collected.push({ code, productName: s.productName, price: s.price, qty: 1 });
+            collected.push({ code, productName: s.productName, price: s.price, qty: 1, batchId: s.batchId });
           }
         } catch (e: any) {
           console.error("Failed to fetch barcodes for batch", s.batchId, e);
           if (s.fallbackCode) {
-            collected.push({ code: s.fallbackCode, productName: s.productName, price: s.price, qty: 1 });
+            collected.push({ code: s.fallbackCode, productName: s.productName, price: s.price, qty: 1, batchId: s.batchId });
           }
         }
       }
@@ -162,6 +192,37 @@ export default function GroupedAllBarcodesPrinter({
       setFetchError(e?.message || "Failed to prepare barcodes");
     } finally {
       setIsFetching(false);
+    }
+  };
+
+  const getSelectedItems = () => {
+    return items
+      .map((it) => ({ ...it, qty: qtyByCode[it.code] ?? 0 }))
+      .filter((it) => it.code && it.qty > 0);
+  };
+
+  const downloadCsv = async () => {
+    const selected = getSelectedItems();
+    if (selected.length === 0) {
+      alert("Nothing selected to download.");
+      return;
+    }
+
+    setIsDownloading(true);
+    try {
+      const rows = [
+        ["barcode", "product_name", "price", "quantity", "batch_id"],
+        ...selected.map((it) => [it.code, it.productName, String(it.price ?? 0), String(it.qty ?? 1), String(it.batchId ?? "")]),
+      ];
+
+      const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
+      const firstProduct = selected[0]?.productName || title || "barcodes";
+      downloadBlob(`${safeFileName(firstProduct)}-updated-barcodes.csv`, csv);
+    } catch (err: any) {
+      console.error("Barcode CSV download error:", err);
+      alert(err?.message || "Failed to download barcodes CSV.");
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -318,7 +379,7 @@ export default function GroupedAllBarcodesPrinter({
             {/* Footer */}
             <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
               <div className="text-xs text-gray-500 dark:text-gray-400">
-                Tip: set quantity to 0 to skip a barcode.
+                Tip: set quantity to 0 to skip a barcode. CSV uses the same updated price shown here.
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -327,6 +388,15 @@ export default function GroupedAllBarcodesPrinter({
                   className="px-4 py-2 rounded-lg text-sm border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                 >
                   Close
+                </button>
+                <button
+                  onClick={downloadCsv}
+                  disabled={isPrinting || isDownloading || items.length === 0 || totalLabels === 0}
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+                  title="Download the selected barcodes with updated prices as CSV"
+                >
+                  <Download className="w-4 h-4" />
+                  {isDownloading ? "Preparing..." : "Download CSV"}
                 </button>
                 <button
                   onClick={print}
