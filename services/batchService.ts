@@ -127,32 +127,16 @@ export interface ApiResponse<T> {
  */
 export interface BulkBatchPriceUpdateData {
   product_id: number;
-  product_name?: string;
-  product_sku?: string;
-  new_sell_price?: string;
-  new_cost_price?: string;
-  sell_price?: string; // legacy/backward compatibility
-  updated_batches?: number;
-  batches_updated?: number;
+  sell_price: string; // backend may return string formatted
+  updated_batches: number;
   updates: Array<{
     batch_id: number;
     batch_number: string | null;
     store: string;
-    old_price?: string;
-    new_price?: string;
-    old_sell_price?: string;
-    new_sell_price?: string;
-    old_cost_price?: string;
-    new_cost_price?: string;
+    old_price: string;
+    new_price: string;
   }>;
 }
-
-export type BulkBatchPriceUpdatePayload =
-  | number
-  | {
-      sell_price?: number;
-      cost_price?: number;
-    };
 
 class BatchService {
   /**
@@ -249,18 +233,17 @@ class BatchService {
   }
 
   /**
-   * Bulk update prices for ALL batches of a product.
+   * ✅ Bulk update selling price for ALL batches of a product
    * Endpoint: POST /products/{product_id}/batches/update-price
-   * Body: { sell_price?: number, cost_price?: number }
-   *
-   * Backward compatible: passing a number still means { sell_price: number }.
+   * Body: { sell_price: number }
    */
   async updateAllBatchPrices(
     productId: number,
-    payload: BulkBatchPriceUpdatePayload
+    sellPrice: number
   ): Promise<ApiResponse<BulkBatchPriceUpdateData>> {
-    const body = typeof payload === 'number' ? { sell_price: payload } : payload;
-    const response = await axios.post(`/products/${productId}/batches/update-price`, body);
+    const response = await axios.post(`/products/${productId}/batches/update-price`, {
+      sell_price: sellPrice,
+    });
     return response.data;
   }
 

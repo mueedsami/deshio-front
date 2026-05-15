@@ -7,6 +7,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 
 import productService, { Product as FullProduct } from '@/services/productService';
+import catalogService from '@/services/catalogService';
 import batchService, { Batch } from '@/services/batchService';
 import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/GroupedAllBarcodesPrinter';
 
@@ -173,48 +174,30 @@ export default function BatchPriceUpdatePage() {
       return;
     }
 
-    const selectedLabel = selectedProduct
-      ? `${selectedProduct.name}${selectedProduct.sku ? ` (${selectedProduct.sku})` : ''}`.trim()
-      : '';
-    if (selectedProduct && q === selectedLabel) {
-      setProducts([]);
-      setSearchHasMore(false);
-      return;
-    }
-
     const t = setTimeout(async () => {
       try {
         setIsSearching(true);
 
-        // Use the protected ERP product search, not the public ecommerce catalog.
-        // The public catalog can group/transform variants, which makes this admin selection unreliable.
-        const res = await productService.advancedSearch({
-          query: q,
+        // Use catalogService.getProducts instead of productService search methods
+        const res = await catalogService.getProducts({ 
+          q, 
           per_page: searchLimit,
-          page: 1,
-          is_archived: false,
-          enable_fuzzy: true,
-          group_by_sku: false,
-          search_fields: ['name', 'sku'],
+          group_by_sku: true 
         });
 
-        const list = Array.isArray(res.data) ? res.data : [];
-        const seen = new Set<number>();
-
-        const mapped: ProductPick[] = list
-          .filter((p: FullProduct) => {
-            if (!p?.id || seen.has(p.id)) return false;
-            seen.add(p.id);
-            return true;
-          })
-          .map((p: FullProduct) => ({
-            id: p.id,
-            name: p.name,
-            sku: p.sku,
-          }));
+        // catalogService flattens variants into .products when group_by_sku is true
+        const list = res.products || [];
+        
+        const mapped: ProductPick[] = list.map((p) => ({
+          id: p.id as number,
+          name: p.name,
+          sku: p.sku,
+        }));
 
         setProducts(mapped);
-        setSearchHasMore(Number(res.current_page || 1) < Number(res.last_page || 1));
+
+        // If we got a full page, assume there may be more
+        setSearchHasMore(mapped.length >= searchLimit);
       } catch (e: any) {
         setError(e?.message || 'Failed to search products.');
         setSearchHasMore(false);
@@ -224,7 +207,7 @@ export default function BatchPriceUpdatePage() {
     }, 350);
 
     return () => clearTimeout(t);
-  }, [search, searchLimit, selectedProduct]);
+  }, [search, searchLimit]);
 
   // Grouped products for search results
   const groupedProducts = useMemo(() => {
@@ -257,27 +240,27 @@ export default function BatchPriceUpdatePage() {
         setSuccessMsg(null);
         setUpdates([]);
 
-        // Load batches directly from the ERP batch endpoint.
-        // productService.getEcommerceProduct does not exist in this codebase.
-        const list = await batchService.getBatchesAll(
-          { product_id: selectedProduct.id },
-          { per_page: 100, max_items: 10000 }
-        );
+        const res = await productService.getEcommerceProduct(selectedProduct.id);
+        if (!res?.success || !res?.data?.product) {
+          throw new Error(res?.message || 'Product data not found in catalog.');
+        }
 
-        const normalizedList = list.map((b: any) => ({
+        const productData = res.data.product;
+        // Ensure batches have product context for consistency with Batch interface
+        const list = (productData.batches || []).map((b: any) => ({
           ...b,
           product: b.product || {
-            id: selectedProduct.id,
-            name: selectedProduct.name,
-            sku: selectedProduct.sku,
+            id: productData.id,
+            name: productData.name,
+            sku: productData.sku
           },
-          store: b.store || { id: b.store_id, name: b.store_name || `Store #${b.store_id || '-'}` },
+          store: b.store || { id: b.store_id, name: `Store #${b.store_id}` }
         }));
 
-        setBatches(normalizedList);
+        setBatches(list);
 
         // Prefill selling price if all batches have same sell_price
-        const sellPrices = normalizedList
+        const sellPrices = list
           .map((b) => (b.sell_price ?? '').toString().trim())
           .filter(Boolean);
 
@@ -286,7 +269,7 @@ export default function BatchPriceUpdatePage() {
         else setSellPrice('');
 
         // Prefill cost price if all batches have same cost_price
-        const costPrices = normalizedList
+        const costPrices = list
           .map((b) => (b.cost_price ?? '').toString().trim())
           .filter(Boolean);
 
@@ -316,14 +299,25 @@ export default function BatchPriceUpdatePage() {
       }
 
       try {
-        const res = await productService.getSkuGroup(selectedProduct.id);
-        const exact = (res.products || [])
+        const list = await productService.advancedSearchAll(
+        {
+          query: sku,
+          is_archived: false,
+          enable_fuzzy: false,
+          fuzzy_threshold: 100,
+          search_fields: ['sku'],
+          per_page: 200,
+        },
+        { max_items: 2000 }
+      );
+        const list2 = (list || []) as FullProduct[];
+        const exact = list2
           .filter((p) => String(p.sku || '').trim() === sku)
           .map((p) => ({ id: p.id, name: p.name, sku: p.sku } as ProductPick));
 
         setSkuGroupProducts(exact);
         setSelectedVariationIds(exact.map((p) => p.id)); // default: select all, user can uncheck
-        setVariationVisible(12);
+        setVariationVisible(12); // default: select all, user can uncheck
       } catch (e) {
         console.error('Failed to load SKU group products', e);
         setSkuGroupProducts([]);
@@ -439,7 +433,7 @@ export default function BatchPriceUpdatePage() {
 
       let firstSuccess: any = null;
 
-      const payload: { sell_price?: number; cost_price?: number } = {};
+      const payload: any = {};
       if (sellPrice) payload.sell_price = priceNum;
       if (costPrice) payload.cost_price = costNum;
 
@@ -467,11 +461,11 @@ export default function BatchPriceUpdatePage() {
       setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
 
       // Reload batches for the currently selected product
-      const refreshed = await batchService.getBatchesAll(
-        { product_id: selectedProduct.id },
-        { per_page: 100, max_items: 10000 }
-      );
-      setBatches(refreshed);
+      const list = await batchService.getBatchesArray({
+        product_id: selectedProduct.id,
+        per_page: 200,
+      });
+      setBatches(list);
     } catch (e: any) {
       setError(e?.response?.data?.message || e?.message || 'Failed to update batch prices.');
     } finally {

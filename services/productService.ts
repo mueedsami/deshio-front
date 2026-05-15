@@ -265,15 +265,9 @@ export const productService = {
     query: string;
     category_id?: number;
     vendor_id?: number;
-    is_archived?: boolean;
     per_page?: number;
     page?: number;
     enable_fuzzy?: boolean;
-    fuzzy_threshold?: number;
-    search_fields?: Array<'name' | 'sku' | 'category' | 'custom_fields'>;
-    group_by_sku?: boolean;
-    min_price?: number;
-    max_price?: number;
     stock_status?: 'all' | 'in_stock' | 'not_in_stock';
     in_stock?: string;
   }): Promise<{ data: Product[]; total: number; current_page: number; last_page: number }> {
