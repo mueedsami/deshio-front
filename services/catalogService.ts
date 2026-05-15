@@ -21,6 +21,7 @@ export interface ProductCategory {
   name: string;
   description?: string;
   image_url?: string;
+  banner_url?: string;
   product_count?: number;
   parent_id?: number | null;
   slug?: string;
@@ -190,6 +191,7 @@ export interface GetProductsParams {
   page?: number;
   featured?: boolean;
   new_arrivals?: boolean;
+  group_by_sku?: boolean;
   /** Internal-only: suppress noisy console errors for expected retry probes */
   _suppressErrorLog?: boolean;
 }
@@ -212,6 +214,8 @@ export interface Category {
   description?: string;
   image?: string;
   image_url?: string;
+  banner?: string;
+  banner_url?: string;
   color?: string;
   icon?: string;
   product_count?: number;
@@ -235,6 +239,8 @@ export interface CatalogCategory {
   description?: string;
   image?: string;
   image_url?: string;
+  banner?: string;
+  banner_url?: string;
   color?: string;
   icon?: string;
   parent_id?: number | null;
@@ -477,6 +483,7 @@ const normalizeCategory = (category: any): ProductCategory | null => {
     name,
     description: normalizeString(category.description || ''),
     image_url: toAbsoluteAssetUrl(category.image_url || category.image || undefined),
+    banner_url: toAbsoluteAssetUrl((category as any).banner_url || (category as any).banner || undefined),
     product_count: toNumber(category.product_count, 0),
     parent_id: category.parent_id ?? null,
     slug: category.slug || name.toLowerCase().replace(/\s+/g, '-'),
@@ -909,6 +916,20 @@ const normalizeCatalogCategoryTree = (raw: any): CatalogCategory | null => {
       (raw.media && (raw.media.url || raw.media.path)) ||
       undefined
     ) || undefined,
+    banner: toAbsoluteAssetUrl(
+      raw.banner ||
+      raw.banner_url ||
+      raw.banner_path ||
+      raw.category_banner ||
+      undefined
+    ) || undefined,
+    banner_url: toAbsoluteAssetUrl(
+      raw.banner_url ||
+      raw.banner ||
+      raw.banner_path ||
+      raw.category_banner ||
+      undefined
+    ) || undefined,
     color: normalizeString(raw.color || '') || undefined,
     icon: normalizeString(raw.icon || '') || undefined,
     parent_id: raw.parent_id ?? null,
@@ -1291,6 +1312,40 @@ const catalogService = {
     } catch (error) {
       console.error('Error fetching branch stock:', error);
       return [];
+    }
+  },
+
+  async getCollection(slug: string, params: { page?: number; per_page?: number } = {}): Promise<any> {
+    try {
+      const response = await api.get(`/catalog/collections/${slug}`, { params });
+      const payload = response.data?.data;
+      
+      if (response.data.success && payload) {
+        const parsed = parseProductsPayload(payload);
+        const rawCollection = payload.collection || {};
+        const normalizedCollection = {
+          ...rawCollection,
+          image_url: toAbsoluteAssetUrl(rawCollection?.image_url || rawCollection?.image || rawCollection?.thumbnail_url || rawCollection?.thumbnail_image || undefined),
+          thumbnail_url: toAbsoluteAssetUrl(rawCollection?.thumbnail_url || rawCollection?.thumbnail_image || rawCollection?.image_url || rawCollection?.image || undefined),
+          banner_url: toAbsoluteAssetUrl(rawCollection?.banner_url || rawCollection?.banner || rawCollection?.banner_image || rawCollection?.banner_path || undefined),
+        };
+
+        return {
+          success: true,
+          collection: normalizedCollection,
+          products: {
+            data: parsed.products,
+            current_page: parsed.pagination.current_page,
+            last_page: parsed.pagination.last_page,
+            total: parsed.pagination.total,
+          }
+        };
+      }
+      
+      return response.data;
+    } catch (error) {
+      console.error('Error fetching collection:', error);
+      throw error;
     }
   },
 };

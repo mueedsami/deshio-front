@@ -5,6 +5,13 @@ import { AlertCircle, Barcode as BarcodeIcon, CheckCircle2, History, Loader2, Pa
 import Barcode from 'react-barcode';
 import barcodeService from '@/services/barcodeService';
 import barcodeRelabelService, { ReplacementBarcodeResult } from '@/services/barcodeRelabelService';
+import {
+  DEFAULT_DPI as LABEL_DPI,
+  LABEL_HEIGHT_MM,
+  LABEL_WIDTH_MM,
+  mmToIn,
+  renderBarcodeLabelBase64,
+} from '@/lib/barcodeLabelRenderer';
 
 type RelabelRow = any;
 
@@ -21,7 +28,7 @@ function getErrorMessage(error: any) {
 
 export default function BarcodeRelabelPage() {
   const [lookupBarcode, setLookupBarcode] = useState('');
-  const [batchId, setBatchId] = useState('');
+  const [batchNumber, setBatchNumber] = useState('');
   const [productId, setProductId] = useState('');
   const [storeId, setStoreId] = useState('');
   const [customBarcode, setCustomBarcode] = useState('');
@@ -32,10 +39,11 @@ export default function BarcodeRelabelPage() {
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [generated, setGenerated] = useState<ReplacementBarcodeResult | null>(null);
   const [history, setHistory] = useState<RelabelRow[]>([]);
 
-  const canCreate = useMemo(() => Number(batchId) > 0 && !isCreating, [batchId, isCreating]);
+  const canCreate = useMemo(() => batchNumber.trim().length > 0 && !isCreating, [batchNumber, isCreating]);
 
   const loadHistory = async () => {
     setIsLoadingHistory(true);
@@ -62,7 +70,7 @@ export default function BarcodeRelabelPage() {
       const response = await barcodeService.scanBarcode(lookupBarcode.trim());
       const data: any = response.data;
       if (data?.product?.id) setProductId(String(data.product.id));
-      if (data?.current_batch?.id) setBatchId(String(data.current_batch.id));
+      if (data?.current_batch?.batch_number) setBatchNumber(data.current_batch.batch_number);
       if (data?.current_location?.id) setStoreId(String(data.current_location.id));
       setMessage('Product, batch, and store were filled from the scanned barcode. Stock was not changed.');
     } catch (err: any) {
@@ -77,15 +85,15 @@ export default function BarcodeRelabelPage() {
     setMessage(null);
     setGenerated(null);
 
-    if (!Number(batchId)) {
-      setError('Batch ID is required. Scan any barcode from the same batch or enter the batch ID manually.');
+    if (!batchNumber.trim()) {
+      setError('Batch Number is required. Scan any barcode from the same batch or enter the batch number manually.');
       return;
     }
 
     setIsCreating(true);
     try {
       const response = await barcodeRelabelService.createRelabel({
-        batch_id: Number(batchId),
+        batch_number: batchNumber.trim(),
         product_id: productId ? Number(productId) : undefined,
         store_id: storeId ? Number(storeId) : undefined,
         barcode: customBarcode.trim() || undefined,
@@ -108,37 +116,77 @@ export default function BarcodeRelabelPage() {
     }
   };
 
-  const printLabel = () => {
-    if (!generated) return;
-    const html = `
-      <html>
-        <head>
-          <title>Replacement Barcode</title>
-          <style>
-            @page { size: 39mm 25mm; margin: 0; }
-            body { margin: 0; font-family: Arial, sans-serif; }
-            .label { width: 39mm; height: 25mm; box-sizing: border-box; padding: 2mm; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1mm; }
-            .brand { font-size: 10px; font-weight: 800; }
-            .title { font-size: 7px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
-            .code { font-size: 13px; font-weight: 800; letter-spacing: .8px; }
-            .meta { font-size: 6.5px; text-align: center; }
-          </style>
-        </head>
-        <body>
-          <div class="label">
-            <div class="brand">Deshio</div>
-            <div class="title">Replacement Barcode</div>
-            <div class="code">${generated.barcode}</div>
-            <div class="meta">${generated.product_name || 'Product'}${generated.batch_number ? ` • ${generated.batch_number}` : ''}</div>
-          </div>
-          <script>window.print(); window.onafterprint = () => window.close();</script>
-        </body>
-      </html>`;
+  const printLabel = async () => {
+    if (!generated || isPrinting) return;
 
-    const win = window.open('', '_blank', 'width=420,height=300');
-    if (!win) return;
-    win.document.write(html);
-    win.document.close();
+    setError(null);
+    setIsPrinting(true);
+
+    try {
+      const qz = (window as any)?.qz;
+      if (!qz) throw new Error('QZ Tray not available. Please start QZ Tray and refresh.');
+
+      if (!(await qz.websocket.isActive())) {
+        await qz.websocket.connect();
+      }
+
+      let printer: string | null = null;
+      try {
+        const defaultPrinter = await qz.printers.getDefault();
+        if (defaultPrinter && String(defaultPrinter).trim()) printer = String(defaultPrinter);
+      } catch (_err) { }
+
+      if (!printer) {
+        try {
+          const printers = await qz.printers.find();
+          if (Array.isArray(printers) && printers.length && printers[0]) printer = String(printers[0]);
+          else if (typeof printers === 'string' && printers.trim()) printer = printers;
+        } catch (_err) { }
+      }
+
+      if (!printer) {
+        try {
+          const details = await qz.printers.details?.();
+          if (Array.isArray(details) && details.length > 0) {
+            const name = details[0]?.name || details[0];
+            if (name) printer = String(name);
+          }
+        } catch (_err) { }
+      }
+
+      if (!printer) throw new Error('No printer found. Set a default printer and try again.');
+
+      const price = Number((generated as any).sell_price ?? (generated as any).price ?? 0);
+      const base64 = await renderBarcodeLabelBase64({
+        code: generated.barcode,
+        productName: (generated.product_name || 'Product').trim(),
+        price: Number.isFinite(price) ? price : 0,
+        dpi: LABEL_DPI,
+        brandName: 'Deshio',
+      });
+
+      const config = qz.configs.create(printer, {
+        units: 'in',
+        size: { width: mmToIn(LABEL_WIDTH_MM), height: mmToIn(LABEL_HEIGHT_MM) },
+        margins: { top: 0, right: 0, bottom: 0, left: 0 },
+        density: LABEL_DPI,
+        colorType: 'blackwhite',
+        interpolation: 'nearest-neighbor',
+        scaleContent: false,
+      });
+
+      await qz.print(config, [{ type: 'pixel', format: 'image', flavor: 'base64', data: base64 }]);
+      setMessage('Replacement barcode sent to printer.');
+    } catch (err: any) {
+      console.error('Replacement barcode print failed:', err);
+      if (err?.message?.includes('Unable to establish connection')) {
+        setError('QZ Tray is not running. Please start QZ Tray and try again.');
+      } else {
+        setError(getErrorMessage(err));
+      }
+    } finally {
+      setIsPrinting(false);
+    }
   };
 
   return (
@@ -196,8 +244,8 @@ export default function BarcodeRelabelPage() {
                 <input value={productId} onChange={(e) => setProductId(e.target.value)} placeholder="Optional" className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 px-4 py-3 text-sm" />
               </label>
               <label className="space-y-1">
-                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Batch ID *</span>
-                <input value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="Required" className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 px-4 py-3 text-sm" />
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Batch Number *</span>
+                <input value={batchNumber} onChange={(e) => setBatchNumber(e.target.value)} placeholder="Required" className="w-full rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 px-4 py-3 text-sm" />
               </label>
               <label className="space-y-1">
                 <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Store ID</span>
@@ -248,8 +296,13 @@ export default function BarcodeRelabelPage() {
                     <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">{generated.product_name || 'Product'} {generated.batch_number ? `• ${generated.batch_number}` : ''}</p>
                     <p className="text-xs text-gray-500 dark:text-gray-500 mt-2">Stock after relabel: {generated.batch_quantity_after_relabel ?? 'unchanged'}</p>
                   </div>
-                  <button onClick={printLabel} className="w-full rounded-xl border border-gray-300 dark:border-gray-700 px-5 py-3 text-sm font-semibold flex items-center justify-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-800">
-                    <Printer className="w-4 h-4" /> Print Temporary Label
+                  <button
+                    onClick={printLabel}
+                    disabled={isPrinting}
+                    className="w-full rounded-xl border border-gray-300 dark:border-gray-700 px-5 py-3 text-sm font-semibold flex items-center justify-center gap-2 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    {isPrinting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Printer className="w-4 h-4" />}
+                    {isPrinting ? 'Printing...' : 'Print Temporary Label'}
                   </button>
                 </div>
               ) : (

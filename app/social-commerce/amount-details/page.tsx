@@ -399,6 +399,7 @@ export default function AmountDetailsPage() {
           customer_email: orderData.customer?.email || undefined,
           customer_address: orderData.customer?.address || undefined,
           shipping_address: shippingPayload,
+          ...(orderData.salesman_id ? { salesman_id: Number(orderData.salesman_id) } : {}),
           discount_amount: orderDiscount,
           shipping_amount: transport,
           services: orderData.services || [],
@@ -494,6 +495,7 @@ export default function AmountDetailsPage() {
           order_type: orderData.order_type || 'social_commerce',
           store_id: parseInt(String(orderData.store_id), 10),
           store_assignment_mode: 'assign_now',
+          ...(orderData.salesman_id ? { salesman_id: Number(orderData.salesman_id) } : {}),
           customer: {
             name: orderData.customer?.name,
             email: orderData.customer?.email || undefined,

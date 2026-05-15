@@ -245,7 +245,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   const storeId = user?.store_id ? Number(user.store_id) : undefined;
   const canSelectStore = isSuperAdmin || ['admin', 'online-moderator'].includes(role || '') || hasAnyPermission(['stores.create', 'stores.edit', 'stores.delete']);
-  const scopedStoreId = canSelectStore ? undefined : storeId;
+  const scopedStoreId = undefined; // Disabling store scoping globally
 
   const value: AuthContextType = {
     user,

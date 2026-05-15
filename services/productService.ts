@@ -32,6 +32,7 @@ export interface Product {
   stock_quantity?: number;
   online_stock_quantity?: number;
   offline_stock_quantity?: number;
+  reserved_stock_quantity?: number;
   in_stock?: boolean | number;
   created_at: string;
   updated_at: string;
@@ -144,6 +145,7 @@ function transformProduct(product: any): Product {
     stock_quantity: product.stock_quantity,
     online_stock_quantity: product.online_stock_quantity,
     offline_stock_quantity: product.offline_stock_quantity,
+    reserved_stock_quantity: product.reserved_stock_quantity,
     in_stock: product.in_stock,
     created_at: product.created_at,
     updated_at: product.updated_at,

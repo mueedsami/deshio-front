@@ -178,6 +178,9 @@ export default function ProductListItem({
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
                       Offline: {productGroup.offlineStockQuantity || 0}
                     </span>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                      Reserved: {productGroup.reservedStockQuantity || 0}
+                    </span>
                   </div>
                 )}
               </div>
@@ -351,6 +354,7 @@ export default function ProductListItem({
                         <span className="text-[11px] font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Stock: {variant.stockQuantity || 0}</span>
                         <span className="text-[11px] font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-1.5 py-0.5 rounded">Online: {variant.onlineStockQuantity || 0}</span>
                         <span className="text-[11px] font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded">Offline: {variant.offlineStockQuantity || 0}</span>
+                        <span className="text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-1.5 py-0.5 rounded">Reserved: {variant.reservedStockQuantity || 0}</span>
                       </div>
                       <div className="flex gap-1 ml-auto">
                         {canEdit && (

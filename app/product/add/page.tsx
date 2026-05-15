@@ -206,7 +206,7 @@ export default function AddEditProductPage({
   const getSizeOptionsForVariation = (sizes: string[]): string[] | undefined => {
     const dbSizes = allSizes.map(s => s.name);
     const contextOptions = sizeContext.options || [];
-    
+
     const existing = (Array.isArray(sizes) ? sizes : [])
       .map((s) => String(s || '').trim())
       .filter(Boolean);
@@ -594,8 +594,7 @@ export default function AddEditProductPage({
   const normalizeSuffix = (suffix: string): string => {
     const raw = String(suffix || '').trim();
     if (!raw) return '';
-    if (raw.startsWith('-') || raw.startsWith(' - ')) return raw;
-    return ` - ${raw}`;
+    return raw.startsWith('-') ? raw : `- ${raw}`;
   };
 
   const updateRowEdit = (id: number, patch: Partial<{ variation_suffix: string; description: string }>) => {
@@ -961,7 +960,7 @@ export default function AddEditProductPage({
     const s = String(size || '').trim();
     if (c) parts.push(c);
     if (s) parts.push(s);
-    return parts.length ? ` - ${parts.join(' - ')}` : '';
+    return parts.length ? `- ${parts.join(' - ')}` : '';
   };
 
   const handleSubmit = async () => {
@@ -1370,8 +1369,8 @@ export default function AddEditProductPage({
               <button
                 onClick={() => setActiveTab('general')}
                 className={`px-6 py-3 font-medium border-b-2 transition-all ${activeTab === 'general'
-                    ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
-                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
+                  ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
+                  : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
                   }`}
               >
                 General Information
@@ -1380,8 +1379,8 @@ export default function AddEditProductPage({
                 <button
                   onClick={() => setActiveTab('variations')}
                   className={`px-6 py-3 font-medium border-b-2 transition-all ${activeTab === 'variations'
-                      ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
-                      : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
+                    ? 'border-gray-900 dark:border-white text-gray-900 dark:text-white'
+                    : 'border-transparent text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-300'
                     }`}
                 >
                   Product Variations
@@ -1430,7 +1429,7 @@ export default function AddEditProductPage({
                                 type="text"
                                 value={editVariationSuffix}
                                 onChange={(e) => setEditVariationSuffix(e.target.value)}
-                                placeholder="e.g., -red-30"
+                                placeholder="e.g., - Red Purple - XL"
                                 className="w-full px-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
                               />
                               <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
@@ -1839,7 +1838,7 @@ export default function AddEditProductPage({
                                           <input
                                             value={edit.variation_suffix}
                                             onChange={(e) => updateRowEdit(p.id, { variation_suffix: e.target.value })}
-                                            placeholder="-red-30"
+                                            placeholder="- Red Purple - XL"
                                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                                           />
                                         </td>
@@ -2005,7 +2004,7 @@ export default function AddEditProductPage({
                           <li>• <strong>Color is optional</strong> — you can create size-only variants</li>
                           <li>• <strong>Size is optional</strong> — you can create color-only variants</li>
                           <li>• Each variation card gets one set of images (shared across all sizes in that card)</li>
-                          <li>• Name format: "<strong>{formData.name || 'base'}-blue-m</strong>" (base_name + variation_suffix)</li>
+                          <li>• Name format: "<strong>{formData.name || 'base'}- Red Purple - XL</strong>" (base_name + variation_suffix)</li>
                         </ul>
                       </div>
                     </div>

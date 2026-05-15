@@ -466,6 +466,7 @@ export default function ProductPage() {
             stockQuantity: Number(product.stock_quantity) || 0,
             onlineStockQuantity: Number(product.online_stock_quantity) || 0,
             offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
+            reservedStockQuantity: Number(product.reserved_stock_quantity) || 0,
           },
           ...serverVariants.map((v: any) => {
             const vImg = v.images?.[0];
@@ -486,6 +487,7 @@ export default function ProductPage() {
               stockQuantity: Number(v.stock_quantity) || 0,
               onlineStockQuantity: Number(v.online_stock_quantity) || 0,
               offlineStockQuantity: Number(v.offline_stock_quantity) || 0,
+              reservedStockQuantity: Number(v.reserved_stock_quantity) || 0,
             };
           }),
         ];
@@ -504,6 +506,7 @@ export default function ProductPage() {
           stockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0),
           onlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0),
           offlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0),
+          reservedStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.reservedStockQuantity) || 0), 0),
         };
       });
     }
@@ -556,6 +559,7 @@ export default function ProductPage() {
         stockQuantity: Number(product.stock_quantity) || 0,
         onlineStockQuantity: Number(product.online_stock_quantity) || 0,
         offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
+        reservedStockQuantity: Number(product.reserved_stock_quantity) || 0,
       });
     });
 
@@ -566,6 +570,7 @@ export default function ProductPage() {
       group.stockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.stockQuantity) || 0), 0);
       group.onlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0);
       group.offlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0);
+      group.reservedStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.reservedStockQuantity) || 0), 0);
       if (!group.primaryImage) {
         group.primaryImage = group.variants.find(v => v.image)?.image || null;
       }

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -13,6 +13,7 @@ import storeService from '@/services/storeService';
 import batchService from '@/services/batchService';
 import productService from '@/services/productService';
 import defectIntegrationService from '@/services/defectIntegrationService';
+import employeeService from '@/services/employeeService';
 
 // -----------------------------
 // Helpers
@@ -42,6 +43,14 @@ interface CartProduct {
   isService?: boolean; // NEW: Flag for service items
   serviceId?: number; // NEW: Service ID
   serviceCategory?: string; // NEW: Service category
+}
+
+interface Employee {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
 }
 
 // Pathao types
@@ -87,6 +96,11 @@ export default function SocialCommercePage() {
 
   const [date, setDate] = useState(getTodayDate());
   const [salesBy, setSalesBy] = useState('');
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [selectedEmployee, setSelectedEmployee] = useState('');
+  const [employeeSearchQuery, setEmployeeSearchQuery] = useState('');
+  const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false);
+  const employeeDropdownRef = useRef<HTMLDivElement>(null);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
@@ -218,6 +232,17 @@ export default function SocialCommercePage() {
   const draftHydratedRef = useRef(false);
   const queueImportingRef = useRef(false);
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (employeeDropdownRef.current && !employeeDropdownRef.current.contains(event.target as Node)) {
+        setShowEmployeeDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   function getTodayDate() {
     const today = new Date();
     const day = String(today.getDate()).padStart(2, '0');
@@ -245,6 +270,7 @@ export default function SocialCommercePage() {
         ...(editOrderNumber ? { editOrderNumber } : {}),
         date,
         salesBy,
+        selectedEmployee,
         userName,
         userEmail,
         userPhone,
@@ -352,6 +378,9 @@ export default function SocialCommercePage() {
     setStagingQueue([]);
     setDate(getTodayDate());
     setSalesBy('');
+    setSelectedEmployee('');
+    setEmployeeSearchQuery('');
+    setShowEmployeeDropdown(false);
     setUserName('');
     setUserEmail('');
     setUserPhone('');
@@ -711,6 +740,47 @@ export default function SocialCommercePage() {
 
   const orderPreviewItems = orderPreview ? normalizeOrderItemsForPreview(orderPreview) : [];
 
+
+  const fetchEmployees = async () => {
+    try {
+      const response: any = await employeeService.getAll({ is_active: true });
+
+      let employeesList: any[] = [];
+
+      if (Array.isArray(response)) {
+        employeesList = response;
+      } else if (response?.data) {
+        if (Array.isArray(response.data)) {
+          employeesList = response.data;
+        } else if (Array.isArray(response.data.data)) {
+          employeesList = response.data.data;
+        }
+      }
+
+      const formattedEmployees = employeesList.map((emp: any) => ({
+        id: String(emp.id),
+        name: emp.name,
+        email: emp.email || '',
+        phone: emp.phone || '',
+        role: typeof emp.role === 'object' ? emp.role?.title || 'Unknown' : emp.role || 'Unknown',
+      }));
+
+      setEmployees(formattedEmployees);
+
+      const currentUserId = localStorage.getItem('userId') || '';
+      const currentUserName = localStorage.getItem('userName') || '';
+      if (currentUserId && formattedEmployees.some((emp) => emp.id === currentUserId)) {
+        setSelectedEmployee((prev) => {
+          if (prev) return prev;
+          setSalesBy(currentUserName || formattedEmployees.find((emp) => emp.id === currentUserId)?.name || '');
+          return currentUserId;
+        });
+      }
+    } catch (error: any) {
+      console.error('Error fetching employees:', error);
+      showToast(error.message || 'Failed to load employees', 'error');
+    }
+  };
 
   const fetchStores = async () => {
     try {
@@ -1221,6 +1291,8 @@ export default function SocialCommercePage() {
             );
           }
           if (incomingEditOrderNumber) setEditOrderNumber(incomingEditOrderNumber);
+          if (ep.salesmanId !== undefined && ep.salesmanId !== null) setSelectedEmployee(String(ep.salesmanId));
+          if (typeof ep.salesBy === 'string') setSalesBy(ep.salesBy);
           if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
           if (typeof ep.userName === 'string') setUserName(ep.userName);
           if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
@@ -1269,6 +1341,7 @@ export default function SocialCommercePage() {
         if (draftEditOrderNumber) setEditOrderNumber(draftEditOrderNumber);
         if (typeof d.date === 'string') setDate(d.date);
         if (typeof d.salesBy === 'string') setSalesBy(d.salesBy);
+        if (d.selectedEmployee !== undefined && d.selectedEmployee !== null) setSelectedEmployee(String(d.selectedEmployee));
         if (typeof d.userName === 'string') setUserName(d.userName);
         if (typeof d.userEmail === 'string') setUserEmail(d.userEmail);
         if (typeof d.userPhone === 'string') setUserPhone(d.userPhone);
@@ -1311,6 +1384,7 @@ export default function SocialCommercePage() {
   }, [
     date,
     salesBy,
+    selectedEmployee,
     userName,
     userEmail,
     userPhone,
@@ -1523,10 +1597,10 @@ export default function SocialCommercePage() {
 
   useEffect(() => {
     const userName = localStorage.getItem('userName') || '';
-    setSalesBy(userName);
+    setSalesBy((prev) => prev || userName);
 
     const loadInitialData = async () => {
-      await fetchStores();
+      await Promise.all([fetchStores(), fetchEmployees()]);
     };
     loadInitialData();
   }, []);
@@ -1906,6 +1980,10 @@ export default function SocialCommercePage() {
       alert('Please select a store');
       return;
     }
+    if (!selectedEmployee) {
+      alert('Please select an employee');
+      return;
+    }
 
     // ✅ Always delivery validation
     if (isInternational) {
@@ -2043,6 +2121,7 @@ export default function SocialCommercePage() {
         ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
         ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
         store_id: parseInt(selectedStore),
+        salesman_id: parseInt(selectedEmployee),
         customer: {
           name: userName,
           email: userEmail || undefined,
@@ -2083,7 +2162,9 @@ export default function SocialCommercePage() {
         'pendingOrder',
         JSON.stringify({
           ...orderData,
-          salesBy,
+          salesBy: employees.find((emp) => emp.id === selectedEmployee)?.name || salesBy,
+          selectedEmployee,
+          salesman_id: parseInt(selectedEmployee),
           date,
           isInternational,
           subtotal,
@@ -2162,14 +2243,84 @@ export default function SocialCommercePage() {
               </div>
 
               <div className="mb-4 md:mb-6 flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                <div className="w-full sm:w-auto">
-                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Sales By</label>
-                  <input
-                    type="text"
-                    value={salesBy}
-                    readOnly
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
+                <div className="w-full sm:w-64">
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Employee <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative" ref={employeeDropdownRef}>
+                    <div
+                      className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white flex items-center justify-between cursor-pointer"
+                      onClick={() => setShowEmployeeDropdown(!showEmployeeDropdown)}
+                    >
+                      <span className="truncate">
+                        {selectedEmployee
+                          ? employees.find((emp) => emp.id === selectedEmployee)?.name || salesBy || 'Select Employee'
+                          : 'Select Employee'}
+                      </span>
+                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                    </div>
+
+                    {showEmployeeDropdown && (
+                      <div className="absolute z-50 mt-1 w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-md shadow-lg">
+                        <div className="p-2 border-b border-gray-200 dark:border-gray-700">
+                          <input
+                            type="text"
+                            placeholder="Search employee..."
+                            autoFocus
+                            className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
+                            value={employeeSearchQuery}
+                            onChange={(e) => setEmployeeSearchQuery(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                        <div className="max-h-60 overflow-y-auto">
+                          <div
+                            className="px-4 py-2 text-sm text-gray-500 dark:text-gray-400 border-b border-gray-100 dark:border-gray-700/50 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                            onClick={() => {
+                              setSelectedEmployee('');
+                              setSalesBy('');
+                              setShowEmployeeDropdown(false);
+                              setEmployeeSearchQuery('');
+                            }}
+                          >
+                            Select Employee
+                          </div>
+                          {employees
+                            .filter((emp) =>
+                              emp.name.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+                              emp.role.toLowerCase().includes(employeeSearchQuery.toLowerCase())
+                            )
+                            .map((emp) => (
+                              <div
+                                key={emp.id}
+                                className={`px-4 py-2 text-sm cursor-pointer hover:bg-blue-50 dark:hover:bg-blue-900/20 ${
+                                  selectedEmployee === emp.id
+                                    ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+                                    : 'text-gray-900 dark:text-white'
+                                }`}
+                                onClick={() => {
+                                  setSelectedEmployee(emp.id);
+                                  setSalesBy(emp.name);
+                                  setShowEmployeeDropdown(false);
+                                  setEmployeeSearchQuery('');
+                                }}
+                              >
+                                <div className="font-medium">{emp.name}</div>
+                                <div className="text-[11px] text-gray-500 dark:text-gray-400">{emp.role}</div>
+                              </div>
+                            ))}
+                          {employees.filter((emp) =>
+                            emp.name.toLowerCase().includes(employeeSearchQuery.toLowerCase()) ||
+                            emp.role.toLowerCase().includes(employeeSearchQuery.toLowerCase())
+                          ).length === 0 && (
+                            <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center italic">
+                              No employees found
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
                 <div className="w-full sm:w-auto">
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">

@@ -16,6 +16,7 @@ export interface ProductVariant {
   stockQuantity?: number | null;
   onlineStockQuantity?: number | null;
   offlineStockQuantity?: number | null;
+  reservedStockQuantity?: number | null;
 }
 
 export interface ProductGroup {
@@ -35,6 +36,7 @@ export interface ProductGroup {
   stockQuantity?: number | null;
   onlineStockQuantity?: number | null;
   offlineStockQuantity?: number | null;
+  reservedStockQuantity?: number | null;
 }
 
 

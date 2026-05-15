@@ -79,7 +79,11 @@ interface Order {
     quantity: number;
     price: number;
     discount: number;
+    batchId?: number | null;
     batchNumber?: string | null;
+    barcodeId?: number | null;
+    productBarcodeId?: number | null;
+    barcode?: string | null;
     availableStock?: number;
   }>;
   services: Array<{
@@ -311,6 +315,17 @@ type PathaoCity = { city_id: number; city_name: string };
 type PathaoZone = { zone_id: number; zone_name: string };
 type PathaoArea = { area_id: number; area_name: string };
 
+type ScannedBarcodeOption = {
+  order_item_id: number;
+  barcode_id: number;
+  barcode: string;
+  product_name: string;
+  batch_id?: number | null;
+  batch_number?: string | null;
+  quantity?: number;
+  is_inventory_deducted?: boolean;
+};
+
 export default function OrdersDashboard() {
   const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -454,6 +469,12 @@ export default function OrdersDashboard() {
   const [pickerStoreId, setPickerStoreId] = useState<number | null>(null);
   const [productSearch, setProductSearch] = useState('');
   const [showProductPicker, setShowProductPicker] = useState(false);
+
+  // 🔖 Scanned barcode release picker (for edited fulfilled/confirmed orders)
+  const [barcodeReleaseTarget, setBarcodeReleaseTarget] = useState<{ itemId: number; productName: string } | null>(null);
+  const [scannedBarcodeOptions, setScannedBarcodeOptions] = useState<ScannedBarcodeOption[]>([]);
+  const [isLoadingScannedBarcodes, setIsLoadingScannedBarcodes] = useState(false);
+  const [releasingBarcodeId, setReleasingBarcodeId] = useState<number | null>(null);
 
   // 🛠️ Service picker (for Edit Order)
   const [showServicePicker, setShowServicePicker] = useState(false);
@@ -920,7 +941,11 @@ export default function OrdersDashboard() {
           quantity: item.quantity,
           price: unitPrice,
           discount: discountAmount,
+          batchId: item.batch_id ?? item.product_batch_id ?? null,
           batchNumber: item.batch_number || null,
+          barcodeId: item.barcode_id ?? item.product_barcode_id ?? null,
+          productBarcodeId: item.product_barcode_id ?? item.barcode_id ?? null,
+          barcode: item.barcode ?? item.scanned_barcode?.barcode ?? null,
           availableStock: item.global_available || 0,
         };
       });
@@ -1593,6 +1618,8 @@ export default function OrdersDashboard() {
         editOrderId: fullOrder.id,
         editOrderNumber: fullOrder.order_number,
         storeId: String(fullOrder.store?.id || ''),
+        salesmanId: fullOrder.salesman?.id || null,
+        salesBy: fullOrder.salesman?.name || '',
         userName: fullOrder.customer?.name || '',
         userPhone: fullOrder.customer?.phone || '',
         userEmail: fullOrder.customer?.email || '',
@@ -2969,8 +2996,90 @@ export default function OrdersDashboard() {
     setServicesTouched(true);
   };
 
+  const openScannedBarcodeReleaseModal = async (item: Order['items'][number], presetOptions?: ScannedBarcodeOption[]) => {
+    if (!editableOrder) return;
+
+    setBarcodeReleaseTarget({ itemId: item.id, productName: item.name });
+    setScannedBarcodeOptions(presetOptions || []);
+    setIsLoadingScannedBarcodes(!presetOptions);
+
+    if (presetOptions) return;
+
+    try {
+      const res = await axios.get(`/orders/${editableOrder.id}/items/${item.id}/scanned-barcodes`);
+      setScannedBarcodeOptions(res.data?.data?.barcodes || []);
+    } catch (error: any) {
+      console.error('Failed to load scanned barcodes:', error);
+      const backendData = error?.response?.data;
+      const msg =
+        backendData?.message ||
+        backendData?.error ||
+        JSON.stringify(backendData || {}) ||
+        error?.message ||
+        'Failed to load scanned barcodes.';
+      alert(msg);
+      setBarcodeReleaseTarget(null);
+    } finally {
+      setIsLoadingScannedBarcodes(false);
+    }
+  };
+
+  const handleReleaseScannedBarcode = async (barcode: ScannedBarcodeOption) => {
+    if (!editableOrder || !barcodeReleaseTarget) return;
+    if (!confirm(`Remove barcode ${barcode.barcode} from this order?`)) return;
+
+    setReleasingBarcodeId(barcode.barcode_id);
+    try {
+      const res = await axios.delete(`/orders/${editableOrder.id}/items/${barcodeReleaseTarget.itemId}/scanned-barcodes`, {
+        data: { barcode_id: barcode.barcode_id },
+      });
+
+      const updatedOrder = res.data?.data ? transformOrder(res.data.data) : null;
+      if (updatedOrder) {
+        setSelectedOrder(updatedOrder);
+        setEditableOrder(updatedOrder);
+      } else {
+        await reloadEditableOrder(editableOrder.id);
+      }
+
+      setScannedBarcodeOptions((prev) => prev.filter((b) => b.barcode_id !== barcode.barcode_id));
+      if (scannedBarcodeOptions.length <= 1) {
+        setBarcodeReleaseTarget(null);
+      }
+      setItemsTouched(false);
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Failed to remove scanned barcode:', error);
+      const backendData = error?.response?.data;
+      const msg =
+        backendData?.message ||
+        backendData?.error ||
+        JSON.stringify(backendData || {}) ||
+        error?.message ||
+        'Failed to remove scanned barcode.';
+      alert(msg);
+    } finally {
+      setReleasingBarcodeId(null);
+    }
+  };
+
+  const maybeOpenBarcodeSelectionFromError = (backendData: any, item: Order['items'][number]) => {
+    if (backendData?.code !== 'requires_barcode_selection') return false;
+    const options = backendData?.data?.barcodes || [];
+    openScannedBarcodeReleaseModal(item, options);
+    return true;
+  };
+
   const handleRemoveItem = async (itemId: number) => {
     if (!editableOrder) return;
+    const item = editableOrder.items.find((it) => it.id === itemId);
+    if (!item) return;
+
+    if (item.productBarcodeId || item.barcodeId || item.barcode) {
+      openScannedBarcodeReleaseModal(item);
+      return;
+    }
+
     if (!confirm('Remove this item from the order?')) return;
 
     try {
@@ -2979,6 +3088,7 @@ export default function OrdersDashboard() {
     } catch (error: any) {
       console.error('Failed to remove item:', error);
       const backendData = error?.response?.data;
+      if (maybeOpenBarcodeSelectionFromError(backendData, item)) return;
       const msg =
         backendData?.message ||
         backendData?.error ||
@@ -3004,6 +3114,7 @@ export default function OrdersDashboard() {
     } catch (error: any) {
       console.error('Failed to update item:', error);
       const backendData = error?.response?.data;
+      if (maybeOpenBarcodeSelectionFromError(backendData, item)) return;
       const msg =
         backendData?.message ||
         backendData?.error ||
@@ -3229,6 +3340,10 @@ export default function OrdersDashboard() {
     } catch (error: any) {
       console.error('Failed to save order:', error);
       const backendData = error?.response?.data;
+      if (backendData?.code === 'requires_barcode_selection') {
+        const item = editableOrder.items.find((it) => it.id === backendData?.data?.item_id);
+        if (item && maybeOpenBarcodeSelectionFromError(backendData, item)) return;
+      }
       const msg =
         backendData?.message ||
         backendData?.error ||
@@ -5217,6 +5332,11 @@ export default function OrdersDashboard() {
                                   Unassigned
                                 </span>
                               )}
+                              {(item.productBarcodeId || item.barcodeId || item.barcode) && (
+                                <span className="px-1 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded text-[9px] font-mono border border-blue-100 dark:border-blue-800/40">
+                                  Barcode: {item.barcode || item.barcodeId || item.productBarcodeId}
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-1.5 mt-1">
                               <div className={`w-1.5 h-1.5 rounded-full ${(item.availableStock ?? 0) >= item.quantity ? "bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]" : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.4)]"}`} />
@@ -5234,6 +5354,8 @@ export default function OrdersDashboard() {
                               type="number"
                               value={item.quantity}
                               min={1}
+                              disabled={!!(item.productBarcodeId || item.barcodeId || item.barcode)}
+                              title={(item.productBarcodeId || item.barcodeId || item.barcode) ? 'Remove scanned quantity by selecting the barcode below.' : undefined}
                               onChange={(e) => {
                                 const val = Math.max(1, Number(e.target.value || 1));
                                 setEditableOrder((prev) => {
@@ -5244,8 +5366,11 @@ export default function OrdersDashboard() {
                                 });
                                 setItemsTouched(true);
                               }}
-                              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm"
+                              className="w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-black dark:text-white text-sm disabled:bg-gray-100 disabled:text-gray-500 dark:disabled:bg-gray-800"
                             />
+                            {(item.productBarcodeId || item.barcodeId || item.barcode) && (
+                              <p className="mt-1 text-[10px] text-blue-600 dark:text-blue-400">Use Remove barcode</p>
+                            )}
                           </div>
 
                           <div className="w-32">
@@ -5301,7 +5426,7 @@ export default function OrdersDashboard() {
                               onClick={() => handleRemoveItem(item.id)}
                               className="text-xs text-red-600 hover:text-red-700 font-medium"
                             >
-                              Remove
+                              {(item.productBarcodeId || item.barcodeId || item.barcode) ? 'Remove barcode' : 'Remove'}
                             </button>
                           </div>
                         </div>
@@ -5507,6 +5632,64 @@ export default function OrdersDashboard() {
                 </div>
               </div>
             ) : null}
+          </div>
+        </div>
+      )}
+
+
+      {/* Scanned Barcode Release Modal */}
+      {barcodeReleaseTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-lg w-full max-h-[80vh] overflow-hidden border border-gray-200 dark:border-gray-800">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+              <div>
+                <h3 className="text-sm font-semibold text-black dark:text-white">Remove scanned barcode</h3>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{barcodeReleaseTarget.productName}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setBarcodeReleaseTarget(null);
+                  setScannedBarcodeOptions([]);
+                }}
+                className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                <X className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-4">
+              <p className="text-xs text-gray-600 dark:text-gray-400 mb-3">
+                This order already has physical barcodes scanned. Select the exact barcode to remove so that unit becomes available again and reservation totals stay correct.
+              </p>
+
+              <div className="border border-gray-200 dark:border-gray-800 rounded-lg max-h-72 overflow-auto divide-y divide-gray-200 dark:divide-gray-800">
+                {isLoadingScannedBarcodes ? (
+                  <div className="p-6 text-center text-xs text-gray-500 dark:text-gray-400">Loading scanned barcodes...</div>
+                ) : scannedBarcodeOptions.length === 0 ? (
+                  <div className="p-6 text-center text-xs text-gray-500 dark:text-gray-400">No scanned barcodes found for this item.</div>
+                ) : (
+                  scannedBarcodeOptions.map((barcode) => (
+                    <div key={barcode.barcode_id} className="flex items-center justify-between gap-3 p-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-mono font-semibold text-black dark:text-white truncate">{barcode.barcode}</p>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                          {barcode.batch_number ? `Batch: ${barcode.batch_number}` : 'Batch: Unassigned'}
+                          {barcode.is_inventory_deducted ? ' • stock already deducted' : ' • reserved only'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={releasingBarcodeId === barcode.barcode_id}
+                        onClick={() => handleReleaseScannedBarcode(barcode)}
+                        className="px-3 py-1.5 text-xs rounded bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-medium"
+                      >
+                        {releasingBarcodeId === barcode.barcode_id ? 'Removing...' : 'Remove'}
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
