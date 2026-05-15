@@ -25,6 +25,8 @@ type AnyProgress =
   | ({ kind: 'send' } & ScannedBarcodesResponse)
   | ({ kind: 'receive' } & ReceivedBarcodesResponse);
 
+type ItemProgress = { done: number; total: number };
+
 function fmtTime(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -87,6 +89,7 @@ export default function DispatchBarcodeScanModal({
   const [barcode, setBarcode] = useState('');
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState<AnyProgress | null>(null);
+  const [itemProgressById, setItemProgressById] = useState<Record<number, ItemProgress>>({});
   const [error, setError] = useState<string | null>(null);
   const [overall, setOverall] = useState<{ allComplete: boolean; pending: number } | null>(null);
   const [checkingOverall, setCheckingOverall] = useState(false);
@@ -99,6 +102,27 @@ export default function DispatchBarcodeScanModal({
   );
 
   const header = mode === 'send' ? '🔵 Scan Items to Send' : '🟢 Scan Items Received';
+
+  const getItemProgress = (item: any): ItemProgress => {
+    const liveProgress = itemProgressById[item.id];
+    if (liveProgress) return liveProgress;
+
+    if (mode === 'send') {
+      return {
+        done: toNum(item.barcode_scanning?.scanned_count ?? 0),
+        total: toNum(item.barcode_scanning?.required_quantity ?? item.quantity ?? 0),
+      };
+    }
+
+    return {
+      done: toNum(item.received_quantity ?? 0),
+      total: toNum(item.quantity ?? 0),
+    };
+  };
+
+  const rememberItemProgress = (itemId: number, nextProgress: ItemProgress) => {
+    setItemProgressById((prev) => ({ ...prev, [itemId]: nextProgress }));
+  };
 
   const canCompleteCurrentItem = useMemo(() => {
     if (!progress) return false;
@@ -162,6 +186,21 @@ export default function DispatchBarcodeScanModal({
     setBarcode('');
     setError(null);
     setOverall(null);
+    const initialProgress = items.reduce<Record<number, ItemProgress>>((acc, item: any) => {
+      if (mode === 'send') {
+        acc[item.id] = {
+          done: toNum(item.barcode_scanning?.scanned_count ?? 0),
+          total: toNum(item.barcode_scanning?.required_quantity ?? item.quantity ?? 0),
+        };
+      } else {
+        acc[item.id] = {
+          done: toNum(item.received_quantity ?? 0),
+          total: toNum(item.quantity ?? 0),
+        };
+      }
+      return acc;
+    }, {});
+    setItemProgressById(initialProgress);
     scanQueueRef.current = [];
     scanQueueSetRef.current = new Set();
     scanQueueProcessingRef.current = false;
@@ -202,6 +241,10 @@ export default function DispatchBarcodeScanModal({
           ...data,
           scanned_barcodes: toArray(data.scanned_barcodes),
         } as AnyProgress);
+        rememberItemProgress(itemId, {
+          done: toNum(data.scanned_count ?? 0),
+          total: toNum(data.required_quantity ?? data.total ?? 0),
+        });
       } else {
         const res = await dispatchService.getReceivedBarcodes(dispatch.id, itemId);
         const data: any = unpackData(res);
@@ -210,6 +253,10 @@ export default function DispatchBarcodeScanModal({
           ...data,
           received_barcodes: toArray(data.received_barcodes),
         } as AnyProgress);
+        rememberItemProgress(itemId, {
+          done: toNum(data.received_count ?? data.scanned_count ?? 0),
+          total: toNum(data.total_sent ?? data.required_quantity ?? data.total ?? 0),
+        });
       }
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Failed to load barcode progress');
@@ -224,16 +271,25 @@ export default function DispatchBarcodeScanModal({
     setError(null);
     try {
       const results = await Promise.all(
-        dispatch.items.map((it) => dispatchService.getReceivedBarcodes(dispatch.id, it.id))
+        dispatch.items.map(async (it) => ({
+          itemId: it.id,
+          response: await dispatchService.getReceivedBarcodes(dispatch.id, it.id),
+        }))
       );
-      const pending = results.reduce((sum, r) => {
-        const d: any = unpackData(r);
+      let pending = 0;
+      const nextItemProgress: Record<number, ItemProgress> = {};
+
+      results.forEach(({ itemId, response }) => {
+        const d: any = unpackData(response);
         const total = toNum(d.total_sent ?? d.required_quantity ?? d.total ?? 0);
         const received = toNum(d.received_count ?? d.scanned_count ?? 0);
         const pRaw = d.pending_count ?? d.remaining_count ?? d.remaining;
         const p = pRaw != null ? toNum(pRaw) : Math.max(0, total - received);
-        return sum + p;
-      }, 0);
+        pending += p;
+        nextItemProgress[itemId] = { done: received, total };
+      });
+
+      setItemProgressById((prev) => ({ ...prev, ...nextItemProgress }));
       setOverall({ allComplete: pending === 0, pending });
     } catch (e: any) {
       setError(e?.response?.data?.message || 'Failed to check overall progress');
@@ -308,6 +364,13 @@ export default function DispatchBarcodeScanModal({
           setSelectedItemId(scannedItemId);
         }
 
+        if (scannedItemId) {
+          rememberItemProgress(scannedItemId, {
+            done: toNum(data?.scanned_count ?? 0),
+            total: toNum(data?.required_quantity ?? data?.total ?? 0),
+          });
+        }
+
         // Signal that dispatch items/progress might have changed.
         onComplete?.();
         playBeep('success');
@@ -317,7 +380,12 @@ export default function DispatchBarcodeScanModal({
       if (!selectedItemId) {
         throw new Error('Please select an item to receive');
       }
-      await dispatchService.receiveBarcode(dispatch.id, selectedItemId, code);
+      const res = await dispatchService.receiveBarcode(dispatch.id, selectedItemId, code);
+      const data: any = unpackData(res);
+      rememberItemProgress(selectedItemId, {
+        done: toNum(data.received_count ?? data.scanned_count ?? 0),
+        total: toNum(data.total_sent ?? data.required_quantity ?? data.total ?? 0),
+      });
       playBeep('success');
       return selectedItemId;
     } catch (e: any) {
@@ -437,11 +505,8 @@ export default function DispatchBarcodeScanModal({
                 <div className="space-y-2 max-h-[52vh] overflow-y-auto pr-1">
                   {items.map((it) => {
                     const active = it.id === selectedItemId;
-                    const hint = mode === 'send'
-                      ? it.barcode_scanning
-                        ? `${it.barcode_scanning.scanned_count}/${it.barcode_scanning.required_quantity}`
-                        : `${it.quantity} planned`
-                      : `${it.received_quantity ?? 0}/${it.quantity}`;
+                    const itemProgress = getItemProgress(it);
+                    const hint = `${itemProgress.done}/${itemProgress.total}`;
 
                     return (
                       <button

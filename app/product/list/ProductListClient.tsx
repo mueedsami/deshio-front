@@ -1247,7 +1247,10 @@ export default function ProductPage() {
                         ...group,
                         sellingPrice: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.selling_price ?? null : null,
                         inStock: group.variants?.[0]?.id ? catalogMetaById[group.variants[0].id]?.in_stock ?? null : null,
-                        stockQuantity: group.variants?.[0]?.id ? Number(catalogMetaById[group.variants[0].id]?.stock_quantity ?? 0) : null,
+                        stockQuantity: group.stockQuantity,
+                        onlineStockQuantity: group.onlineStockQuantity,
+                        offlineStockQuantity: group.offlineStockQuantity,
+                        reservedStockQuantity: group.reservedStockQuantity,
                       }}
                       onDelete={canDeleteProducts ? handleDelete : undefined}
                       onEdit={canEditProducts ? handleEdit : undefined}

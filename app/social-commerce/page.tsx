@@ -45,6 +45,13 @@ interface CartProduct {
   serviceCategory?: string; // NEW: Service category
 }
 
+const parseAmount = (value: any): number => {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const parsed = Number(String(value).replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
 interface Employee {
   id: string;
   name: string;
@@ -1312,11 +1319,11 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
           if (Array.isArray(ep.cart)) setCart(ep.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
-          if (typeof ep.paidAmount === 'number') setPaidAmount(ep.paidAmount);
-          if (typeof ep.totalAmount === 'number') setTotalAmountState(ep.totalAmount);
-          if (typeof ep.outstandingAmount === 'number') setOutstandingAmount(ep.outstandingAmount);
-          if (typeof ep.discountAmount === 'number') setDiscountAmountState(ep.discountAmount);
-          if (typeof ep.shippingAmount === 'number') setShippingAmountState(ep.shippingAmount);
+          if (ep.paidAmount !== undefined) setPaidAmount(parseAmount(ep.paidAmount));
+          if (ep.totalAmount !== undefined) setTotalAmountState(parseAmount(ep.totalAmount));
+          if (ep.outstandingAmount !== undefined) setOutstandingAmount(parseAmount(ep.outstandingAmount));
+          if (ep.discountAmount !== undefined) setDiscountAmountState(parseAmount(ep.discountAmount));
+          if (ep.shippingAmount !== undefined) setShippingAmountState(parseAmount(ep.shippingAmount));
         }
         draftHydratedRef.current = true;
         return;
@@ -1365,11 +1372,11 @@ export default function SocialCommercePage() {
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
         if (typeof d.exactPrice === 'string') setExactPrice(d.exactPrice);
         if (Array.isArray(d.cart)) setCart(d.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
-        if (typeof d.paidAmount === 'number') setPaidAmount(d.paidAmount);
-        if (typeof d.totalAmountState === 'number') setTotalAmountState(d.totalAmountState);
-        if (typeof d.outstandingAmount === 'number') setOutstandingAmount(d.outstandingAmount);
-        if (typeof d.discountAmountState === 'number') setDiscountAmountState(d.discountAmountState);
-        if (typeof d.shippingAmountState === 'number') setShippingAmountState(d.shippingAmountState);
+        if (d.paidAmount !== undefined) setPaidAmount(parseAmount(d.paidAmount));
+        if (d.totalAmountState !== undefined) setTotalAmountState(parseAmount(d.totalAmountState));
+        if (d.outstandingAmount !== undefined) setOutstandingAmount(parseAmount(d.outstandingAmount));
+        if (d.discountAmountState !== undefined) setDiscountAmountState(parseAmount(d.discountAmountState));
+        if (d.shippingAmountState !== undefined) setShippingAmountState(parseAmount(d.shippingAmountState));
       }
     } catch (e) {
       console.warn('Failed to restore social commerce draft', e);

@@ -234,6 +234,7 @@ export default function AmountDetailsPage() {
   const orderDiscount = useMemo(() => Math.max(0, parseNumber(orderDiscountAmount)), [orderDiscountAmount]);
   const transport = useMemo(() => parseNumber(transportCost), [transportCost]);
   const total = useMemo(() => Math.max(0, subtotal - orderDiscount + transport), [subtotal, orderDiscount, transport]);
+  const remainingBeforeNewPayment = useMemo(() => Math.max(0, total - alreadyPaid), [total, alreadyPaid]);
   
   
 
@@ -249,10 +250,9 @@ export default function AmountDetailsPage() {
   const suggestedInstallmentAmount = useMemo(() => {
     if (paymentOption !== 'installment') return 0;
     const n = Math.max(2, Math.min(24, Number(installmentCount) || 2));
-    const remaining = total - alreadyPaid;
-    if (remaining <= 0) return 0;
-    return Number((remaining / n).toFixed(2));
-  }, [total, alreadyPaid, paymentOption, installmentCount]);
+    if (remainingBeforeNewPayment <= 0) return 0;
+    return Number((remainingBeforeNewPayment / n).toFixed(2));
+  }, [remainingBeforeNewPayment, paymentOption, installmentCount]);
 
   const [installmentPayNow, setInstallmentPayNow] = useState('');
 
@@ -271,20 +271,19 @@ export default function AmountDetailsPage() {
 
   const advance = useMemo(() => {
     if (paymentOption === 'none') return 0;
-    const remaining = total - alreadyPaid;
-    if (paymentOption === 'full') return Math.max(0, remaining);
+    if (paymentOption === 'full') return remainingBeforeNewPayment;
     if (paymentOption === 'installment') return parseNumber(installmentPayNow);
     return parseNumber(advanceAmount);
-  }, [paymentOption, total, alreadyPaid, advanceAmount, installmentPayNow]);
+  }, [paymentOption, remainingBeforeNewPayment, advanceAmount, installmentPayNow]);
 
-  const finalDue = useMemo(() => Math.max(0, total - alreadyPaid - advance), [total, alreadyPaid, advance]);
+  const finalDue = useMemo(() => Math.max(0, remainingBeforeNewPayment - advance), [remainingBeforeNewPayment, advance]);
 
   const codAmount = useMemo(() => {
     if (paymentOption === 'full') return 0;
-    if (paymentOption === 'none') return Math.max(0, total - alreadyPaid);
+    if (paymentOption === 'none') return remainingBeforeNewPayment;
     if (paymentOption === 'installment') return 0;
-    return Math.max(0, total - alreadyPaid - advance);
-  }, [paymentOption, total, alreadyPaid, advance]);
+    return Math.max(0, remainingBeforeNewPayment - advance);
+  }, [paymentOption, remainingBeforeNewPayment, advance]);
 
   const advanceFee = useMemo(() => {
     if (!selectedMethod || paymentOption === 'none') return 0;
@@ -341,18 +340,18 @@ export default function AmountDetailsPage() {
     }
 
     if (paymentOption === 'partial') {
-      if (!advanceAmount || advance <= 0 || advance >= total) {
-        displayToast('Please enter a valid advance amount (between 0 and total)', 'error');
+      if (!advanceAmount || advance <= 0 || advance >= remainingBeforeNewPayment) {
+        displayToast('Please enter a valid advance amount between 0 and the remaining due', 'error');
         return;
       }
-      if (!codPaymentMethod) {
+      if (codAmount > 0 && !codPaymentMethod) {
         displayToast('Please select a COD payment method', 'error');
         return;
       }
     }
 
     if (paymentOption === 'none') {
-      if (!codPaymentMethod) {
+      if (codAmount > 0 && !codPaymentMethod) {
         displayToast('Please select a COD payment method', 'error');
         return;
       }
@@ -580,10 +579,10 @@ export default function AmountDetailsPage() {
       }
 
       // 4) Payments
-      if (paymentOption === 'full' && (total - alreadyPaid) > 0) {
+      if (paymentOption === 'full' && remainingBeforeNewPayment > 0) {
         const paymentData: any = {
           payment_method_id: parseInt(selectedPaymentMethod, 10),
-          amount: total - alreadyPaid,
+          amount: remainingBeforeNewPayment,
           payment_type: 'full',
           auto_complete: true,
           notes: paymentNotes || `Social Commerce full payment via ${selectedMethod?.name}`,
@@ -629,7 +628,7 @@ export default function AmountDetailsPage() {
           amount: advance,
           payment_type: 'partial',
           auto_complete: true,
-          notes: paymentNotes || `Advance via ${selectedMethod?.name}. COD remaining: ৳${(total - alreadyPaid - advance).toFixed(2)}`,
+          notes: paymentNotes || `Advance via ${selectedMethod?.name}. COD remaining: ৳${finalDue.toFixed(2)}`,
           payment_data: {},
         };
 
@@ -1181,6 +1180,12 @@ export default function AmountDetailsPage() {
                           <span>Total</span>
                           <span className="font-medium">৳{total.toFixed(2)}</span>
                         </div>
+                        {alreadyPaid > 0 && (
+                          <div className="flex justify-between text-green-700 dark:text-green-300">
+                            <span>Previous Payment</span>
+                            <span className="font-medium">-৳{alreadyPaid.toFixed(2)}</span>
+                          </div>
+                        )}
                         {paymentOption === 'installment' ? (
                           <>
                             <div className="flex justify-between">
@@ -1197,7 +1202,7 @@ export default function AmountDetailsPage() {
                             </div>
                             <div className="flex justify-between">
                               <span>Remaining (Later)</span>
-                              <span className="font-medium">৳{Math.max(0, total - advance).toFixed(2)}</span>
+                              <span className="font-medium">৳{finalDue.toFixed(2)}</span>
                             </div>
                           </>
                         ) : (

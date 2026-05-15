@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, Loader2 } from 'lucide-react';
 import Header from '@/components/Header';
@@ -155,6 +155,7 @@ export default function AddEditProductPage({
   const [categories, setCategories] = useState<CategoryTree[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [allSizes, setAllSizes] = useState<Size[]>([]);
+  const initialDataLoaded = useRef(false);
 
 
   // --- Size presets (Errum): quickly select full size chart for a category ---
@@ -214,6 +215,27 @@ export default function AddEditProductPage({
     return Array.from(new Set([...contextOptions, ...dbSizes, ...existing]));
   };
 
+  const sizePresetButtons = [
+    { key: 'sneakers', label: getPresetLabel('sneakers') },
+    { key: 'dresses', label: getPresetLabel('dresses') },
+  ];
+
+  const applySizePreset = (variationId: string, presetKey: SizePresetKey) => {
+    const preset = Array.isArray(SIZE_PRESETS[presetKey]) ? Array.from(SIZE_PRESETS[presetKey]) : [];
+    if (preset.length === 0) return;
+
+    setVariations((prev) =>
+      prev.map((variation) => {
+        if (variation.id !== variationId) return variation;
+        const currentSizes = (Array.isArray(variation.sizes) ? variation.sizes : [])
+          .map((size) => String(size || '').trim())
+          .filter(Boolean);
+        const mergedSizes = Array.from(new Set([...currentSizes, ...preset]));
+        return { ...variation, sizes: mergedSizes.length > 0 ? mergedSizes : [''] };
+      })
+    );
+  };
+
   useEffect(() => {
     const fetchSizes = async () => {
       try {
@@ -231,8 +253,13 @@ export default function AddEditProductPage({
   }, []);
 
   useEffect(() => {
-    if (isEditMode && productId && availableFields.length > 0) {
-      fetchProduct();
+    if (initialDataLoaded.current) return;
+
+    if (isEditMode && productId) {
+      if (availableFields.length > 0) {
+        fetchProduct();
+        initialDataLoaded.current = true;
+      }
     } else if (addVariationMode) {
       setFormData({
         name: storedBaseName,
@@ -245,6 +272,7 @@ export default function AddEditProductPage({
       }
       setHasVariations(true);
       setActiveTab('general');
+      initialDataLoaded.current = true;
     }
   }, [isEditMode, productId, availableFields, addVariationMode, storedBaseName, storedBaseSku, storedCategoryId, storedVendorId]);
 
@@ -891,6 +919,19 @@ export default function AddEditProductPage({
     try {
       const newSize = await sizeService.createSize(name);
       setAllSizes(prev => [...prev, newSize]);
+
+      // ✅ Update availableFields so DynamicFieldInput dropdowns get the new size immediately
+      const norm = (s: any) => String(s || '').trim().toLowerCase();
+      setAvailableFields(prev => prev.map(f => {
+        if (norm(f.title) === 'size' || norm(f.name) === 'size') {
+          return {
+            ...f,
+            options: Array.from(new Set([...(f.options || []), name]))
+          };
+        }
+        return f;
+      }));
+
       setToast({ message: `Size "${name}" created and added to list.`, type: 'success' });
     } catch (error: any) {
       console.error('Failed to create size:', error);
@@ -1591,6 +1632,7 @@ export default function AddEditProductPage({
                             availableFields={availableFields}
                             onUpdate={(value) => updateFieldValue(field.instanceId, value)}
                             onRemove={() => removeField(field.instanceId)}
+                            onCreateOption={['size', 'sizes'].includes(String(field.fieldName || '').trim().toLowerCase()) ? handleCreateSize : undefined}
                           />
                         ))}
                       </div>
@@ -2041,6 +2083,8 @@ export default function AddEditProductPage({
                             onSizesUpdate={(sizes) => updateSizes(variation.id, sizes)}
                             onCreateSize={handleCreateSize}
                             sizeOptions={getSizeOptionsForVariation(variation.sizes)}
+                            sizePresetButtons={sizePresetButtons}
+                            onApplySizePreset={(key) => applySizePreset(variation.id, key as SizePresetKey)}
                           />
                         ))}
                       </div>

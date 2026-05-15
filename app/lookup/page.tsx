@@ -1034,11 +1034,36 @@ export default function LookupPage() {
       created_at: o.order_date ?? o.created_at ?? null,
       updated_at: o.updated_at ?? null,
       items: items.map((it: any, idx: number) => {
-        const barcodeVal = it?.barcode?.barcode ?? it?.barcode ?? null;
+        const rawBarcode = it?.barcode;
+        const barcodeVal = rawBarcode?.barcode ?? rawBarcode ?? it?.barcode_number ?? null;
+        const barcodeId = rawBarcode?.id ?? it?.product_barcode_id ?? it?.barcode_id ?? null;
+        const batchId = it?.product_batch_id ?? it?.batch_id ?? it?.batch?.id ?? null;
         const barcodesArr = Array.isArray(it?.barcodes) ? it.barcodes : [];
-        const finalBarcodes: string[] = barcodeVal
-          ? [String(barcodeVal)]
-          : barcodesArr.map((b: any) => String(b?.barcode ?? b)).filter(Boolean);
+        const barcodeDetails: Array<{ barcode: string; id?: number }> = [];
+        const seenBarcodes = new Set<string>();
+
+        const pushBarcode = (value: any, fallbackId?: any) => {
+          if (!value) return;
+          if (typeof value === 'object') {
+            pushBarcode(value.barcode ?? value.code ?? value.value, value.id ?? value.product_barcode_id ?? value.barcode_id ?? fallbackId);
+            return;
+          }
+
+          const code = String(value).trim();
+          if (!code) return;
+          const key = code.toLowerCase();
+          if (seenBarcodes.has(key)) return;
+
+          seenBarcodes.add(key);
+          barcodeDetails.push({
+            barcode: code,
+            id: fallbackId ? Number(fallbackId) : undefined,
+          });
+        };
+
+        pushBarcode(barcodeVal, barcodeId);
+        barcodesArr.forEach((b: any) => pushBarcode(b));
+        const finalBarcodes = barcodeDetails.map((barcode) => barcode.barcode);
 
         return {
           id: it?.item_id ?? it?.id ?? idx,
@@ -1048,6 +1073,13 @@ export default function LookupPage() {
           quantity: it?.quantity ?? 0,
           unit_price: it?.unit_price ?? it?.sale_price ?? it?.price ?? null,
           total_amount: it?.total_amount ?? it?.total ?? null,
+          product_batch_id: batchId,
+          batch_id: batchId,
+          product_barcode_id: barcodeId,
+          barcode_id: barcodeId,
+          barcode: barcodeVal ? String(barcodeVal) : null,
+          barcode_number: barcodeVal ? String(barcodeVal) : null,
+          barcode_details: barcodeDetails,
           barcodes: finalBarcodes,
         };
       }),
@@ -1839,10 +1871,14 @@ export default function LookupPage() {
 
       // Handle refund if needed
       if (returnData.refundMethods && returnData.refundMethods.total > 0) {
+        const refundMethod = returnData.refundMethods.card > 0
+          ? 'card_refund'
+          : (returnData.refundMethods.bkash > 0 || returnData.refundMethods.nagad > 0 ? 'digital_wallet' : 'cash');
         const refundRequest: CreateRefundRequest = {
           return_id: returnId,
-          refund_type: 'full',
-          refund_method: 'cash',
+          refund_type: 'partial_amount',
+          refund_amount: returnData.refundMethods.total,
+          refund_method: refundMethod,
           refund_method_details: {
             cash: returnData.refundMethods.cash,
             card: returnData.refundMethods.card,

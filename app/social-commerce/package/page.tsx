@@ -294,12 +294,13 @@ export default function WarehouseFulfillmentPage() {
       // Sort by date, newest first
       allOrders.sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
 
-      // Extra client-side safety: if an order is already confirmed/completed/delivered
-      // it should not stay in the warehouse packing queue even if the API returns it.
+      // Extra client-side safety: completed/delivered/cancelled orders should not stay in packing.
+      // A confirmed order is still shown only when editing added new pending units.
       const filtered = allOrders.filter((o: any) => {
         const st = normalize(o.status);
-        if (['confirmed', 'completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
         const fs = normalize(o.fulfillment_status);
+        if (['completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
+        if (st === 'confirmed' && fs !== 'pending_fulfillment') return false;
         if (fs && fs !== 'pending_fulfillment') return false;
         return true;
       });
