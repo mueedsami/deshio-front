@@ -153,6 +153,7 @@ export interface OrderFilters {
   date_from?: string;
   date_to?: string;
   date_type?: string;
+  date_filter_type?: string;
   today?: boolean;
   search?: string;
   overdue?: boolean;

@@ -332,11 +332,13 @@ export default function WarehouseFulfillmentPage() {
       // Initialize scanned items tracking
       const initialScanned: Record<number, ScannedItemTracking> = {};
       order.items?.forEach((item: any) => {
-        const hasBarcode = item.barcode;
+        const quantity = Number(item.quantity || 0);
+        const barcode = item.barcode || item.scanned_barcode?.barcode || item.barcode_number;
+        const hasBarcode = Boolean(barcode);
         initialScanned[item.id] = {
-          required: item.quantity,
-          scanned: hasBarcode ? [item.product_name || 'Product'] : [],
-          barcodes: hasBarcode ? [item.barcode] : [],
+          required: quantity,
+          scanned: hasBarcode ? Array(quantity).fill(item.product_name || 'Product') : [],
+          barcodes: hasBarcode ? Array(quantity).fill(barcode) : [],
         };
       });
       setScannedItems(initialScanned);

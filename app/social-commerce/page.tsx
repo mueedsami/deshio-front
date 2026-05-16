@@ -269,6 +269,38 @@ export default function SocialCommercePage() {
     }
   };
 
+  const getCustomerAddressText = (customer: any) => {
+    if (!customer) return '';
+    const direct = String(customer.address || customer.customer_address || '').trim();
+    if (direct) return direct;
+
+    const addresses = Array.isArray(customer.addresses) ? customer.addresses : [];
+    const selected =
+      addresses.find((a: any) => a?.is_default && String(a?.type || a?.address_type || '').toLowerCase().includes('shipping')) ||
+      addresses.find((a: any) => a?.is_default) ||
+      addresses.find((a: any) => String(a?.type || a?.address_type || '').toLowerCase().includes('shipping')) ||
+      addresses[0];
+
+    if (!selected) return '';
+
+    const directAddress = String(selected.address || selected.full_address || '').trim();
+    if (directAddress) return directAddress;
+
+    return [
+      selected.address_line_1 || selected.address_line1 || selected.street || selected.line1,
+      selected.address_line_2 || selected.address_line2 || selected.line2,
+      selected.area,
+      selected.city,
+      selected.state,
+      selected.country,
+      selected.postal_code || selected.postcode || selected.zip,
+    ]
+      .filter(Boolean)
+      .map((x) => String(x).trim())
+      .filter(Boolean)
+      .join(', ');
+  };
+
   const saveDraftToSession = () => {
     if (typeof window === 'undefined') return;
     try {
@@ -301,6 +333,7 @@ export default function SocialCommercePage() {
         maxPrice,
         exactPrice,
         cart,
+        stagingQueue,
         paidAmount,
         totalAmountState,
         outstandingAmount,
@@ -1227,6 +1260,15 @@ export default function SocialCommercePage() {
       setExistingCustomer(c);
       if (!userName && c?.name) setUserName(c.name);
       if (!userEmail && c?.email) setUserEmail(c.email);
+
+      const addressText = getCustomerAddressText(c);
+      if (addressText) {
+        if (isInternational) {
+          if (!deliveryAddress) setDeliveryAddress(addressText);
+        } else if (!streetAddress) {
+          setStreetAddress(addressText);
+        }
+      }
     } else {
       setExistingCustomer(null);
     }
@@ -1319,6 +1361,7 @@ export default function SocialCommercePage() {
           if (typeof ep.internationalPostalCode === 'string') setInternationalPostalCode(ep.internationalPostalCode);
           if (typeof ep.deliveryAddress === 'string') setDeliveryAddress(ep.deliveryAddress);
           if (Array.isArray(ep.cart)) setCart(ep.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
+          if (Array.isArray(ep.stagingQueue)) setStagingQueue(ep.stagingQueue);
           if (ep.paidAmount !== undefined) setPaidAmount(parseAmount(ep.paidAmount));
           if (ep.totalAmount !== undefined) setTotalAmountState(parseAmount(ep.totalAmount));
           if (ep.outstandingAmount !== undefined) setOutstandingAmount(parseAmount(ep.outstandingAmount));
@@ -1372,6 +1415,7 @@ export default function SocialCommercePage() {
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
         if (typeof d.exactPrice === 'string') setExactPrice(d.exactPrice);
         if (Array.isArray(d.cart)) setCart(d.cart.map(normalizeCartProductForState).filter(Boolean) as CartProduct[]);
+        if (Array.isArray(d.stagingQueue)) setStagingQueue(d.stagingQueue);
         if (d.paidAmount !== undefined) setPaidAmount(parseAmount(d.paidAmount));
         if (d.totalAmountState !== undefined) setTotalAmountState(parseAmount(d.totalAmountState));
         if (d.outstandingAmount !== undefined) setOutstandingAmount(parseAmount(d.outstandingAmount));
@@ -1415,6 +1459,7 @@ export default function SocialCommercePage() {
     maxPrice,
     exactPrice,
     cart,
+    stagingQueue,
     editOrderId,
     editOrderNumber,
     paidAmount,

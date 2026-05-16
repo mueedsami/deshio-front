@@ -51,6 +51,12 @@ interface SubcategoryProductTabsProps {
   subtitle?: string;
   /** If parent category isn't found, hide the whole section instead of falling back to random leaves. */
   hideIfNotFound?: boolean;
+  /** Explicit exact parent category ID (bypasses parentQueries) */
+  categoryId?: number;
+  /** Explicit subcategory IDs in desired order (bypasses auto-finding leaves) */
+  subcategoryIds?: number[];
+  /** Optional settings-selected products per category/subcategory ID. */
+  customProductsByCategory?: Record<string, SimpleProduct[]>;
 }
 
 
@@ -62,6 +68,9 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
   title,
   subtitle,
   hideIfNotFound = true,
+  categoryId,
+  subcategoryIds,
+  customProductsByCategory,
 }) => {
   const router = useRouter();
   const { addToCart } = useCart();
@@ -125,29 +134,34 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
 
         /**
          * "Shop by Subcategory" section:
-         * - Find a parent category by slug/name (parentQueries)
-         * - Show ALL subcategories under that parent
-         * - Top 3 (by product_count) appear as image banner cards
-         * - The rest appear as pill/capsule tabs
+         * - If categoryId is provided, use it. Otherwise, find by parentQueries.
+         * - If subcategoryIds are provided, strictly use them in that order.
+         * - Otherwise, auto-find leaves and sort by product_count.
          */
-        const parent = findParentNode(flat, parentQueries);
+        const parent = categoryId ? flat.find(c => Number(c.id) === Number(categoryId)) || null : findParentNode(flat, parentQueries);
+        
         if (alive) {
           setParentLabel(parent?.name || '');
           setParentNode(parent);
         }
+        
         let selected: CatalogCategory[] = [];
 
         if (parent) {
-          if (parent.children?.length) {
+          if (subcategoryIds && subcategoryIds.length > 0) {
+            // Strictly use provided subcategory IDs in the exact order they were provided
+            selected = subcategoryIds
+              .map(id => flat.find(c => Number(c.id) === Number(id)))
+              .filter(Boolean) as CatalogCategory[];
+          } else if (parent.children?.length) {
             const descendants = flattenAll(parent.children);
             let leaves = descendants.filter(c => c.name && !c.children?.length);
             if (!leaves.length) leaves = descendants.filter(c => c.name);
             selected = uniqById(leaves);
+            selected.sort((a, b) => Number(b.product_count || 0) - Number(a.product_count || 0));
           } else {
             selected = [parent];
           }
-
-          selected.sort((a, b) => Number(b.product_count || 0) - Number(a.product_count || 0));
         }
 
         if (!selected.length && !hideIfNotFound) {
@@ -175,7 +189,7 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
       if (alive) setLoadingCats(false);
     })();
     return () => { alive = false; };
-  }, [tabsCount]);
+  }, [tabsCount, categoryId, JSON.stringify(subcategoryIds || [])]);
 
   /**
    * Ensure top 3 banner cards have an image.
@@ -235,20 +249,25 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
         const targetId = activeId;
         if (!targetId) return;
 
-        const response = await catalogService.getProducts({
-          page: 1,
-          per_page: productsPerTab,
-          category_id: targetId,
-          sort_by: 'newest',
-          group_by_sku: true as any,
-        } as any);
+        const customProducts = customProductsByCategory?.[String(targetId)] || [];
+        if (customProducts.length > 0) {
+          products = customProducts.slice(0, productsPerTab);
+        } else {
+          const response = await catalogService.getProducts({
+            page: 1,
+            per_page: productsPerTab,
+            category_id: targetId,
+            sort_by: 'newest',
+            group_by_sku: true as any,
+          } as any);
 
-        // Standard logic from products/page.tsx: use grouped_products if available
-        const rawProducts = response.grouped_products?.length
-          ? response.grouped_products.map(gp => gp.main_variant)
-          : response.products;
+          // Standard logic from products/page.tsx: use grouped_products if available
+          const rawProducts = response.grouped_products?.length
+            ? response.grouped_products.map(gp => gp.main_variant)
+            : response.products;
 
-        products = buildCardProductsFromResponse({ ...response, products: rawProducts });
+          products = buildCardProductsFromResponse({ ...response, products: rawProducts });
+        }
       } catch (e) {
         console.error('SubcategoryTabs: fetch failed', e);
       }
@@ -260,7 +279,7 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
 
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId, tabs.length, parentNode?.id]);
+  }, [activeId, tabs.length, parentNode?.id, productsPerTab, JSON.stringify(customProductsByCategory || {})]);
 
   const activeKey = activeId === null ? 'all' : String(activeId);
   const activeTab = tabData[activeKey];
@@ -294,7 +313,7 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i}>
-                <div style={{ aspectRatio: '2/3', background: '#f5f5f5', borderRadius: '4px', marginBottom: '8px' }} />
+                <div style={{ aspectRatio: '3/4', background: '#f5f5f5', borderRadius: '4px', marginBottom: '8px' }} />
                 <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '75%' }} />
               </div>
             ))}
@@ -323,7 +342,7 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
             color: '#111111',
             margin: 0,
           }}>
-            {title ?? (parentLabel ? parentLabel.toUpperCase() : eyebrow?.toUpperCase() ?? 'NEW AND POPULAR')}
+            {title ?? (parentLabel ? parentLabel.toUpperCase() : eyebrow?.toUpperCase() ?? '')}
           </h2>
           <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
         </div>
@@ -368,7 +387,7 @@ const SubcategoryProductTabs: React.FC<SubcategoryProductTabsProps> = ({
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i}>
-                  <div style={{ aspectRatio: '2/3', background: '#f5f5f5', borderRadius: '4px', marginBottom: '8px' }} />
+                  <div style={{ aspectRatio: '3/4', background: '#f5f5f5', borderRadius: '4px', marginBottom: '8px' }} />
                   <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '75%', marginBottom: '6px' }} />
                   <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '40%' }} />
                 </div>

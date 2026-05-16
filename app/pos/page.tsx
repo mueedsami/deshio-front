@@ -18,6 +18,7 @@ import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import { useAuth } from '@/contexts/AuthContext';
 import { useTheme } from "@/contexts/ThemeContext";
+import axios from '@/lib/axios';
 
 // Services
 import orderService from '@/services/orderService';
@@ -430,10 +431,12 @@ export default function POSPage() {
     const discountValue =
       discountPercent > 0 ? (baseAmount * discountPercent) / 100 : discountAmount;
 
+    const selectedProductName = selectedBatch.product?.name || products.find((p) => String(p.id) === String(product))?.name || product;
+
     const newItem: ExtendedCartItem = {
       id: Date.now() + Math.random(),
       productId: selectedBatch.product.id,
-      productName: product,
+      productName: selectedProductName,
       batchId: selectedBatch.id,
       batchNumber: selectedBatch.batch_number,
       qty: quantity,
@@ -445,7 +448,7 @@ export default function POSPage() {
     };
 
     setCart((prev) => [...prev, newItem]);
-    showToast(`✓ Added: ${product} (${quantity} units)`, 'success');
+    showToast(`✓ Added: ${selectedProductName} (${quantity} units)`, 'success');
 
     // Reset form
     setProduct('');
@@ -548,9 +551,9 @@ export default function POSPage() {
 
   // ============ PRODUCT SELECTION (Manual Mode) ============
 
-  const handleProductSelect = (productName: string) => {
-    setProduct(productName);
-    const selectedProd = products.find((p) => p.name === productName);
+  const handleProductSelect = (productId: string) => {
+    setProduct(productId);
+    const selectedProd = products.find((p) => String(p.id) === String(productId));
 
     if (selectedProd && selectedProd.batches && selectedProd.batches.length > 0) {
       const firstBatch = selectedProd.batches[0];
@@ -776,7 +779,18 @@ export default function POSPage() {
 
       // Create order
       console.log('📦 Creating order...');
-      const order = await orderService.create(orderPayload);
+      const hasManualProductItems = cart.some((item: any) => !item.isService && !item.isDefective && !item.barcode);
+      const hasDefectiveItems = cart.some((item: any) => item.isDefective);
+      if (hasManualProductItems && hasDefectiveItems) {
+        throw new Error('Please complete manual-entry products and defective products as separate POS sales.');
+      }
+      const order = hasManualProductItems
+        ? ((await axios.post('/manual-relabel-sale', orderPayload)).data?.data)
+        : await orderService.create(orderPayload);
+
+      if (!order?.id) {
+        throw new Error('Order creation failed: missing order ID in response.');
+      }
 
       console.log('✅ Order created:', order.order_number);
       showToast(`Order #${order.order_number} created!`, 'success');
@@ -1012,6 +1026,7 @@ export default function POSPage() {
                 bkash: bkashPaid,
                 nagad: nagadPaid,
               },
+              tendered_amount: totalPaid,
               change_amount: change,
               cashPaid: cashPaid,
               cardPaid: cardPaid,
@@ -1282,6 +1297,7 @@ export default function POSPage() {
       // ✅ Fetch all products (page through backend caps)
       const productResponse: any = await productService.getAll({
         is_archived: false,
+        group_by_sku: false,
         per_page: 50000,
       });
 
@@ -1722,11 +1738,13 @@ export default function POSPage() {
                                   if (aStarts && !bStarts) return -1;
                                   if (!aStarts && bStarts) return 1;
 
-                                  return 0;
+                                  const nameCompare = a.name.localeCompare(b.name);
+                                  if (nameCompare !== 0) return nameCompare;
+                                  return Number(a.id) - Number(b.id);
                                 })
                                 .slice(0, manualSearchQuery ? 100 : 50) // Limit results for performance
                                 .map((prod) => (
-                                  <option key={prod.id} value={prod.name}>
+                                  <option key={prod.id} value={String(prod.id)}>
                                     {prod.name} {prod.sku ? `(${prod.sku})` : ''} — {prod.batches?.length || 0} batches
                                   </option>
                                 ))}

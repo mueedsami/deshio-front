@@ -12,6 +12,7 @@ import { fireToast } from '@/lib/globalToast';
 interface NewArrivalsProps {
   categoryId?: number;
   limit?: number;
+  customProducts?: SimpleProduct[];
 }
 
 /* Parse a date string → ms timestamp, returns 0 if unparseable */
@@ -41,17 +42,22 @@ const getCreatedMs = (product: SimpleProduct): number => {
   return best;
 };
 
-const NewArrivals: React.FC<NewArrivalsProps> = ({ categoryId, limit = 8 }) => {
+const NewArrivals: React.FC<NewArrivalsProps> = ({ categoryId, limit = 8, customProducts }) => {
   const router = useRouter();
-  const [products, setProducts] = useState<SimpleProduct[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [products, setProducts] = useState<SimpleProduct[]>(customProducts || []);
+  const [isLoading, setIsLoading] = useState(!customProducts);
   const [imageErrors, setImageErrors] = useState<Set<number>>(new Set());
   const { addToCart } = useCart();
 
   useEffect(() => {
+    if (customProducts) {
+      setProducts(customProducts);
+      setIsLoading(false);
+      return;
+    }
     fetchNewArrivals();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [categoryId, limit]);
+  }, [categoryId, limit, customProducts]);
 
   const fetchNewArrivals = async () => {
     setIsLoading(true);
@@ -123,7 +129,7 @@ const NewArrivals: React.FC<NewArrivalsProps> = ({ categoryId, limit = 8 }) => {
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 md:gap-6">
             {Array.from({ length: limit }).map((_, i) => (
               <div key={i} className="animate-pulse">
-                <div style={{ aspectRatio: '2/3', background: '#f5f5f5', borderRadius: '4px', marginBottom: '12px' }} />
+                <div style={{ aspectRatio: '3/4', background: '#f5f5f5', borderRadius: '4px', marginBottom: '12px' }} />
                 <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '70%', marginBottom: '6px' }} />
                 <div style={{ height: '14px', background: '#f5f5f5', borderRadius: '4px', width: '40%' }} />
               </div>

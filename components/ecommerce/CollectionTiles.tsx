@@ -13,30 +13,6 @@ interface CollectionTileItem {
   show_text?: boolean;
 }
 
-const DEFAULT_COLLECTIONS: CollectionTileItem[] = [
-  {
-    id: '1',
-    title: 'Sneaker Head',
-    subtitle: 'Limited editions and rare finds',
-    image: 'https://images.unsplash.com/photo-1552346154-21d32810aba3?q=80&w=2070&auto=format&fit=crop',
-    href: '/e-commerce/sneakers',
-  },
-  {
-    id: '2',
-    title: 'Streetwear Essentials',
-    subtitle: 'Daily drops for the urban explorer',
-    image: 'https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?q=80&w=2070&auto=format&fit=crop',
-    href: '/e-commerce/clothing',
-  },
-  {
-    id: '3',
-    title: 'Accessories',
-    subtitle: 'The finishing touches to your fit',
-    image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=1999&auto=format&fit=crop',
-    href: '/e-commerce/accessories',
-  }
-];
-
 interface CollectionTilesProps {
   // New Errum-style curated collections from homepage settings
   collections?: CollectionTileItem[];
@@ -52,7 +28,7 @@ export default function CollectionTiles({ collections, categories }: CollectionT
         id: cat.id,
         title: cat.name,
         subtitle: cat.description || `Explore our ${cat.name} collection`,
-        image: cat.image_url || cat.image || 'https://images.unsplash.com/photo-1552346154-21d32810aba3?q=80&w=2070&auto=format&fit=crop',
+        image: cat.image_url || cat.image || '',
         href: `/e-commerce/${cat.slug || cat.name.toLowerCase().replace(/\s+/g, '-')}`,
         show_text: true,
       }))
@@ -60,7 +36,7 @@ export default function CollectionTiles({ collections, categories }: CollectionT
 
   const displayCollections = collections && collections.length > 0
     ? collections
-    : (categoryTiles.length > 0 ? categoryTiles : DEFAULT_COLLECTIONS);
+    : categoryTiles;
 
   if (!displayCollections || displayCollections.length === 0) return null;
 

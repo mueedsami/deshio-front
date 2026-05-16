@@ -65,7 +65,7 @@ export default function CategoryListItem({
         )}
 
         <ImageWithFallback
-          src={category.image_url || " "}
+          src={category.thumbnail_url || category.image_url || " "}
           alt={category.title}
           className="w-16 h-16 rounded object-cover flex-shrink-0"
         />

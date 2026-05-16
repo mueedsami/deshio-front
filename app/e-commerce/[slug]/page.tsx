@@ -553,6 +553,16 @@ export default function CategoryPage() {
 
       <div className="ec-root bg-[var(--bg-root)] min-h-screen">
         <div className="bg-[var(--bg-surface)] border-b border-[var(--border-default)] mb-8">
+          {(activeCategory?.banner_url || (activeCategory as any)?.banner) && (
+            <div className="relative h-56 md:h-80 overflow-hidden">
+              <img
+                src={activeCategory?.banner_url || (activeCategory as any)?.banner}
+                alt={activeCategory?.name || 'Category banner'}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-r from-black/55 via-black/20 to-transparent" />
+            </div>
+          )}
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
             <h1 className="text-4xl font-light text-[var(--text-primary)] mb-2" style={{ fontFamily: "'Poppins', sans-serif" }}>{activeCategory?.name || 'Products'}</h1>
             <p className="text-[var(--text-muted)] font-medium tracking-wide ec-eyebrow uppercase text-xs">

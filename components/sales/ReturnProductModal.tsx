@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { X, RotateCcw, Calculator, ChevronDown, Barcode, Trash2, AlertCircle, Info, Search } from 'lucide-react';
-import axiosInstance from '@/lib/axios';
+import { X, RotateCcw, Calculator, Barcode, Trash2, AlertCircle, Info } from 'lucide-react';
 import storeService, { type Store } from '@/services/storeService';
 
 type ReturnReason = 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
@@ -20,6 +19,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
   
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const barcodeScanTimerRef = useRef<number | null>(null);
+  const barcodeScanInFlightRef = useRef(false);
 
   // Return info
   const [returnReason, setReturnReason] = useState<ReturnReason>('other');
@@ -63,7 +63,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     }
   };
 
-  const normalizeBarcode = (value: any) => String(value ?? '').trim().toLowerCase();
+  const normalizeBarcode = (value: any) => String(value ?? '').trim().replace(/\s+/g, '').toLowerCase();
 
   const collectItemBarcodes = (item: any) => {
     const result: Array<{ code: string; id?: number }> = [];
@@ -73,7 +73,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       if (!value) return;
 
       if (typeof value === 'object') {
-        const code = value.barcode ?? value.code ?? value.value;
+        const code = value.barcode ?? value.barcode_number ?? value.code ?? value.value;
         const id = value.id ?? value.product_barcode_id ?? value.barcode_id ?? fallbackId;
         pushBarcode(code, id);
         return;
@@ -92,11 +92,17 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       });
     };
 
-    (Array.isArray(item?.barcode_details) ? item.barcode_details : []).forEach((barcode: any) => pushBarcode(barcode));
-    (Array.isArray(item?.barcodes) ? item.barcodes : []).forEach((barcode: any) => pushBarcode(barcode));
-    pushBarcode(item?.barcode, item?.barcode_id ?? item?.product_barcode_id);
-    pushBarcode(item?.product_barcode, item?.product_barcode_id);
-    pushBarcode(item?.barcode_number, item?.barcode_id ?? item?.product_barcode_id);
+    const fallbackId = item?.product_barcode_id ?? item?.barcode_id ?? item?.productBarcodeId ?? item?.barcodeId;
+
+    (Array.isArray(item?.barcode_details) ? item.barcode_details : []).forEach((barcode: any) => pushBarcode(barcode, fallbackId));
+    (Array.isArray(item?.barcodeDetails) ? item.barcodeDetails : []).forEach((barcode: any) => pushBarcode(barcode, fallbackId));
+    (Array.isArray(item?.barcodes) ? item.barcodes : []).forEach((barcode: any) => pushBarcode(barcode, fallbackId));
+    (Array.isArray(item?.product_barcodes) ? item.product_barcodes : []).forEach((barcode: any) => pushBarcode(barcode, fallbackId));
+    pushBarcode(item?.barcode, fallbackId);
+    pushBarcode(item?.barcode_number, fallbackId);
+    pushBarcode(item?.product_barcode, fallbackId);
+    pushBarcode(item?.productBarcode, fallbackId);
+    pushBarcode(item?.scanned_barcode, fallbackId);
 
     return result;
   };
@@ -117,41 +123,50 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     const code = barcodeInput.trim();
     if (!code) return;
 
-    setError(null);
+    if (barcodeScanInFlightRef.current) return;
+    barcodeScanInFlightRef.current = true;
 
-    if (returnedItems.some(item => normalizeBarcode(item.barcode) === normalizeBarcode(code))) {
-      setError('Item already scanned for return');
+    try {
+
+      setError(null);
+
+      if (returnedItems.some(item => normalizeBarcode(item.barcode) === normalizeBarcode(code))) {
+        setError('Item already scanned for return');
+        setBarcodeInput('');
+        return;
+      }
+
+      const found = findOrderItemByBarcode(code);
+
+      if (!found) {
+        setError('Barcode not found in this order');
+        setBarcodeInput('');
+        return;
+      }
+
+      const { orderItem, matchedBarcode } = found;
+      const unitPrice = getItemUnitPrice(orderItem);
+      const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
+
+      const newItem = {
+        order_item_id: orderItem.id,
+        product_id: orderItem.product_id ?? orderItem.product?.id,
+        product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
+        product_name: orderItem.product_name || orderItem.product?.name || orderItem.name || 'Unknown Product',
+        barcode: matchedBarcode.code,
+        product_barcode_id: productBarcodeId,
+        barcode_id: productBarcodeId,
+        unit_price: unitPrice,
+        quantity: 1,
+        total_price: unitPrice
+      };
+
+      setReturnedItems(prev => [...prev, newItem]);
       setBarcodeInput('');
-      return;
+      window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
+    } finally {
+      barcodeScanInFlightRef.current = false;
     }
-
-    const found = findOrderItemByBarcode(code);
-
-    if (!found) {
-      setError('Barcode not found in this order');
-      setBarcodeInput('');
-      return;
-    }
-
-    const { orderItem, matchedBarcode } = found;
-    const unitPrice = getItemUnitPrice(orderItem);
-    const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
-
-    const newItem = {
-      order_item_id: orderItem.id,
-      product_id: orderItem.product_id,
-      product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
-      product_name: orderItem.product_name || orderItem.product?.name,
-      barcode: matchedBarcode.code,
-      product_barcode_id: productBarcodeId,
-      barcode_id: productBarcodeId,
-      unit_price: unitPrice,
-      quantity: 1,
-      total_price: unitPrice
-    };
-
-    setReturnedItems(prev => [...prev, newItem]);
-    setBarcodeInput('');
   };
 
   useEffect(() => {
@@ -161,7 +176,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     if (barcodeScanTimerRef.current) window.clearTimeout(barcodeScanTimerRef.current);
     barcodeScanTimerRef.current = window.setTimeout(() => {
       handleBarcodeScan();
-    }, 140);
+    }, 70);
 
     return () => {
       if (barcodeScanTimerRef.current) window.clearTimeout(barcodeScanTimerRef.current);
@@ -333,6 +348,12 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                     placeholder="SCAN ITEM BARCODE FROM ORDER..."
                     value={barcodeInput}
                     onChange={(e) => setBarcodeInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleBarcodeScan();
+                      }
+                    }}
                     className="w-full pl-12 pr-4 py-5 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-red-500 outline-none transition-all text-sm font-black placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
                   />
                 </form>
@@ -392,7 +413,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                     </div>
                   </div>
 
-                  {totals.refundToCustomer > 0 && (
+                  {(
                     <div className="pt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                       <div className="flex items-center justify-between">
                         <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Refund Process</h4>

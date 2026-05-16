@@ -325,10 +325,14 @@ type BatchLookupData = {
   };
   summary: {
     total_units: number;
+    physical_stock_quantity?: number;
+    barcode_identities?: number;
     active: number;
     available_for_sale: number;
+    saleable_barcode_identities?: number;
     sold: number;
     defective: number;
+    open_replacement_barcodes?: number;
   };
   status_breakdown: Array<{ status: string; count: number }>;
   store_distribution: Array<{ store_id: number | null; store_name: string; count: number }>;
@@ -342,6 +346,9 @@ type BatchLookupData = {
     is_active: boolean;
     is_defective: boolean;
     is_available_for_sale: boolean;
+    is_replacement?: boolean;
+    replacement_status?: string | null;
+    relabel_reason?: string | null;
     location_updated_at: string;
 
     // optional fields your backend may have:
@@ -1035,8 +1042,10 @@ export default function LookupPage() {
       updated_at: o.updated_at ?? null,
       items: items.map((it: any, idx: number) => {
         const rawBarcode = it?.barcode;
-        const barcodeVal = rawBarcode?.barcode ?? rawBarcode ?? it?.barcode_number ?? null;
-        const barcodeId = rawBarcode?.id ?? it?.product_barcode_id ?? it?.barcode_id ?? null;
+        const barcodeVal = typeof rawBarcode === 'object'
+          ? rawBarcode?.barcode ?? rawBarcode?.barcode_number ?? it?.barcode_number ?? it?.scanned_barcode?.barcode ?? it?.product_barcode?.barcode ?? null
+          : rawBarcode ?? it?.barcode_number ?? it?.scanned_barcode?.barcode ?? it?.product_barcode?.barcode ?? null;
+        const barcodeId = rawBarcode?.id ?? it?.product_barcode_id ?? it?.barcode_id ?? it?.scanned_barcode?.id ?? it?.product_barcode?.id ?? null;
         const batchId = it?.product_batch_id ?? it?.batch_id ?? it?.batch?.id ?? null;
         const barcodesArr = Array.isArray(it?.barcodes) ? it.barcodes : [];
         const barcodeDetails: Array<{ barcode: string; id?: number }> = [];
@@ -1045,7 +1054,7 @@ export default function LookupPage() {
         const pushBarcode = (value: any, fallbackId?: any) => {
           if (!value) return;
           if (typeof value === 'object') {
-            pushBarcode(value.barcode ?? value.code ?? value.value, value.id ?? value.product_barcode_id ?? value.barcode_id ?? fallbackId);
+            pushBarcode(value.barcode ?? value.barcode_number ?? value.code ?? value.value, value.id ?? value.product_barcode_id ?? value.barcode_id ?? fallbackId);
             return;
           }
 
@@ -1062,7 +1071,13 @@ export default function LookupPage() {
         };
 
         pushBarcode(barcodeVal, barcodeId);
-        barcodesArr.forEach((b: any) => pushBarcode(b));
+        pushBarcode(rawBarcode, barcodeId);
+        pushBarcode(it?.barcode_number, barcodeId);
+        pushBarcode(it?.scanned_barcode, barcodeId);
+        pushBarcode(it?.product_barcode, barcodeId);
+        barcodesArr.forEach((b: any) => pushBarcode(b, barcodeId));
+        (Array.isArray(it?.barcode_details) ? it.barcode_details : []).forEach((b: any) => pushBarcode(b, barcodeId));
+        (Array.isArray(it?.barcodeDetails) ? it.barcodeDetails : []).forEach((b: any) => pushBarcode(b, barcodeId));
         const finalBarcodes = barcodeDetails.map((barcode) => barcode.barcode);
 
         return {
@@ -2142,17 +2157,29 @@ export default function LookupPage() {
   // -----------------------
   const computeBatchSummary = (bd: BatchLookupData) => {
     const list = bd?.barcodes || [];
+    const physicalStock = Number(
+      bd?.summary?.physical_stock_quantity ??
+      (bd?.batch as any)?.quantity ??
+      bd?.batch?.original_quantity ??
+      bd?.summary?.total_units ??
+      list.length
+    ) || 0;
     const sold = list.filter((b) => normalizeStatusKey(b.current_status) === 'sold' || String(b.status_label || '').toLowerCase().includes('sold')).length;
     const defective = list.filter((b) => b.is_defective).length;
-    const available = list.filter((b) => b.is_available_for_sale && normalizeStatusKey(b.current_status) !== 'sold').length;
+    const saleableIdentities = list.filter((b) => b.is_available_for_sale && normalizeStatusKey(b.current_status) !== 'sold').length;
+    const available = Math.min(physicalStock, saleableIdentities);
     const active = list.filter((b) => b.is_active && normalizeStatusKey(b.current_status) !== 'sold').length;
 
     return {
-      total_units: list.length,
+      total_units: physicalStock,
+      physical_stock_quantity: physicalStock,
+      barcode_identities: bd?.summary?.barcode_identities ?? list.length,
       active,
       available_for_sale: available,
+      saleable_barcode_identities: bd?.summary?.saleable_barcode_identities ?? saleableIdentities,
       sold,
       defective,
+      open_replacement_barcodes: bd?.summary?.open_replacement_barcodes ?? list.filter((b) => b.is_replacement && b.replacement_status === 'open').length,
     };
   };
 
@@ -3271,12 +3298,12 @@ export default function LookupPage() {
                           return (
                             <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Total</p>
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Physical Stock</p>
                                 <p className="text-xs font-semibold text-black dark:text-white">{computed.total_units}</p>
                               </div>
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
-                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Active</p>
-                                <p className="text-xs font-semibold text-black dark:text-white">{computed.active}</p>
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Barcode IDs</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.barcode_identities}</p>
                               </div>
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                                 <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Available</p>
@@ -3379,6 +3406,10 @@ export default function LookupPage() {
 
                                         {b.is_defective && (
                                           <span className="text-[9px] px-2 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">defective</span>
+                                        )}
+
+                                        {b.is_replacement && (
+                                          <span className="text-[9px] px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">relabel {b.replacement_status || ''}</span>
                                         )}
 
                                         {/* sale means available for sale */}

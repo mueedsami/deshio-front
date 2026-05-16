@@ -443,6 +443,10 @@ export function normalizeOrderForReceipt(order: any): ReceiptOrder {
     Math.max(0, subtotal - discount + tax + shipping);
 
   const paid =
+    parseMoney(order?.tendered_amount) ||
+    parseMoney(order?.tenderedAmount) ||
+    parseMoney(order?.amounts?.tendered) ||
+    parseMoney(order?.payments?.tendered) ||
     parseMoney(order?.payments?.paid) ||
     parseMoney(order?.payments?.totalPaid) ||
     parseMoney(order?.paid_amount) ||

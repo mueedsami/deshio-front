@@ -7,7 +7,11 @@ export interface Category {
   slug: string;
   description?: string;
   image?: string;
-  image_url?: string; // ADD THIS - the full URL from backend
+  image_url?: string; // legacy/full URL from backend
+  thumbnail_image?: string | null;
+  banner_image?: string | null;
+  thumbnail_url?: string | null;
+  banner_url?: string | null;
   color?: string;
   icon?: string;
   order: number;
@@ -106,16 +110,18 @@ class CategoryService {
   
 private normalizeCategory<T extends Category | CategoryTree>(category: T): T {
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
+  const normalizeAsset = (value?: string | null) => {
+    if (!value) return value as any;
+    if (value.startsWith('http') || value.startsWith('blob:') || value.startsWith('data:')) return value;
+    let path = value;
+    if (!path.startsWith('/')) path = '/' + path;
+    if (!path.startsWith('/storage/')) path = '/storage' + path;
+    return (baseUrl || '') + path;
+  };
 
-  if (category.image_url && !category.image_url.startsWith('http')) {
-    // Legacy category image paths can arrive as `category/...`.
-    // Public assets are served from `/storage/category/...`.
-    if (/^\/?category\//i.test(category.image_url) && !/\/storage\/category\//i.test(category.image_url)) {
-      category.image_url = category.image_url.replace(/^\/?category\//i, '/storage/category/');
-    }
-    // Simply prepend base URL - no need to replace anything
-    category.image_url = baseUrl + category.image_url;
-  }
+  category.image_url = normalizeAsset(category.image_url || category.image || undefined);
+  category.thumbnail_url = normalizeAsset(category.thumbnail_url || category.thumbnail_image || category.image_url || undefined);
+  category.banner_url = normalizeAsset(category.banner_url || category.banner_image || undefined);
 
   // Recursively normalize nested categories
   if (category.parent) {

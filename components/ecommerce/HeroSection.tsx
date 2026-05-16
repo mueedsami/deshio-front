@@ -3,46 +3,101 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Search as SearchIcon, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { Search as SearchIcon, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
-import catalogService, { type CatalogCategory } from '@/services/catalogService';
+export interface HeroImage {
+  url: string;
+  path?: string;
+}
 
-const HERO_IMAGE_PATH = '/e-commerce-hero.jpg';
+export default function HeroSection({
+  images = [],
+  title: initialTitle,
+  showTitle = true,
+  slideshowEnabled = true,
+  autoplaySpeed = 5000,
+  textPosition = 'center',
+  textColor = '#ffffff',
+  fontSize = 84,
+  transitionType = 'fade'
+}: {
+  images?: HeroImage[];
+  title?: string;
+  showTitle?: boolean;
+  slideshowEnabled?: boolean;
+  autoplaySpeed?: number;
+  textPosition?: string;
+  textColor?: string;
+  fontSize?: number;
+  transitionType?: 'fade' | 'slide';
+}) {
+  const hexToRgba = (hex: string, alpha: number) => {
+    if (!hex || !hex.startsWith('#')) return hex;
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
 
-export default function HeroSection() {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [query, setQuery] = useState('');
-  const [bgUrl, setBgUrl] = useState<string>(HERO_IMAGE_PATH);
-  const [topCategories, setTopCategories] = useState<CatalogCategory[]>([]);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isFocused, setIsFocused] = useState(false);
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
 
   useEffect(() => {
-    setBgUrl(HERO_IMAGE_PATH);
+    const checkMobile = () => setIsMobile(window.innerWidth < 1024);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
+  // Slideshow Autoplay Logic
   useEffect(() => {
-    let alive = true;
-    catalogService.getCategories().then((tree) => {
-      const flat: CatalogCategory[] = [];
-      const walk = (list: CatalogCategory[]) =>
-        list.forEach((c) => {
-          flat.push(c);
-          if (c.children?.length) walk(c.children);
-        });
-      walk(tree);
+    if (!slideshowEnabled || images.length <= 1) return;
 
-      const parents = flat
-        .filter((c) => (c.parent_id === null || c.parent_id === undefined) && c.name)
-        .sort((a, b) => Number(b.product_count || 0) - Number(a.product_count || 0))
-        .slice(0, 8);
+    const interval = setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % images.length);
+    }, autoplaySpeed);
 
-      if (!alive) return;
-      setTopCategories(parents);
-    }).catch(() => { });
-    return () => { alive = false; };
-  }, []);
+    return () => clearInterval(interval);
+  }, [slideshowEnabled, autoplaySpeed, images.length, currentIndex]); // currentIndex dependency ensures reset on manual navigation
+
+  const nextSlide = () => {
+    setCurrentIndex((prev) => (prev + 1) % images.length);
+  };
+
+  const prevSlide = () => {
+    setCurrentIndex((prev) => (prev - 1 + images.length) % images.length);
+  };
+
+  // Swipe handlers
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > 50;
+    const isRightSwipe = distance < -50;
+
+    if (isLeftSwipe) nextSlide();
+    if (isRightSwipe) prevSlide();
+  };
+
+  // Do not render a hardcoded hero. The storefront should be hydrated from Settings > Homepage.
+  if (!images || images.length === 0) return null;
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -57,183 +112,285 @@ export default function HeroSection() {
   };
 
   return (
-    <section style={{ position: 'relative', overflow: 'hidden', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
-      {/* Background image */}
+    <section
+      style={{ position: 'relative', overflow: 'hidden', minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}
+      onTouchStart={onTouchStart}
+      onTouchMove={onTouchMove}
+      onTouchEnd={onTouchEnd}
+    >
+      {/* Background images slider */}
       <div style={{ position: 'absolute', inset: 0 }}>
-        {bgUrl && (
-          <Image
-            src={bgUrl}
-            alt="Hero background"
-            fill
-            className="object-cover object-center"
-            priority
-            onError={() => setBgUrl('')}
-          />
-        )}
-        {/* Dark overlay */}
-        <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.30)' }} />
+        {images.map((img, idx) => (
+          <div
+            key={idx}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              opacity: transitionType === 'fade' ? (currentIndex === idx ? 1 : 0) : 1,
+              transform: transitionType === 'slide' 
+                ? `translateX(${(idx - currentIndex) * 100}%)`
+                : 'none',
+              transition: transitionType === 'fade'
+                ? 'opacity 1.2s cubic-bezier(0.4, 0, 0.2, 1)'
+                : 'transform 0.8s cubic-bezier(0.4, 0, 0.2, 1)',
+              zIndex: transitionType === 'fade' ? (currentIndex === idx ? 1 : 0) : 1
+            }}
+          >
+            <Image
+              src={img.url}
+              alt={`Hero background ${idx + 1}`}
+              fill
+              className="object-cover object-center"
+              priority={idx === 0}
+            />
+            {/* Dark overlay */}
+            <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom, rgba(0,0,0,0.4), rgba(0,0,0,0.2) 50%, rgba(0,0,0,0.4))' }} />
+          </div>
+        ))}
       </div>
 
-      {/* Content */}
-      <div className="ec-container" style={{ position: 'relative', zIndex: 10, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '80px 20px 60px' }}>
-        <div style={{ maxWidth: '700px', width: '100%', margin: '0 auto', textAlign: 'center' }}>
+      {/* Slide Navigation Indicators (Dots/Dashes) */}
+      {images.length > 1 && (
+        <div style={{
+          position: 'absolute',
+          bottom: '40px',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 30,
+          display: 'flex',
+          gap: '12px',
+          alignItems: 'center'
+        }}>
+          {images.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => setCurrentIndex(idx)}
+              style={{
+                width: currentIndex === idx ? '40px' : '12px',
+                height: '4px',
+                borderRadius: '2px',
+                background: currentIndex === idx ? '#ffffff' : 'rgba(255,255,255,0.4)',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.2)'
+              }}
+              aria-label={`Go to slide ${idx + 1}`}
+            />
+          ))}
+        </div>
+      )}
 
-          {/* Search bar — prominent at top like reference */}
-          <form onSubmit={onSubmit} style={{ marginBottom: '32px' }}>
+      {/* Content */}
+      <div className="ec-container" style={{
+        position: 'relative',
+        zIndex: 10,
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        textAlign: 'center',
+        padding: '0 20px'
+      }}>
+
+        {/* TOP SECTION: Search + Buttons */}
+        <div style={{
+          marginTop: '120px', // A little below the top
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '32px',
+          width: '100%',
+          zIndex: 20,
+        }}>
+          {/* Search bar - Adaptive width, centered, focus-based opacity */}
+          <form
+            onSubmit={onSubmit}
+            style={{
+              minWidth: '300px',
+              transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)',
+              opacity: isFocused ? 1 : 0.8,
+            }}
+            className="w-[90vw] md:w-[60vw] max-w-[1200px]"
+          >
             <div style={{
               position: 'relative',
-              background: 'rgba(255,255,255,0.95)',
-              borderRadius: '4px',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.20)',
+              background: isFocused ? '#ffffff' : 'rgba(255,255,255,0.12)',
+              backdropFilter: isFocused ? 'none' : 'blur(24px)',
+              borderRadius: '12px',
+              boxShadow: isFocused ? '0 12px 48px rgba(0,0,0,0.3)' : '0 8px 32px rgba(0,0,0,0.2)',
               display: 'flex',
               alignItems: 'center',
               overflow: 'hidden',
+              padding: '1px',
+              border: `1px solid ${isFocused ? '#ffffff' : 'rgba(255,255,255,0.4)'}`,
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)'
             }}>
-              <SearchIcon style={{ position: 'absolute', left: '16px', width: '18px', height: '18px', color: '#999999', pointerEvents: 'none', flexShrink: 0 }} />
+              <button
+                type="submit"
+                style={{
+                  position: 'absolute',
+                  left: '12px',
+                  width: '36px',
+                  height: '36px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  color: isFocused ? '#111111' : '#ffffff',
+                  zIndex: 20,
+                  transition: 'color 0.3s ease'
+                }}
+                aria-label="Search"
+              >
+                <SearchIcon style={{ width: '18px', height: '18px' }} />
+              </button>
               <input
                 ref={inputRef}
                 value={query}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search products, collections..."
+                placeholder="Search premium lifestyle essentials..."
+                className={`w-full bg-transparent py-2.5 text-sm outline-none border-none font-poppins transition-colors duration-300 ${isFocused ? 'text-neutral-900 placeholder:text-neutral-500' : 'text-white placeholder:text-neutral-300'}`}
                 style={{
-                  width: '100%',
-                  background: 'transparent',
-                  padding: '16px 120px 16px 48px',
-                  fontSize: '15px',
-                  color: '#111111',
-                  fontFamily: "'Poppins', sans-serif",
-                  outline: 'none',
-                  border: 'none',
+                  paddingLeft: '52px',
+                  paddingRight: query ? '44px' : '16px',
                 }}
               />
               {query && (
                 <button
                   type="button"
                   onClick={clear}
-                  style={{ position: 'absolute', right: '100px', padding: '8px', color: '#999999', background: 'none', border: 'none', cursor: 'pointer' }}
+                  style={{
+                    position: 'absolute',
+                    right: '8px',
+                    padding: '6px',
+                    color: isFocused ? '#111111' : '#ffffff',
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    zIndex: 20,
+                    transition: 'color 0.3s ease'
+                  }}
                 >
                   <X style={{ width: '16px', height: '16px' }} />
                 </button>
               )}
-              <button
-                type="submit"
-                disabled={!query.trim()}
-                style={{
-                  position: 'absolute',
-                  right: '8px',
-                  padding: '8px 20px',
-                  background: '#111111',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '4px',
-                  fontSize: '12px',
-                  fontWeight: 700,
-                  fontFamily: "'Poppins', sans-serif",
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.08em',
-                  cursor: query.trim() ? 'pointer' : 'not-allowed',
-                  opacity: query.trim() ? 1 : 0.5,
-                  transition: 'opacity 0.2s',
-                }}
-              >
-                Search
-              </button>
             </div>
           </form>
 
-          {/* Quick category chips */}
-          {topCategories.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: '8px', marginBottom: '40px' }}>
-              {topCategories.map((c) => (
-                <Link
-                  key={c.id}
-                  href={`/e-commerce/${encodeURIComponent(c.slug || c.name)}`}
-                  style={{
-                    borderRadius: '4px',
-                    padding: '6px 16px',
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.08em',
-                    border: '1px solid rgba(255,255,255,0.6)',
-                    color: '#ffffff',
-                    background: 'rgba(255,255,255,0.12)',
-                    backdropFilter: 'blur(4px)',
-                    textDecoration: 'none',
-                    transition: 'background 0.15s, border-color 0.15s',
-                    fontFamily: "'Poppins', sans-serif",
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.25)'; (e.currentTarget as HTMLElement).style.borderColor = '#ffffff'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.12)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.6)'; }}
-                >
-                  {c.name}
-                </Link>
-              ))}
-            </div>
-          )}
-
-          {/* Hero text */}
-          <h1 style={{
-            fontFamily: "'Poppins', sans-serif",
-            fontSize: 'clamp(32px, 6vw, 64px)',
-            fontWeight: 800,
-            color: '#ffffff',
-            lineHeight: 1.1,
-            letterSpacing: '-0.02em',
-            marginBottom: '16px',
-            textShadow: '0 2px 16px rgba(0,0,0,0.3)',
-          }}>
-            Refining the Art of <em style={{ fontStyle: 'italic', fontWeight: 400 }}>Lifestyle</em>
-          </h1>
-          <p style={{ color: 'rgba(255,255,255,0.85)', fontSize: '15px', lineHeight: 1.6, maxWidth: '520px', margin: '0 auto 36px', fontFamily: "'Poppins', sans-serif" }}>
-
-          </p>
-
           {/* CTAs */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '20px',
+            transition: 'all 0.4s ease',
+            opacity: isFocused ? 0.3 : 1, // Dim buttons when focused
+            transform: isFocused ? 'scale(0.98)' : 'scale(1)',
+          }}>
             <Link href="/e-commerce/products" style={{
-              padding: '14px 32px',
-              background: '#111111',
-              color: '#ffffff',
-              borderRadius: '4px',
+              padding: '12px 36px',
+              background: '#ffffff',
+              color: '#111111',
+              borderRadius: '8px',
               fontSize: '12px',
-              fontWeight: 700,
-              fontFamily: "'Poppins', sans-serif",
+              fontWeight: 800,
+              fontFamily: "var(--font-poppins), sans-serif",
               textTransform: 'uppercase',
-              letterSpacing: '0.12em',
+              letterSpacing: '0.15em',
               textDecoration: 'none',
-              transition: 'opacity 0.2s',
+              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              boxShadow: '0 8px 24px rgba(0,0,0,0.15)'
             }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.opacity = '0.85'}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.opacity = '1'}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.background = '#f8f8f8';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(-4px)';
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 12px 32px rgba(0,0,0,0.2)';
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.background = '#ffffff';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 8px 24px rgba(0,0,0,0.15)';
+              }}
             >
               Shop Now
             </Link>
-            <Link
-              href="/e-commerce/categories"
-              style={{
-                padding: '14px 32px',
-                background: 'rgba(255,255,255,0.15)',
-                color: '#ffffff',
-                border: '1px solid rgba(255,255,255,0.6)',
-                borderRadius: '4px',
-                fontSize: '12px',
-                fontWeight: 700,
-                fontFamily: "'Poppins', sans-serif",
-                textTransform: 'uppercase',
-                letterSpacing: '0.12em',
-                textDecoration: 'none',
-                backdropFilter: 'blur(4px)',
-                transition: 'background 0.2s',
+            <Link href="/e-commerce/products?category=all" style={{
+              padding: '12px 36px',
+              background: 'rgba(255,255,255,0.1)',
+              backdropFilter: 'blur(12px)',
+              color: '#ffffff',
+              borderRadius: '8px',
+              fontSize: '12px',
+              fontWeight: 800,
+              fontFamily: "var(--font-poppins), sans-serif",
+              textTransform: 'uppercase',
+              letterSpacing: '0.15em',
+              textDecoration: 'none',
+              border: '1px solid rgba(255,255,255,0.3)',
+              transition: 'all 0.3s ease'
+            }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.2)';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(-4px)';
               }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.25)'}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.15)'}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.1)';
+                (e.currentTarget as HTMLElement).style.transform = 'translateY(0)';
+              }}
             >
               Collections
             </Link>
           </div>
         </div>
+
+        {/* CENTER SECTION: Hero Text */}
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: (!isMobile && textPosition.includes('left')) ? 'flex-start' : 
+                      (!isMobile && textPosition.includes('right')) ? 'flex-end' : 'center',
+          justifyContent: (!isMobile && textPosition.includes('top')) ? 'flex-start' : 
+                          (!isMobile && textPosition.includes('bottom')) ? 'flex-end' : 'center',
+          textAlign: (!isMobile && textPosition.includes('left')) ? 'left' : 
+                     (!isMobile && textPosition.includes('right')) ? 'right' : 'center',
+          width: '100%',
+          marginTop: 0, // Remove negative margin to prevent overlap with buttons
+          paddingTop: !isMobile && textPosition.includes('top') ? '60px' : '0',
+          paddingBottom: !isMobile ? '90px' : '0',
+          paddingLeft: !isMobile ? '32.5px' : '20px',
+          paddingRight: !isMobile ? '32.5px' : '20px',
+          zIndex: 10,
+          pointerEvents: 'none'
+        }}>
+          {showTitle && (
+            <div style={{ maxWidth: '900px', pointerEvents: 'auto' }}>
+              <h1 style={{
+                fontFamily: "var(--font-poppins), sans-serif",
+                fontSize: `clamp(48px, 10vw, ${fontSize}px)`,
+                fontWeight: 500,
+                color: hexToRgba(textColor || '#ffffff', 0.9),
+                lineHeight: 1.0,
+                letterSpacing: '-0.04em',
+                textShadow: '0 8px 48px rgba(0,0,0,0.5)',
+                whiteSpace: 'pre-line',
+                textTransform: 'none',
+                margin: 0
+              }}>
+                {initialTitle}
+              </h1>
+            </div>
+          )}
+        </div>
       </div>
+
     </section>
   );
 }

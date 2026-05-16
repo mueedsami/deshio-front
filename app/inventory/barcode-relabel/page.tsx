@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Barcode as BarcodeIcon, CheckCircle2, History, Loader2, Package, Printer, RefreshCw, ShieldCheck } from 'lucide-react';
 import Barcode from 'react-barcode';
+import Header from '@/components/Header';
+import Sidebar from '@/components/Sidebar';
 import barcodeService from '@/services/barcodeService';
 import barcodeRelabelService, { ReplacementBarcodeResult } from '@/services/barcodeRelabelService';
 import {
@@ -27,6 +29,8 @@ function getErrorMessage(error: any) {
 }
 
 export default function BarcodeRelabelPage() {
+  const [darkMode, setDarkMode] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [lookupBarcode, setLookupBarcode] = useState('');
   const [batchNumber, setBatchNumber] = useState('');
   const [productId, setProductId] = useState('');
@@ -190,8 +194,13 @@ export default function BarcodeRelabelPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-gray-950 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
+    <div className={darkMode ? 'dark' : ''}>
+      <div className="flex h-screen bg-slate-50 dark:bg-gray-950">
+        <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+          <main className="flex-1 overflow-auto p-6">
+            <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex flex-col gap-2">
           <div className="inline-flex items-center gap-2 text-sm font-semibold text-blue-700 dark:text-blue-300">
             <ShieldCheck className="w-4 h-4" /> Lost Sticker Recovery
@@ -334,6 +343,9 @@ export default function BarcodeRelabelPage() {
               </div>
             </div>
           </div>
+        </div>
+            </div>
+          </main>
         </div>
       </div>
     </div>

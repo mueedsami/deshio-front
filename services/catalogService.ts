@@ -482,8 +482,8 @@ const normalizeCategory = (category: any): ProductCategory | null => {
     id,
     name,
     description: normalizeString(category.description || ''),
-    image_url: toAbsoluteAssetUrl(category.image_url || category.image || undefined),
-    banner_url: toAbsoluteAssetUrl((category as any).banner_url || (category as any).banner || undefined),
+    image_url: toAbsoluteAssetUrl(category.image_url || category.thumbnail_url || category.thumbnail_image || category.image || undefined),
+    banner_url: toAbsoluteAssetUrl((category as any).banner_url || (category as any).banner_image || (category as any).banner || undefined),
     product_count: toNumber(category.product_count, 0),
     parent_id: category.parent_id ?? null,
     slug: category.slug || name.toLowerCase().replace(/\s+/g, '-'),
@@ -890,8 +890,9 @@ const normalizeCatalogCategoryTree = (raw: any): CatalogCategory | null => {
       raw.image ||
       raw.image_url ||
       raw.image_path ||
-      raw.thumbnail ||
       raw.thumbnail_url ||
+      raw.thumbnail_image ||
+      raw.thumbnail ||
       raw.photo ||
       raw.photo_url ||
       raw.media_url ||
@@ -905,8 +906,9 @@ const normalizeCatalogCategoryTree = (raw: any): CatalogCategory | null => {
       raw.image_url ||
       raw.image ||
       raw.image_path ||
-      raw.thumbnail ||
       raw.thumbnail_url ||
+      raw.thumbnail_image ||
+      raw.thumbnail ||
       raw.photo ||
       raw.photo_url ||
       raw.media_url ||
@@ -917,14 +919,16 @@ const normalizeCatalogCategoryTree = (raw: any): CatalogCategory | null => {
       undefined
     ) || undefined,
     banner: toAbsoluteAssetUrl(
-      raw.banner ||
       raw.banner_url ||
+      raw.banner_image ||
+      raw.banner ||
       raw.banner_path ||
       raw.category_banner ||
       undefined
     ) || undefined,
     banner_url: toAbsoluteAssetUrl(
       raw.banner_url ||
+      raw.banner_image ||
       raw.banner ||
       raw.banner_path ||
       raw.category_banner ||

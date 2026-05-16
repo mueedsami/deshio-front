@@ -22,8 +22,12 @@ export default function AddCategoryDialog({
 }: AddCategoryDialogProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState("");
+  const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState("");
+  const [bannerPreview, setBannerPreview] = useState("");
+  const [removeThumbnailFlag, setRemoveThumbnailFlag] = useState(false);
+  const [removeBannerFlag, setRemoveBannerFlag] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [parentId, setParentId] = useState<number | null>(initialParentId ?? null);
   const [showParentSelector, setShowParentSelector] = useState(false);
@@ -34,14 +38,22 @@ export default function AddCategoryDialog({
     if (editCategory) {
       setTitle(editCategory.title);
       setDescription(editCategory.description || "");
-      setImageFile(null);
-      setImagePreview("");
+      setThumbnailFile(null);
+      setBannerFile(null);
+      setThumbnailPreview("");
+      setBannerPreview("");
+      setRemoveThumbnailFlag(false);
+      setRemoveBannerFlag(false);
       setParentId(initialParentId ?? null);
     } else {
       setTitle("");
       setDescription("");
-      setImageFile(null);
-      setImagePreview("");
+      setThumbnailFile(null);
+      setBannerFile(null);
+      setThumbnailPreview("");
+      setBannerPreview("");
+      setRemoveThumbnailFlag(false);
+      setRemoveBannerFlag(false);
       setParentId(initialParentId ?? null);
     }
   }, [editCategory, open, initialParentId]);
@@ -54,11 +66,10 @@ export default function AddCategoryDialog({
 
   useEffect(() => {
     return () => {
-      if (imagePreview && imagePreview.startsWith('blob:')) {
-        URL.revokeObjectURL(imagePreview);
-      }
+      if (thumbnailPreview && thumbnailPreview.startsWith('blob:')) URL.revokeObjectURL(thumbnailPreview);
+      if (bannerPreview && bannerPreview.startsWith('blob:')) URL.revokeObjectURL(bannerPreview);
     };
-  }, [imagePreview]);
+  }, [thumbnailPreview, bannerPreview]);
 
   const loadCategories = async () => {
     try {
@@ -176,13 +187,36 @@ export default function AddCategoryDialog({
     });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'thumbnail' | 'banner') => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
-    setImageFile(file);
+
     const previewUrl = URL.createObjectURL(file);
-    setImagePreview(previewUrl);
+    if (type === 'thumbnail') {
+      if (thumbnailPreview.startsWith('blob:')) URL.revokeObjectURL(thumbnailPreview);
+      setThumbnailFile(file);
+      setThumbnailPreview(previewUrl);
+      setRemoveThumbnailFlag(false);
+    } else {
+      if (bannerPreview.startsWith('blob:')) URL.revokeObjectURL(bannerPreview);
+      setBannerFile(file);
+      setBannerPreview(previewUrl);
+      setRemoveBannerFlag(false);
+    }
+  };
+
+  const clearImage = (type: 'thumbnail' | 'banner') => {
+    if (type === 'thumbnail') {
+      if (thumbnailPreview.startsWith('blob:')) URL.revokeObjectURL(thumbnailPreview);
+      setThumbnailFile(null);
+      setThumbnailPreview('');
+      setRemoveThumbnailFlag(true);
+    } else {
+      if (bannerPreview.startsWith('blob:')) URL.revokeObjectURL(bannerPreview);
+      setBannerFile(null);
+      setBannerPreview('');
+      setRemoveBannerFlag(true);
+    }
   };
 
   const handleSaveClick = () => {
@@ -199,8 +233,17 @@ export default function AddCategoryDialog({
     if (parentId !== null) {
       formData.append('parent_id', String(parentId));
     }
-    if (imageFile) {
-      formData.append('image', imageFile);
+    if (thumbnailFile) {
+      formData.append('thumbnail_image', thumbnailFile);
+    }
+    if (bannerFile) {
+      formData.append('banner_image', bannerFile);
+    }
+    if (removeThumbnailFlag) {
+      formData.append('remove_thumbnail', '1');
+    }
+    if (removeBannerFlag) {
+      formData.append('remove_banner', '1');
     }
 
     onSave(formData);
@@ -208,8 +251,12 @@ export default function AddCategoryDialog({
     // Reset form
     setTitle("");
     setDescription("");
-    setImageFile(null);
-    setImagePreview("");
+    setThumbnailFile(null);
+    setBannerFile(null);
+    setThumbnailPreview("");
+    setBannerPreview("");
+    setRemoveThumbnailFlag(false);
+    setRemoveBannerFlag(false);
     setParentId(null);
     setExpandedCategories(new Set());
   };
@@ -292,30 +339,48 @@ export default function AddCategoryDialog({
             </div>
           </div>
 
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-gray-900 dark:text-white">Upload Image</label>
-            <input 
-              type="file" 
-              accept="image/*" 
-              onChange={handleImageUpload}
-              className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-200 dark:file:bg-gray-700 file:text-gray-700 dark:file:text-gray-300" 
-            />
-
-            {imagePreview && imagePreview.trim() !== '' && (
-              <img 
-                src={imagePreview} 
-                alt="Preview" 
-                className="w-full h-32 object-cover rounded border border-gray-200 dark:border-gray-700 mt-2" 
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-white">Thumbnail Image</label>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Used in category cards, menus, and homepage tiles.</p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => handleImageUpload(e, 'thumbnail')}
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-200 dark:file:bg-gray-700 file:text-gray-700 dark:file:text-gray-300"
               />
-            )}
+              {(thumbnailPreview || (!removeThumbnailFlag && (editCategory?.thumbnail_url || editCategory?.image_url))) && (
+                <div className="relative">
+                  <img
+                    src={thumbnailPreview || editCategory?.thumbnail_url || editCategory?.image_url || ''}
+                    alt="Category thumbnail"
+                    className="w-full h-32 object-cover rounded border border-gray-200 dark:border-gray-700 mt-2"
+                  />
+                  <button type="button" onClick={() => clearImage('thumbnail')} className="absolute right-2 top-4 rounded bg-white/90 px-2 py-1 text-xs font-semibold text-red-600 shadow">Remove</button>
+                </div>
+              )}
+            </div>
 
-            {!imagePreview && editCategory?.image_url && editCategory.image_url.trim() !== '' && (
-              <img 
-                src={editCategory.image_url} 
-                alt="Current image" 
-                className="w-full h-32 object-cover rounded border border-gray-200 dark:border-gray-700 mt-2" 
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-gray-900 dark:text-white">Banner Image</label>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Used at the top of the public category page.</p>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => handleImageUpload(e, 'banner')}
+                className="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 dark:text-white file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:bg-gray-200 dark:file:bg-gray-700 file:text-gray-700 dark:file:text-gray-300"
               />
-            )}
+              {(bannerPreview || (!removeBannerFlag && editCategory?.banner_url)) && (
+                <div className="relative">
+                  <img
+                    src={bannerPreview || editCategory?.banner_url || ''}
+                    alt="Category banner"
+                    className="w-full h-36 object-cover rounded border border-gray-200 dark:border-gray-700 mt-2"
+                  />
+                  <button type="button" onClick={() => clearImage('banner')} className="absolute right-2 top-4 rounded bg-white/90 px-2 py-1 text-xs font-semibold text-red-600 shadow">Remove</button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

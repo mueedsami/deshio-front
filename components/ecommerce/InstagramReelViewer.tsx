@@ -4,16 +4,23 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, Instagram } from 'lucide-react';
 import InstagramEmbed from './InstagramEmbed';
 
-const REEL_URLS = [
-  'https://www.instagram.com/reel/DXuLQ16DuEr/',
-  'https://www.instagram.com/reel/DXs4c_fkyfi/',
-  'https://www.instagram.com/reel/DXdbpF-kfTg/',
-  'https://www.instagram.com/reel/DXdbpF-kfTg/',
-  'https://www.instagram.com/reel/DXOALPBDArO/'
-];
+interface InstagramReelViewerProps {
+  urls: string[];
+  title?: string;
+  subtitle?: string;
+  profileUrl?: string;
+  profileLabel?: string;
+}
 
-export default function InstagramReelViewer() {
-  const [activeIndex, setActiveIndex] = useState(2); // Start with middle
+export default function InstagramReelViewer({
+  urls,
+  title = 'Instagram Reels',
+  subtitle = '',
+  profileUrl = 'https://www.instagram.com/Deshio_bd/',
+  profileLabel = 'Follow @Deshio_bd',
+}: InstagramReelViewerProps) {
+  const reelUrls = (urls || []).map((url) => url.trim()).filter(Boolean);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [carouselHeight, setCarouselHeight] = useState<number>(700);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -21,7 +28,11 @@ export default function InstagramReelViewer() {
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
   const prev = () => setActiveIndex((prev) => (prev > 0 ? prev - 1 : prev));
-  const next = () => setActiveIndex((prev) => (prev < REEL_URLS.length - 1 ? prev + 1 : prev));
+  const next = () => setActiveIndex((prev) => (prev < reelUrls.length - 1 ? prev + 1 : prev));
+
+  useEffect(() => {
+    setActiveIndex((prev) => Math.min(prev, Math.max(0, reelUrls.length - 1)));
+  }, [reelUrls.length]);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
@@ -81,6 +92,8 @@ export default function InstagramReelViewer() {
     return () => clearTimeout(t);
   }, [recalcHeight]);
 
+  if (reelUrls.length === 0) return null;
+
   return (
     <section style={{ background: '#ffffff', padding: '64px 0', borderTop: '1px solid rgba(0,0,0,0.08)' }}>
       <div className="ec-container mb-12">
@@ -95,16 +108,18 @@ export default function InstagramReelViewer() {
             color: '#111111',
             margin: 0,
           }}>
-            Culture in Motion
+            {title}
           </h2>
           <div style={{ height: '1px', flex: 1, maxWidth: '80px', background: '#111111' }} />
         </div>
         <div style={{ textAlign: 'center', maxWidth: '600px', margin: '0 auto 40px' }}>
-          <p style={{ color: '#666666', fontSize: '14px', lineHeight: 1.6, fontFamily: "'Poppins', sans-serif", margin: 0 }}>
-            Explore our latest drops, community styling, and behind-the-scenes highlights straight from our studio.
-          </p>
+          {subtitle && (
+            <p style={{ color: '#666666', fontSize: '14px', lineHeight: 1.6, fontFamily: "'Poppins', sans-serif", margin: 0 }}>
+              {subtitle}
+            </p>
+          )}
           <a
-            href="https://www.instagram.com/Deshio_bd/"
+            href={profileUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -124,7 +139,7 @@ export default function InstagramReelViewer() {
             }}
           >
             <Instagram size={14} />
-            <span>Follow @Deshio_bd</span>
+            <span>{profileLabel}</span>
           </a>
         </div>
       </div>
@@ -166,7 +181,7 @@ export default function InstagramReelViewer() {
           </button>
           <button
             onClick={next}
-            disabled={activeIndex === REEL_URLS.length - 1}
+            disabled={activeIndex === reelUrls.length - 1}
             style={{
               width: '48px',
               height: '48px',
@@ -179,8 +194,8 @@ export default function InstagramReelViewer() {
               justifyContent: 'center',
               transition: 'all 0.2s',
               cursor: 'pointer',
-              opacity: activeIndex === REEL_URLS.length - 1 ? 0 : 1,
-              pointerEvents: activeIndex === REEL_URLS.length - 1 ? 'none' : 'auto',
+              opacity: activeIndex === reelUrls.length - 1 ? 0 : 1,
+              pointerEvents: activeIndex === reelUrls.length - 1 ? 'none' : 'auto',
             }}
           >
             <ChevronRight size={20} />
@@ -189,7 +204,7 @@ export default function InstagramReelViewer() {
 
         {/* Carousel Items */}
         <div className="relative w-full max-w-5xl mx-auto h-full flex items-center justify-center perspective-1000">
-          {REEL_URLS.map((url, index) => {
+          {reelUrls.map((url, index) => {
             const diff = index - activeIndex;
             const isActive = diff === 0;
             const isPrev = diff === -1;
@@ -271,7 +286,7 @@ export default function InstagramReelViewer() {
 
       {/* Pagination Dots */}
       <div className="flex justify-center gap-3 mt-12 pb-4">
-        {REEL_URLS.map((_, i) => (
+        {reelUrls.map((_, i) => (
           <button
             key={i}
             onClick={() => setActiveIndex(i)}

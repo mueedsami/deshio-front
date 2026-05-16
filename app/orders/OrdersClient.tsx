@@ -1309,6 +1309,7 @@ export default function OrdersDashboard() {
       { label: 'Pending', value: 'pending' },
       { label: 'Pending Assignment', value: 'pending_assignment' },
       { label: 'Assigned to Store', value: 'assigned_to_store' },
+      { label: 'Service Only', value: 'service_only' },
       { label: 'Confirmed', value: 'confirmed' },
       { label: 'Cancelled', value: 'cancelled' },
       { label: 'Returned', value: 'returned' },
@@ -1334,40 +1335,9 @@ export default function OrdersDashboard() {
       );
     }
 
-    if (dateFilter.trim()) {
-      filtered = filtered.filter((o) => {
-        let orderDate = o.date; // fallback
-        const targetDateRaw = dateFilterType === 'updated_at' ? o.updatedAt : (o.orderDateRaw || o.createdAt);
-        if (targetDateRaw) {
-          const match = String(targetDateRaw).match(/^(\d{4})-(\d{2})-(\d{2})/);
-          if (match) {
-            orderDate = `${match[3]}/${match[2]}/${match[1]}`; // DD/MM/YYYY
-          }
-        }
-        let filterDateFormatted = dateFilter;
-        if (dateFilter.includes('-') && dateFilter.split('-')[0].length === 4) {
-          const [year, month, day] = dateFilter.split('-');
-          filterDateFormatted = `${day}/${month}/${year}`;
-        }
-        return orderDate === filterDateFormatted;
-      });
-    } else if (startDate.trim() || endDate.trim()) {
-      const startStr = startDate.trim();
-      const endStr = endDate.trim();
-
-      filtered = filtered.filter((o) => {
-        const oDateStr = dateFilterType === 'updated_at' ? o.updatedAt : (o.orderDateRaw || o.createdAt);
-        if (!oDateStr) return false;
-        
-        const match = String(oDateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
-        if (!match) return true; // fallback
-        const oDateOnly = `${match[1]}-${match[2]}-${match[3]}`; // YYYY-MM-DD
-        
-        if (startStr && oDateOnly < startStr) return false;
-        if (endStr && oDateOnly > endStr) return false;
-        return true;
-      });
-    }
+    // Date filters are sent to the backend in loadOrders(). Do not run a second
+    // client-side date pass here; it can hide correct Last Updated results while
+    // the API response is already scoped by created_at/updated_at.
 
     // ✅ NEW: order type filter
     if (orderTypeFilter !== 'All Types') {
