@@ -23,37 +23,60 @@ export interface CreateEmployeePayload {
   join_date?: string;
 }
 
+export interface EmployeeQueryParams {
+  store_id?: number;
+  role?: string;
+  is_active?: boolean;
+  department?: string;
+  search?: string;
+  page?: number;
+  per_page?: number;
+}
+
+const getPaginatedPayload = (result: any) => {
+  if (result?.data?.data && Array.isArray(result.data.data)) return result.data;
+  if (result?.data && Array.isArray(result.data) && (result.current_page || result.last_page)) return result;
+  return null;
+};
+
+const extractEmployeeList = (result: any): Employee[] => {
+  if (Array.isArray(result)) return result;
+
+  if (result?.data && Array.isArray(result.data)) {
+    return result.data;
+  }
+
+  const paginatedPayload = getPaginatedPayload(result);
+  if (paginatedPayload) return paginatedPayload.data;
+
+  return [];
+};
+
 const employeeService = {
   /** Get all employees */
-  async getAll(params?: { 
-    store_id?: number; 
-    role?: string; 
-    is_active?: boolean;
-    department?: string;
-  }): Promise<Employee[]> {
+  async getAll(params?: EmployeeQueryParams): Promise<Employee[]> {
     try {
-      const response = await axiosInstance.get('/employees', { params });
+      const firstPageParams = { ...params, per_page: params?.per_page ?? 100, page: 1 };
+      const response = await axiosInstance.get('/employees', { params: firstPageParams });
       const result = response.data;
-      
-      // 1. Direct array? (e.g. unpaginated direct return)
-      if (Array.isArray(result)) return result;
 
-      // 2. { success: true, data: [...] } ?
-      if (result && result.data && Array.isArray(result.data)) {
-        return result.data;
+      const paginatedPayload = getPaginatedPayload(result);
+      if (!paginatedPayload) {
+        return extractEmployeeList(result);
       }
 
-      // 3. { success: true, data: { data: [...paginated] } } ?
-      if (result && result.data && result.data.data && Array.isArray(result.data.data)) {
-        return result.data.data;
-      }
-      
-      // 4. { data: [...], current_page: ... } ? (direct paginator)
-      if (result && Array.isArray(result.data)) {
-         return result.data;
+      const employees = [...paginatedPayload.data];
+      const lastPage = Number(paginatedPayload.last_page || 1);
+      const currentPage = Number(paginatedPayload.current_page || 1);
+
+      for (let page = currentPage + 1; page <= lastPage; page += 1) {
+        const nextResponse = await axiosInstance.get('/employees', {
+          params: { ...firstPageParams, page },
+        });
+        employees.push(...extractEmployeeList(nextResponse.data));
       }
 
-      return [];
+      return employees;
     } catch (error: any) {
       console.error('Get employees error:', error);
       throw new Error(error.response?.data?.message || 'Failed to fetch employees');

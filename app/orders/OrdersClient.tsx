@@ -346,7 +346,7 @@ export default function OrdersDashboard() {
   const [storeFilter, setStoreFilter] = useState<number | 'All Stores'>('All Stores');
 
   const [search, setSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState('');
+  const [dateFilter, setDateFilter] = useState(getTodayFilterValue());
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [dateFilterType, setDateFilterType] = useState<'order_date' | 'updated_at'>('order_date');
@@ -1008,7 +1008,7 @@ export default function OrdersDashboard() {
       orderNumber: order.order_number,
       orderType: order.order_type,
       orderTypeLabel: order.order_type_label ?? titleCase(order.order_type ?? ''),
-      date: new Date(order.order_date).toLocaleDateString('en-GB'),
+      date: new Date(order.order_date || order.created_at).toLocaleDateString('en-GB'),
       customer: {
         name: order.customer_name ?? order.customer?.name ?? '',
         phone: order.customer_phone ?? order.customer?.phone ?? '',
@@ -1064,19 +1064,19 @@ export default function OrdersDashboard() {
     const productsGrossSubtotal = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
     const servicesGrossSubtotal = (order.services || []).reduce((sum, s) => sum + s.price * s.quantity, 0);
     const subtotal = productsGrossSubtotal + servicesGrossSubtotal;
-    
+
     // 2. Sum of all item-level discounts
-    const totalItemDiscount = order.items.reduce((sum, item) => sum + (item.discount || 0), 0) + 
-                             (order.services || []).reduce((sum, s) => sum + (s.discount || 0), 0);
-    
+    const totalItemDiscount = order.items.reduce((sum, item) => sum + (item.discount || 0), 0) +
+      (order.services || []).reduce((sum, s) => sum + (s.discount || 0), 0);
+
     // 3. Global Order Discount
     const globalDiscount = order.discount ?? 0;
     const shipping = order.shipping ?? 0;
-    
+
     // 4. Final Total = GrossSubtotal - ItemDiscounts - GlobalDiscount + Shipping
     // Note: This logic assumes TAX_MODE=inclusive as standard for UI display here
     const total = subtotal - totalItemDiscount - globalDiscount + shipping;
-    
+
     const paid = order.amounts.paid ?? 0;
     const due = total - paid;
 
@@ -1218,7 +1218,7 @@ export default function OrdersDashboard() {
       let allOrders: any[] = [];
       const commonParams: any = {
         store_id: storeFilter === 'All Stores' ? undefined : storeFilter,
-        sort_by: dateFilterType === 'updated_at' ? 'updated_at' : 'created_at',
+        sort_by: dateFilterType === 'updated_at' ? 'updated_at' : 'order_date',
         sort_order: 'desc',
         per_page: 1000,
         date_filter_type: dateFilterType,
@@ -1250,8 +1250,8 @@ export default function OrdersDashboard() {
       }
 
       allOrders.sort((a: any, b: any) => {
-        const dateA = dateFilterType === 'updated_at' ? (a.updated_at || a.created_at) : a.created_at;
-        const dateB = dateFilterType === 'updated_at' ? (b.updated_at || b.created_at) : b.created_at;
+        const dateA = dateFilterType === 'updated_at' ? (a.updated_at || a.created_at) : (a.order_date || a.created_at);
+        const dateB = dateFilterType === 'updated_at' ? (b.updated_at || b.created_at) : (b.order_date || b.created_at);
         return new Date(dateB).getTime() - new Date(dateA).getTime();
       });
 
@@ -1596,7 +1596,7 @@ export default function OrdersDashboard() {
 
     try {
       const fullOrder = await orderService.getById(order.id);
-      
+
       const shippingAddress = (fullOrder as any).shipping_address || (fullOrder as any).delivery_address || {};
       const isIntl = !!(shippingAddress.country && shippingAddress.country.toLowerCase() !== 'bangladesh');
       const usePathaoAuto = !shippingAddress.city_id && !shippingAddress.zone_id && !shippingAddress.area_id;
@@ -2045,7 +2045,7 @@ export default function OrdersDashboard() {
 
     try {
       const response = await orderManagementService.bulkMarkAsDelivered(orderIds);
-      
+
       const successes = response.results?.success || [];
       const failures = response.results?.failed || [];
 
@@ -2137,7 +2137,7 @@ export default function OrdersDashboard() {
     try {
       const orderIds = Array.from(selectedOrders);
       const blob = await orderService.bulkExport(orderIds);
-      
+
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -2146,7 +2146,7 @@ export default function OrdersDashboard() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-      
+
       setSelectedOrders(new Set());
     } catch (error: any) {
       console.error('❌ Export error:', error);
@@ -2161,7 +2161,7 @@ export default function OrdersDashboard() {
       alert('Please select at least one order to send to Pathao.');
       return;
     }
-    
+
     // Add informative direction about the 19 per 60 sec rate limit
     if (!confirm(`Send ${selectedOrders.size} order(s) to Pathao?\n\nNote: Pathao API limits us to 19 orders per minute. This process will run in the background and evenly spread out the requests to avoid rate limits.`)) return;
 
@@ -2232,8 +2232,8 @@ export default function OrdersDashboard() {
 
           // Trigger background queue worker just in case cron isn't running
           try {
-             await axios.post('/shipments/pathao-queue-tick', { max_jobs: 5, max_time: 15 });
-          } catch (e) {}
+            await axios.post('/shipments/pathao-queue-tick', { max_jobs: 5, max_time: 15 });
+          } catch (e) { }
 
           await wait(2500); // Poll every 2.5 seconds
           summary = await shipmentService.getBulkStatus(batchCode);
@@ -2300,14 +2300,14 @@ export default function OrdersDashboard() {
 
       alert(`Bulk Send to Pathao Completed!\n\nSuccess: ${successCount}\nFailed: ${failedCount}`);
       setSelectedOrders(new Set());
-      
+
       // Update intended courier to Pathao optimistically
       try {
         if (orderIdsToSend.length > 0) {
           const idSet = new Set<number>(orderIdsToSend);
           // Process in background to not block UI
           orderIdsToSend.forEach(id => {
-            orderService.setIntendedCourier(id, 'pathao').catch(() => {});
+            orderService.setIntendedCourier(id, 'pathao').catch(() => { });
           });
           setOrders((prev) => prev.map((o) => (idSet.has(o.id) ? { ...o, intendedCourier: 'pathao' } : o)));
         }
@@ -3493,11 +3493,10 @@ export default function OrdersDashboard() {
                   <span className="text-[10px] font-bold text-gray-400 dark:text-gray-600 uppercase mr-1">Markers:</span>
                   <button
                     onClick={() => setCourierFilter('All Couriers')}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
-                      courierFilter === 'All Couriers'
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${courierFilter === 'All Couriers'
                         ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
                         : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
-                    }`}
+                      }`}
                   >
                     All
                   </button>
@@ -3505,11 +3504,10 @@ export default function OrdersDashboard() {
                     <button
                       key={c}
                       onClick={() => setCourierFilter(c)}
-                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
-                        courierFilter === c
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${courierFilter === c
                           ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
                           : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
-                      }`}
+                        }`}
                     >
                       {courierLabel(c)}
                     </button>
@@ -3522,11 +3520,10 @@ export default function OrdersDashboard() {
                 <span className="text-[10px] font-bold text-gray-400 dark:text-gray-600 uppercase mr-1">Status:</span>
                 <button
                   onClick={() => setOrderStatusFilter('All Order Status')}
-                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
-                    orderStatusFilter === 'All Order Status'
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${orderStatusFilter === 'All Order Status'
                       ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
                       : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
-                  }`}
+                    }`}
                 >
                   All
                 </button>
@@ -3534,11 +3531,10 @@ export default function OrdersDashboard() {
                   <button
                     key={t.value}
                     onClick={() => setOrderStatusFilter(t.value)}
-                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${
-                      orderStatusFilter === t.value
+                    className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-all border ${orderStatusFilter === t.value
                         ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
                         : 'bg-white text-gray-500 border-gray-100 hover:border-gray-200 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-800'
-                    }`}
+                      }`}
                   >
                     {t.label}
                   </button>
@@ -3560,17 +3556,17 @@ export default function OrdersDashboard() {
 
                 <div className="flex flex-wrap items-center gap-2">
                   <select
-                      value={storeFilter}
-                      onChange={(e) => setStoreFilter(e.target.value === 'All Stores' ? 'All Stores' : Number(e.target.value))}
-                      className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-1 focus:ring-black dark:focus:ring-white min-w-[140px]"
-                    >
-                      <option value="All Stores">All Stores</option>
-                      {stores.map((s) => (
-                        <option key={s.id} value={s.id}>
-                          {s.name}
-                        </option>
-                      ))}
-                    </select>
+                    value={storeFilter}
+                    onChange={(e) => setStoreFilter(e.target.value === 'All Stores' ? 'All Stores' : Number(e.target.value))}
+                    className="px-3 py-2 text-sm border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-1 focus:ring-black dark:focus:ring-white min-w-[140px]"
+                  >
+                    <option value="All Stores">All Stores</option>
+                    {stores.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
 
                   <select
                     value={paymentStatusFilter}
@@ -3882,16 +3878,16 @@ export default function OrdersDashboard() {
                         <CheckCircle className="w-3 h-3 text-green-500" />
                         Marking Delivered {bulkDeliverProgress.current}/{bulkDeliverProgress.total}
                       </p>
-                      <button 
+                      <button
                         onClick={() => setBulkDeliverProgress(prev => ({ ...prev, show: false }))}
                         className="text-[10px] text-gray-500 hover:text-black dark:hover:text-white"
                       >
                         <X className="w-3 h-3" />
                       </button>
                     </div>
-                    
+
                     <div className="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-1.5 mb-2 overflow-hidden">
-                      <div 
+                      <div
                         className="bg-green-600 h-1.5 transition-all duration-500 rounded-full"
                         style={{ width: `${bulkDeliverProgress.total > 0 ? (bulkDeliverProgress.current / bulkDeliverProgress.total) * 100 : 0}%` }}
                       ></div>
@@ -4399,7 +4395,7 @@ export default function OrdersDashboard() {
                   <Truck className="h-5 w-5 flex-shrink-0" />
                   <span>{hasMarker ? 'Update Marker' : 'Add Marker'}</span>
                 </button>
-                
+
                 {hasMarker && (
                   <button
                     onClick={async (e) => {
@@ -4446,30 +4442,30 @@ export default function OrdersDashboard() {
           })()}
 
           <button
-              onClick={(e) => {
-                e.stopPropagation();
+            onClick={(e) => {
+              e.stopPropagation();
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              if (order) handleRevertAssignment(order.id);
+            }}
+            disabled={(() => {
+              const order = filteredOrders.find((o) => o.id === activeMenu);
+              return order ? isSingleLoading(order.id, 'revert') : false;
+            })()}
+            className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+          >
+            <RotateCcw className="h-5 w-5 flex-shrink-0" />
+            <span>
+              {(() => {
                 const order = filteredOrders.find((o) => o.id === activeMenu);
-                if (order) handleRevertAssignment(order.id);
-              }}
-              disabled={(() => {
-                const order = filteredOrders.find((o) => o.id === activeMenu);
-                return order ? isSingleLoading(order.id, 'revert') : false;
+                return order && isSingleLoading(order.id, 'revert') ? 'Reverting...' : 'Revert Assignment';
               })()}
-              className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
-            >
-              <RotateCcw className="h-5 w-5 flex-shrink-0" />
-              <span>
-                {(() => {
-                  const order = filteredOrders.find((o) => o.id === activeMenu);
-                  return order && isSingleLoading(order.id, 'revert') ? 'Reverting...' : 'Revert Assignment';
-                })()}
-              </span>
-            </button>
+            </span>
+          </button>
 
           {(() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
             if (!order) return null;
-            
+
             const canMarkDelivered =
               (order.status === 'confirmed' || order.fulfillmentStatus === 'fulfilled') &&
               order.status !== 'delivered';
@@ -5936,9 +5932,8 @@ export default function OrdersDashboard() {
                           <span className="font-bold text-black dark:text-white flex-shrink-0">{detail.orderNumber}</span>
                           <span className="text-gray-500 truncate">{detail.message}</span>
                         </div>
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${
-                          detail.status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-                        }`}>
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${detail.status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                          }`}>
                           {detail.status === 'success' ? 'SENT' : 'FAIL'}
                         </span>
                       </div>
