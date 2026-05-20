@@ -23,9 +23,9 @@ export const toAbsoluteAssetUrl = (value: any): string => {
 
   // Determine backend base URL from environment
   // Priority: NEXT_PUBLIC_BACKEND_URL -> BASE_URL -> derived from API_URL -> derived from NEXT_PUBLIC_BASE_URL
-  const backendEnv = (process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BASE_URL || '').replace(/\/$/, '');
-  const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/$/, '');
-  const appBase = (process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/$/, '');
+  const backendEnv = String(process.env.NEXT_PUBLIC_BACKEND_URL || process.env.BASE_URL || '').trim().replace(/\/$/, '');
+  const apiBase = String(process.env.NEXT_PUBLIC_API_URL || '').trim().replace(/\/$/, '');
+  const appBase = String(process.env.NEXT_PUBLIC_BASE_URL || '').trim().replace(/\/$/, '');
 
   const backendBase =
     backendEnv ||

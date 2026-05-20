@@ -139,6 +139,11 @@ export default function AddEditProductPage({
   const [applyCommonBrand, setApplyCommonBrand] = useState<boolean>(false);
   const [commonSaving, setCommonSaving] = useState<boolean>(false);
 
+  // SKU split: move selected products from this SKU group to a new/existing SKU
+  const [skuUpdateValue, setSkuUpdateValue] = useState<string>('');
+  const [skuUpdateProductIds, setSkuUpdateProductIds] = useState<number[]>([]);
+  const [skuUpdateSaving, setSkuUpdateSaving] = useState<boolean>(false);
+
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
@@ -288,6 +293,11 @@ export default function AddEditProductPage({
     if (!productId) return;
     fetchSkuGroupByProductId(productId);
   }, [isEditMode, productId]);
+
+  useEffect(() => {
+    const visibleIds = new Set(skuGroupProducts.map((p) => p.id));
+    setSkuUpdateProductIds((prev) => prev.filter((id) => visibleIds.has(id)));
+  }, [skuGroupProducts]);
 
   /**
    * Normalize category tree so sub-categories always render.
@@ -615,6 +625,58 @@ export default function AddEditProductPage({
       setToast({ message: error?.message || 'Failed to update common info', type: 'error' });
     } finally {
       setCommonSaving(false);
+    }
+  };
+
+
+  const toggleSkuProductSelection = (id: number) => {
+    setSkuUpdateProductIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleAllSkuProductSelection = () => {
+    const allIds = skuGroupProducts.map((p) => p.id);
+    setSkuUpdateProductIds((prev) =>
+      prev.length === allIds.length ? [] : allIds
+    );
+  };
+
+  const applySkuUpdate = async () => {
+    const newSku = String(skuUpdateValue || '').trim();
+
+    if (!newSku) {
+      setToast({ message: 'Enter the new SKU first.', type: 'warning' });
+      return;
+    }
+
+    if (skuUpdateProductIds.length === 0) {
+      setToast({ message: 'Select at least one product below.', type: 'warning' });
+      return;
+    }
+
+    try {
+      setSkuUpdateSaving(true);
+
+      for (const id of skuUpdateProductIds) {
+        await productService.update(id, { sku: newSku });
+      }
+
+      const updatedCurrentProduct = skuUpdateProductIds.some((id) => String(id) === String(productId));
+      setToast({
+        message: `Updated SKU for ${skuUpdateProductIds.length} product(s).`,
+        type: 'success',
+      });
+      setSkuUpdateProductIds([]);
+      setSkuUpdateValue('');
+
+      if (productId) await fetchSkuGroupByProductId(productId);
+      if (updatedCurrentProduct) await fetchProduct();
+    } catch (error: any) {
+      console.error('SKU update failed:', error);
+      setToast({ message: error?.message || 'Failed to update SKU', type: 'error' });
+    } finally {
+      setSkuUpdateSaving(false);
     }
   };
 
@@ -1817,6 +1879,52 @@ export default function AddEditProductPage({
                             )}
                           </div>
 
+                          <div className="mb-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <div className="font-semibold text-gray-900 dark:text-white">Update SKU for Selected Products</div>
+                                <div className="text-xs text-gray-600 dark:text-gray-400">
+                                  Enter a SKU, select products from the list below, then apply it to split those products into another SKU group.
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={applySkuUpdate}
+                                disabled={skuUpdateSaving || skuUpdateProductIds.length === 0}
+                                className="shrink-0 px-4 py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              >
+                                {skuUpdateSaving ? (
+                                  <span className="inline-flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Applying...
+                                  </span>
+                                ) : (
+                                  'Apply SKU'
+                                )}
+                              </button>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-[1fr_auto] gap-4 items-end">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  New SKU <span className="text-red-500">*</span>
+                                </label>
+                                <input
+                                  type="text"
+                                  value={skuUpdateValue}
+                                  onChange={(e) => setSkuUpdateValue(e.target.value)}
+                                  placeholder="Enter SKU"
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                                />
+                              </div>
+
+                              <div className="text-sm text-gray-700 dark:text-gray-300">
+                                Selected: <strong>{skuUpdateProductIds.length}</strong> / {skuGroupProducts.length}
+                              </div>
+                            </div>
+                          </div>
+
                           {quickEditMode ? (
                             <div className="overflow-x-auto">
                               <div className="flex items-center justify-between mb-3">
@@ -1836,6 +1944,15 @@ export default function AddEditProductPage({
                               <table className="min-w-full text-sm">
                                 <thead>
                                   <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th className="py-3 pr-4 w-10">
+                                      <input
+                                        type="checkbox"
+                                        checked={skuGroupProducts.length > 0 && skuUpdateProductIds.length === skuGroupProducts.length}
+                                        onChange={toggleAllSkuProductSelection}
+                                        aria-label="Select all products for SKU update"
+                                        className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                      />
+                                    </th>
                                     <th className="py-3 pr-4">Image</th>
                                     <th className="py-3 pr-4">Name</th>
                                     <th className="py-3 pr-4">Suffix</th>
@@ -1860,6 +1977,15 @@ export default function AddEditProductPage({
 
                                     return (
                                       <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60 align-top">
+                                        <td className="py-3 pr-4">
+                                          <input
+                                            type="checkbox"
+                                            checked={skuUpdateProductIds.includes(p.id)}
+                                            onChange={() => toggleSkuProductSelection(p.id)}
+                                            aria-label={`Select ${p.name} for SKU update`}
+                                            className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                          />
+                                        </td>
                                         <td className="py-3 pr-4">
                                           <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
                                             <img
@@ -1939,6 +2065,15 @@ export default function AddEditProductPage({
                               <table className="min-w-full text-sm">
                                 <thead>
                                   <tr className="text-left text-gray-600 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                                    <th className="py-3 pr-4 w-10">
+                                      <input
+                                        type="checkbox"
+                                        checked={skuGroupProducts.length > 0 && skuUpdateProductIds.length === skuGroupProducts.length}
+                                        onChange={toggleAllSkuProductSelection}
+                                        aria-label="Select all products for SKU update"
+                                        className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                      />
+                                    </th>
                                     <th className="py-3 pr-4">Image</th>
                                     <th className="py-3 pr-4">Product</th>
                                     <th className="py-3 pr-4">Color</th>
@@ -1956,6 +2091,15 @@ export default function AddEditProductPage({
 
                                     return (
                                       <tr key={p.id} className="border-b border-gray-100 dark:border-gray-700/60">
+                                        <td className="py-3 pr-4">
+                                          <input
+                                            type="checkbox"
+                                            checked={skuUpdateProductIds.includes(p.id)}
+                                            onChange={() => toggleSkuProductSelection(p.id)}
+                                            aria-label={`Select ${p.name} for SKU update`}
+                                            className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
+                                          />
+                                        </td>
                                         <td className="py-3 pr-4">
                                           <div className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-700">
                                             <img

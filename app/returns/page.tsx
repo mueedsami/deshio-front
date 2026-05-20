@@ -400,13 +400,7 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
 
 // ─── Detail modal ─────────────────────────────────────────────
 interface DetailModalProps { ret: ProductReturn; onClose: () => void; onAction: () => void; }
-function DetailModal({ ret, onClose, onAction }: DetailModalProps) {
-  const [approveOpen, setApproveOpen] = useState(false);
-  const [rejectOpen, setRejectOpen] = useState(false);
-  const [processOpen, setProcessOpen] = useState(false);
-  const [refundOpen, setRefundOpen] = useState(false);
-
-  const done = () => { onAction(); onClose(); };
+function DetailModal({ ret, onClose }: DetailModalProps) {
   const isCrossStore = ret.received_at_store_id && ret.store_id && ret.received_at_store_id !== ret.store_id;
 
   return (
@@ -567,34 +561,9 @@ function DetailModal({ ret, onClose, onAction }: DetailModalProps) {
               </div>
             )}
 
-            {/* Actions */}
+            {/* Actions disabled on initiated-returns page */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="flex flex-wrap gap-2">
-                {ret.status === 'pending' && (
-                  <>
-                    <button onClick={() => setApproveOpen(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium">
-                      <Check className="w-4 h-4" /> Approve
-                    </button>
-                    <button onClick={() => setRejectOpen(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium">
-                      <X className="w-4 h-4" /> Reject
-                    </button>
-                  </>
-                )}
-                {ret.status === 'approved' && (
-                  <button onClick={() => setProcessOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium">
-                    <RefreshCcw className="w-4 h-4" /> Process Return
-                  </button>
-                )}
-                {ret.status === 'completed' && (
-                  <button onClick={() => setRefundOpen(true)}
-                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium">
-                    <DollarSign className="w-4 h-4" /> Issue Refund
-                  </button>
-                )}
-              </div>
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Workflow actions are disabled here. This page is view-only for initiated returns.</p>
               <button onClick={onClose}
                 className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
                 Close
@@ -603,11 +572,6 @@ function DetailModal({ ret, onClose, onAction }: DetailModalProps) {
           </div>
         </div>
       </div>
-
-      {approveOpen && <ApproveModal ret={ret} onClose={() => setApproveOpen(false)} onDone={done} />}
-      {rejectOpen && <RejectModal ret={ret} onClose={() => setRejectOpen(false)} onDone={done} />}
-      {processOpen && <ProcessModal ret={ret} onClose={() => setProcessOpen(false)} onDone={done} />}
-      {refundOpen && <CreateRefundModal ret={ret} onClose={() => setRefundOpen(false)} onDone={done} />}
     </>
   );
 }
@@ -628,7 +592,7 @@ export default function ReturnsPage() {
 
   // Filters
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<ReturnStatus | ''>('');
+  const [statusFilter] = useState<ReturnStatus | ''>('pending');
   const [storeFilter, setStoreFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -646,7 +610,7 @@ export default function ReturnsPage() {
     try {
       const filters: ProductReturnFilters = {
         page, per_page: PER_PAGE,
-        ...(statusFilter ? { status: statusFilter } : {}),
+        status: 'pending',
         ...(storeFilter ? { store_id: parseInt(storeFilter) } : {}),
         ...(search ? { search } : {}),
         ...(fromDate ? { from_date: fromDate } : {}),
@@ -691,8 +655,8 @@ export default function ReturnsPage() {
             <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3">
               <div className="max-w-7xl mx-auto flex items-center justify-between">
                 <div>
-                  <h1 className="text-base font-semibold text-black dark:text-white">Returns & Exchanges</h1>
-                  <p className="text-xs text-gray-500 mt-0.5">Manage product returns, quality checks and refunds</p>
+                  <h1 className="text-base font-semibold text-black dark:text-white">Initiated Returns</h1>
+                  <p className="text-xs text-gray-500 mt-0.5">View pending return and exchange requests. Workflow actions are disabled here.</p>
                 </div>
                 <button onClick={load} disabled={loading}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
@@ -732,12 +696,9 @@ export default function ReturnsPage() {
                       placeholder="Search return# or order#..."
                       className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
                   </div>
-                  <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value as any); setPage(1); }}
-                    className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white">
-                    <option value="">All Status</option>
-                    {(Object.keys(STATUS_CONFIG) as ReturnStatus[]).map(s => (
-                      <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
-                    ))}
+                  <select value={statusFilter} disabled
+                    className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 focus:outline-none">
+                    <option value="pending">Initiated Only</option>
                   </select>
                   <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setPage(1); }}
                     className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white">
@@ -759,7 +720,7 @@ export default function ReturnsPage() {
               {/* Table */}
               <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
                 <div className="bg-gray-50 dark:bg-gray-900 px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-                  <h2 className="text-xs font-semibold text-gray-900 dark:text-white uppercase tracking-wide">Returns</h2>
+                  <h2 className="text-xs font-semibold text-gray-900 dark:text-white uppercase tracking-wide">Initiated Returns</h2>
                   <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">{total}</span>
                 </div>
                 <div className="overflow-x-auto">
@@ -801,32 +762,10 @@ export default function ReturnsPage() {
                             <td className="px-3 py-2"><StatusBadge status={ret.status} /></td>
                             <td className="px-3 py-2 text-gray-500 text-[10px]">{fmtDate(ret.return_date)}</td>
                             <td className="px-3 py-2">
-                              <div className="flex items-center gap-1">
-                                <button onClick={() => setSelectedReturn(ret)}
-                                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg" title="View details">
-                                  <Eye className="w-3.5 h-3.5 text-gray-500" />
-                                </button>
-                                {ret.status === 'pending' && (
-                                  <>
-                                    <button onClick={() => setSelectedReturn(ret)}
-                                      className="p-1 text-[9px] px-2 py-0.5 bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-400 rounded-full hover:bg-green-200">
-                                      Approve
-                                    </button>
-                                  </>
-                                )}
-                                {ret.status === 'approved' && (
-                                  <button onClick={() => setSelectedReturn(ret)}
-                                    className="p-1 text-[9px] px-2 py-0.5 bg-purple-100 text-purple-700 dark:bg-purple-900/20 dark:text-purple-400 rounded-full hover:bg-purple-200">
-                                    Process
-                                  </button>
-                                )}
-                                {ret.status === 'completed' && (
-                                  <button onClick={() => setSelectedReturn(ret)}
-                                    className="p-1 text-[9px] px-2 py-0.5 bg-teal-100 text-teal-700 dark:bg-teal-900/20 dark:text-teal-400 rounded-full hover:bg-teal-200">
-                                    Refund
-                                  </button>
-                                )}
-                              </div>
+                              <button onClick={() => setSelectedReturn(ret)}
+                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg" title="View details">
+                                <Eye className="w-3.5 h-3.5 text-gray-500" />
+                              </button>
                             </td>
                           </tr>
                         );

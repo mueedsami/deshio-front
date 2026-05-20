@@ -85,6 +85,9 @@ export interface CreateReturnRequest {
     order_item_id: number;
     quantity: number;
     product_barcode_id?: number; // Support barcode ID in return items
+    unit_price?: number;
+    manual_sold_at_price?: number;
+    total_price?: number;
     reason?: string;
   }>;
   customer_notes?: string;

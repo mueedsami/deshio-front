@@ -117,7 +117,29 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     return null;
   };
 
-  const getItemUnitPrice = (item: any) => parseFloat(item?.unit_price || item?.price || item?.sale_price || '0');
+  const asNumber = (value: any, fallback = 0) => {
+    const parsed = parseFloat(String(value ?? ''));
+    return Number.isFinite(parsed) ? parsed : fallback;
+  };
+
+  const getItemListedUnitPrice = (item: any) => asNumber(item?.listed_unit_price ?? item?.unit_price ?? item?.price ?? item?.sale_price, 0);
+  const getItemSoldAtUnitPrice = (item: any) => {
+    const quantity = Math.max(1, asNumber(item?.quantity, 1));
+    const explicit = item?.manual_sold_at_price ?? item?.sold_at_unit_price ?? item?.sold_at_price;
+    if (explicit !== undefined && explicit !== null && explicit !== '') return asNumber(explicit, getItemListedUnitPrice(item));
+    if (item?.total_amount !== undefined && item?.total_amount !== null) return asNumber(item.total_amount, 0) / quantity;
+    return getItemListedUnitPrice(item);
+  };
+
+  const updateRemovedItemSoldAtPrice = (index: number, value: string) => {
+    const manualPrice = Math.max(0, asNumber(value, 0));
+    setRemovedItems(prev => prev.map((item, i) => i === index ? {
+      ...item,
+      manual_sold_at_price: manualPrice,
+      unit_price: manualPrice,
+      total_price: manualPrice * item.quantity,
+    } : item));
+  };
 
   const handleReturnScan = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -146,7 +168,8 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
       }
 
       const { orderItem, matchedBarcode } = found;
-      const unitPrice = getItemUnitPrice(orderItem);
+      const listedUnitPrice = getItemListedUnitPrice(orderItem);
+      const soldAtUnitPrice = getItemSoldAtUnitPrice(orderItem);
       const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
 
       const newItem = {
@@ -157,9 +180,14 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         barcode: matchedBarcode.code,
         product_barcode_id: productBarcodeId,
         barcode_id: productBarcodeId,
-        unit_price: unitPrice,
+        listed_unit_price: listedUnitPrice,
+        sold_at_unit_price: soldAtUnitPrice,
+        manual_sold_at_price: soldAtUnitPrice,
+        unit_price: soldAtUnitPrice,
+        item_discount_amount: asNumber(orderItem.discount_amount, 0),
+        order_discount_amount: asNumber(order.discount_amount || order.amounts?.discount, 0),
         quantity: 1,
-        total_price: unitPrice,
+        total_price: soldAtUnitPrice,
         return_reason: 'exchange',
         quality_check_passed: true
       };
@@ -287,7 +315,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
   const totals = calculateTotals();
 
-  const cashFromNotes = Object.entries(notes).reduce((sum, [val, count]) => sum + (Number(val) * count), 0);
+  const cashFromNotes = Object.entries(notes).reduce((sum, [val, count]) => sum + (Number(val) * Number(count)), 0);
   const effectiveCash = cashFromNotes > 0 ? cashFromNotes : paymentDetails.cash;
   const totalPaid = effectiveCash + paymentDetails.card + paymentDetails.bkash + paymentDetails.nagad;
   
@@ -437,21 +465,35 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
                 <div className="space-y-3 max-h-72 overflow-y-auto pr-2 scrollbar-thin">
                   {removedItems.map((item, index) => (
-                    <div key={index} className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all group/item animate-in fade-in slide-in-from-left-4 duration-300">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-xs font-black text-gray-400 group-hover/item:bg-red-50 group-hover/item:text-red-500 transition-colors">
-                          {index + 1}
+                    <div key={index} className="p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all group/item animate-in fade-in slide-in-from-left-4 duration-300">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                          <div className="w-10 h-10 bg-gray-50 dark:bg-gray-800 rounded-xl flex items-center justify-center text-xs font-black text-gray-400 group-hover/item:bg-red-50 group-hover/item:text-red-500 transition-colors">
+                            {index + 1}
+                          </div>
+                          <div>
+                            <p className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight">{item.product_name}</p>
+                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{item.barcode}</p>
+                            <p className="text-[10px] text-gray-500 mt-1">Product price: ৳{Number(item.listed_unit_price || 0).toLocaleString()} • Sold at: ৳{Number(item.sold_at_unit_price || 0).toLocaleString()} • Item discount: ৳{Number(item.item_discount_amount || 0).toLocaleString()} • Order discount: ৳{Number(item.order_discount_amount || 0).toLocaleString()}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-black text-gray-900 dark:text-white uppercase tracking-tight">{item.product_name}</p>
-                          <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">{item.barcode}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-6">
-                        <p className="text-sm font-black text-gray-900 dark:text-white">৳{item.total_price.toLocaleString()}</p>
                         <button onClick={() => removeReturnItem(index)} className="p-2 text-gray-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-all">
                           <Trash2 className="w-4 h-4" />
                         </button>
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+                        <div className="md:col-span-2">
+                          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Manual Sold At Price</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.manual_sold_at_price}
+                            onChange={(e) => updateRemovedItemSoldAtPrice(index, e.target.value)}
+                            className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-xl focus:border-red-500 outline-none text-sm font-black"
+                          />
+                        </div>
+                        <p className="text-right text-sm font-black text-gray-900 dark:text-white">Return Value: ৳{Number(item.total_price || 0).toLocaleString()}</p>
                       </div>
                     </div>
                   ))}

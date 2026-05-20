@@ -761,6 +761,8 @@ export default function LookupPage() {
           outstanding_amount: o?.outstanding_amount ?? o?.outstanding ?? '0',
           payment_status: o?.payment_status || o?.payment || o?.status || 'unknown',
           status: o?.status || 'unknown',
+          has_active_return: Boolean(o?.has_active_return || (Array.isArray(o?.returns) && o.returns.some((r: any) => !['rejected', 'cancelled'].includes(String(r?.status || '').toLowerCase())))),
+          active_return: o?.active_return || (Array.isArray(o?.returns) ? o.returns.find((r: any) => !['rejected', 'cancelled'].includes(String(r?.status || '').toLowerCase())) : null),
           store: store || { id: 0, name: '—' },
           items: Array.isArray(o?.items) ? o.items : [],
           shipping_address: o?.shipping_address || o?.delivery_address || o?.address,
@@ -879,7 +881,15 @@ export default function LookupPage() {
 
   const isSoldFromCurrentLocation = (loc: any, history?: any[]) => {
     const key = normalizeStatusKey(loc?.current_status ?? loc?.status ?? loc?.status_key ?? loc?.status_label);
-    if (key === 'sold') return true;
+
+    // Current barcode state is the source of truth. A returned barcode keeps old
+    // sale/dispatch history, but if the backend says it is saleable now, lookup
+    // must not show it as sold.
+    if (loc?.is_available_for_sale === true || ['available', 'in_warehouse', 'in_shop', 'on_display'].includes(key)) {
+      return false;
+    }
+
+    if (key === 'sold' || key === 'with_customer') return true;
     const meta = readMeta(loc);
     if (String(loc?.status_label || '').toLowerCase().includes('sold')) return true;
     if (String(loc?.current_status || '').toLowerCase() === 'sold') return true;
@@ -892,8 +902,8 @@ export default function LookupPage() {
         return true;
       }
     }
-    // fallback: any history movement indicates sold
-    if (Array.isArray(history) && history.some((h) => isSoldLike(h))) return true;
+    // fallback: only use sale history when the current status is missing/unknown.
+    if ((!key || key === 'unknown_status') && Array.isArray(history) && history.some((h) => isSoldLike(h))) return true;
     return false;
   };
 
@@ -923,6 +933,8 @@ export default function LookupPage() {
       outstanding_amount: String(o.outstanding_amount ?? '0'),
       payment_status: String(o.payment_status ?? 'pending'),
       status: String(o.status ?? 'pending'),
+      has_active_return: Boolean(o?.has_active_return || (Array.isArray(o?.returns) && o.returns.some((r: any) => !['rejected', 'cancelled'].includes(String(r?.status || '').toLowerCase())))),
+      active_return: o?.active_return || (Array.isArray(o?.returns) ? o.returns.find((r: any) => !['rejected', 'cancelled'].includes(String(r?.status || '').toLowerCase())) : null),
       store: o.store || { id: 0, name: '—' },
       items: items.map((it: any) => {
         const barcodes: string[] = Array.isArray(it.barcodes) ? it.barcodes : it.barcode ? [it.barcode] : [];
@@ -1030,6 +1042,12 @@ export default function LookupPage() {
       payment_status: o.payment_status ?? 'unknown',
       paid_amount: o.paid_amount ?? '0',
       outstanding_amount: o.outstanding_amount ?? '0',
+      discount_amount: o.discount_amount ?? payload?.discount_amount ?? 0,
+      tax_amount: o.tax_amount ?? payload?.tax_amount ?? 0,
+      shipping_amount: o.shipping_amount ?? payload?.shipping_amount ?? 0,
+      has_active_return: Boolean(o.has_active_return ?? payload?.has_active_return ?? payload?.active_return),
+      active_return: o.active_return ?? payload?.active_return ?? null,
+      active_returns: payload?.active_returns ?? o.active_returns ?? [],
       // Keep store info so UI can show "Sold From" (some lookup endpoints only include store/store_id inside order)
       store: o.store ?? payload?.store ?? null,
       store_id: o.store_id ?? payload?.store_id ?? o?.store?.id ?? payload?.store?.id ?? null,
@@ -1087,6 +1105,10 @@ export default function LookupPage() {
           product_sku: it?.product?.sku ?? it?.product_sku ?? 'N/A',
           quantity: it?.quantity ?? 0,
           unit_price: it?.unit_price ?? it?.sale_price ?? it?.price ?? null,
+          listed_unit_price: it?.listed_unit_price ?? it?.unit_price ?? it?.sale_price ?? it?.price ?? null,
+          sold_at_unit_price: it?.sold_at_unit_price ?? (it?.total_amount && Number(it?.quantity || 0) > 0 ? Number(it.total_amount) / Number(it.quantity) : (it?.unit_price ?? it?.sale_price ?? it?.price ?? null)),
+          discount_amount: it?.discount_amount ?? 0,
+          tax_amount: it?.tax_amount ?? 0,
           total_amount: it?.total_amount ?? it?.total ?? null,
           product_batch_id: batchId,
           batch_id: batchId,
@@ -1566,8 +1588,8 @@ export default function LookupPage() {
       }
 
       const existing = extractBatchPrices(loc?.batch || loc);
-      if (existing.cost != null || existing.sell != null) {
-        // Already have pricing (or partial). Keep it.
+      if (existing.cost != null && existing.sell != null) {
+        // Already have complete pricing. Keep it.
         if (loc?.batch) {
           if (loc.batch.cost_price == null && existing.cost != null) loc.batch.cost_price = existing.cost;
           if (loc.batch.selling_price == null && existing.sell != null) loc.batch.selling_price = existing.sell;
@@ -1876,6 +1898,9 @@ export default function LookupPage() {
           order_item_id: item.order_item_id,
           quantity: item.quantity,
           product_barcode_id: item.product_barcode_id,
+          unit_price: Number(item.manual_sold_at_price ?? item.unit_price ?? item.sold_at_unit_price ?? 0),
+          manual_sold_at_price: Number(item.manual_sold_at_price ?? item.unit_price ?? item.sold_at_unit_price ?? 0),
+          total_price: Number(item.total_price ?? ((item.manual_sold_at_price ?? item.unit_price ?? item.sold_at_unit_price ?? 0) * item.quantity)),
         })),
         customer_notes: returnData.customerNotes || 'Initiated from lookup page',
       };
@@ -1934,14 +1959,15 @@ export default function LookupPage() {
         customer_id: selectedOrderForAction.customer?.id,
         removedProducts: exchangeData.removedProducts.map((item: any) => {
           const originalItem = selectedOrderForAction.items.find((i: any) => i.id === item.order_item_id);
-          const unitPrice = parseFloat(originalItem?.unit_price || '0');
+          const unitPrice = Number(item.manual_sold_at_price ?? item.unit_price ?? item.sold_at_unit_price ?? originalItem?.sold_at_unit_price ?? originalItem?.unit_price ?? 0);
+          const quantity = Number(item.quantity || 1);
           return {
             order_item_id: item.order_item_id,
-            product_id: originalItem?.product_id,
-            product_batch_id: originalItem?.product_batch_id || originalItem?.batch_id,
-            quantity: item.quantity,
+            product_id: item.product_id ?? originalItem?.product_id,
+            product_batch_id: item.product_batch_id || originalItem?.product_batch_id || originalItem?.batch_id,
+            quantity,
             unit_price: unitPrice,
-            total_price: unitPrice * item.quantity,
+            total_price: Number(item.total_price ?? unitPrice * quantity),
             product_barcode_id: item.product_barcode_id,
             barcode_id: item.product_barcode_id, // Compatibility with controller
             return_reason: 'other', // Default reason
@@ -2143,8 +2169,10 @@ export default function LookupPage() {
       const bd = await enrichBarcodeHistoryWithBatchPrices(res.data as any);
       setBatchBarcodeData(bd);
 
-      const ord = await resolveOrderFromBarcodeData(bd);
-      setBatchResolvedOrder(ord);
+      if (isSoldFromCurrentLocation(bd.current_location, bd.history)) {
+        const ord = await resolveOrderFromBarcodeData(bd);
+        setBatchResolvedOrder(ord);
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to load barcode details');
     } finally {
@@ -2462,6 +2490,11 @@ export default function LookupPage() {
                                 <div>
                                   <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Order #</p>
                                   <p className="text-xs font-medium text-black dark:text-white">{order.order_number}</p>
+                                  {order.has_active_return && (
+                                    <span className="mt-1 inline-flex px-2 py-0.5 rounded-full text-[9px] font-semibold bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                                      Return initiated{order.active_return?.return_number ? `: ${order.active_return.return_number}` : ''}
+                                    </span>
+                                  )}
                                 </div>
                                 <div>
                                   <p className="text-[9px] text-gray-500 dark:text-gray-500 uppercase font-medium mb-0.5">Date</p>
@@ -2657,6 +2690,10 @@ export default function LookupPage() {
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
                           <div>
+                            <p className="text-[9px] text-gray-500 uppercase font-medium">Order Discount</p>
+                            <p className="text-sm text-black dark:text-white">{formatCurrency(singleOrder.discount_amount || 0)}</p>
+                          </div>
+                          <div>
                             <p className="text-[9px] text-gray-500 uppercase font-medium">Sold From</p>
                             <p className="text-sm text-black dark:text-white">{getStoreNameFromAny(singleOrder)}</p>
                           </div>
@@ -2672,6 +2709,8 @@ export default function LookupPage() {
                               <tr>
                                 <th className="px-2 py-1.5 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Product</th>
                                 <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Qty</th>
+                                <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Product Price</th>
+                                <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Sold At</th>
                                 <th className="px-2 py-1.5 text-left text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Barcodes</th>
                                 <th className="px-2 py-1.5 text-right text-[9px] font-semibold text-gray-700 dark:text-gray-300 uppercase">Total</th>
                               </tr>
@@ -2687,6 +2726,11 @@ export default function LookupPage() {
                                       <div className="text-[9px] text-gray-500">{item.product_sku}</div>
                                     </td>
                                     <td className="px-2 py-1.5 text-right text-black dark:text-white">{item.quantity}</td>
+                                    <td className="px-2 py-1.5 text-right text-black dark:text-white">{formatCurrency(item.listed_unit_price ?? item.unit_price ?? 0)}</td>
+                                    <td className="px-2 py-1.5 text-right text-black dark:text-white">
+                                      {formatCurrency(item.sold_at_unit_price ?? item.unit_price ?? 0)}
+                                      {Number(item.discount_amount || 0) > 0 && <div className="text-[9px] text-red-500">Disc: {formatCurrency(item.discount_amount)}</div>}
+                                    </td>
 
                                     <td className="px-2 py-1.5">
                                       {barcodes.length > 0 ? (

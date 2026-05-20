@@ -123,8 +123,8 @@ export default function BarcodeScanner({
     try {
       console.log('🔍 Scanning barcode:', barcode);
       
-      // Call barcode API
-      const response = await barcodeService.scanBarcode(barcode);
+      // Call barcode API with selected outlet so backend can reject wrong-store scans
+      const response = await barcodeService.scanBarcode(barcode, selectedOutlet);
       
       if (!response.success || !response.data) {
         onError(`Barcode not found: ${barcode}`);
@@ -143,9 +143,19 @@ export default function BarcodeScanner({
         return;
       }
 
-      // Validate location
-      if (scanResult.current_location && scanResult.current_location.id !== parseInt(selectedOutlet)) {
-        onError(`Product is at ${scanResult.current_location.name}, not at selected outlet`);
+      const selectedStoreId = parseInt(selectedOutlet);
+      const productName = scanResult.product?.name || 'Product';
+
+      // Validate batch/store ownership. Batch store is the source of truth for POS sale eligibility.
+      if (scanResult.current_batch?.store_id && scanResult.current_batch.store_id !== selectedStoreId) {
+        onError(`Product "${productName}" is not available in this store`);
+        setIsScanning(false);
+        return;
+      }
+
+      // Validate location as a fallback for older API responses without batch store_id
+      if (scanResult.current_location && scanResult.current_location.id !== selectedStoreId) {
+        onError(`Product "${productName}" is not available in this store`);
         setIsScanning(false);
         return;
       }
@@ -182,7 +192,7 @@ export default function BarcodeScanner({
       
     } catch (error: any) {
       console.error('❌ Barcode scan error:', error);
-      onError(error.message || 'Failed to scan barcode');
+      onError(error.response?.data?.message || error.message || 'Failed to scan barcode');
     } finally {
       setIsScanning(false);
     }

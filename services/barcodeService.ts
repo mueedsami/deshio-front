@@ -40,6 +40,7 @@ export interface LocationInfo {
 export interface BatchInfo {
   id: number;
   batch_number: string;
+  store_id?: number;
   quantity?: number;
   quantity_available?: number;
   cost_price?: string;
@@ -98,8 +99,11 @@ export class BarcodeService {
   /**
    * Scan a barcode and get complete product information
    */
-  async scanBarcode(barcode: string): Promise<ApiResponse<ScanResult>> {
-    const response = await axios.post(`${this.endpoint}/scan`, { barcode });
+  async scanBarcode(barcode: string, storeId?: string | number): Promise<ApiResponse<ScanResult>> {
+    const response = await axios.post(`${this.endpoint}/scan`, {
+      barcode,
+      ...(storeId ? { store_id: Number(storeId) } : {}),
+    });
     return response.data;
   }
 

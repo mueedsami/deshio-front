@@ -127,6 +127,7 @@ export interface ApiResponse<T> {
  */
 export interface BulkBatchPriceUpdateData {
   product_id: number;
+  product_ids?: number[];
   sell_price?: string; // backend may return string formatted
   cost_price?: string;
   new_sell_price?: string | null;
@@ -136,6 +137,7 @@ export interface BulkBatchPriceUpdateData {
   updates: Array<{
     batch_id: number;
     batch_number: string | null;
+    product_name?: string;
     store: string;
     old_price?: string;
     new_price?: string;
@@ -247,9 +249,13 @@ class BatchService {
    */
   async updateAllBatchPrices(
     productId: number,
-    priceData: number | { sell_price?: number; cost_price?: number }
+    priceData: number | { sell_price?: number; cost_price?: number },
+    productIds?: number[]
   ): Promise<ApiResponse<BulkBatchPriceUpdateData>> {
-    const payload = typeof priceData === 'number' ? { sell_price: priceData } : priceData;
+    const payload = typeof priceData === 'number' ? { sell_price: priceData } : { ...priceData };
+    if (productIds?.length) {
+      (payload as any).product_ids = productIds;
+    }
     const response = await axios.post(`/products/${productId}/batches/update-price`, payload);
     return response.data;
   }

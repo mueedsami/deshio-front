@@ -14,7 +14,10 @@ import GroupedAllBarcodesPrinter, { BatchBarcodeSource } from '@/components/Grou
 type ProductPick = {
   id: number;
   name: string;
+  base_name?: string;
   sku?: string;
+  variants_count?: number;
+  variant_ids?: number[];
 };
 
 type UpdateRow = {
@@ -27,6 +30,7 @@ type UpdateRow = {
   new_sell_price?: string;
   old_cost_price?: string;
   new_cost_price?: string;
+  product_name?: string;
 };
 
 export default function BatchPriceUpdatePage() {
@@ -42,7 +46,7 @@ export default function BatchPriceUpdatePage() {
   const [searchHasMore, setSearchHasMore] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductPick | null>(null);
 
-  // Variations with same SKU (so you can apply price to multiple variations without backend changes)
+  // Variations with same SKU (so you can apply price to selected variants)
   const [skuGroupProducts, setSkuGroupProducts] = useState<ProductPick[]>([]);
   const [selectedVariationIds, setSelectedVariationIds] = useState<number[]>([]);
   const [variationVisible, setVariationVisible] = useState<number>(20);
@@ -72,6 +76,21 @@ export default function BatchPriceUpdatePage() {
   const [isPreparingBarcodes, setIsPreparingBarcodes] = useState(false);
   const [barcodePrepError, setBarcodePrepError] = useState<string | null>(null);
 
+  const targetProductIds = useMemo(() => {
+    if (!selectedProduct?.id) return [];
+
+    const ids: number[] = selectedVariationIds.length ? selectedVariationIds : [selectedProduct.id];
+    return Array.from(new Set<number>(ids.map((id) => Number(id))))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+  }, [selectedProduct?.id, selectedVariationIds]);
+
+  const targetProductIdsKey = targetProductIds.join(',');
+
+  const getProductDisplayName = (product: ProductPick | null) => {
+    if (!product) return 'Product';
+    return String(product.base_name || product.name || 'Product').trim();
+  };
+
   const prepareBarcodeSources = async () => {
     setBarcodePrepError(null);
 
@@ -84,8 +103,11 @@ export default function BatchPriceUpdatePage() {
       setIsPreparingBarcodes(true);
 
       // Same target selection logic as bulk price apply
-      const targetIdsRaw = selectedVariationIds.length ? selectedVariationIds : [selectedProduct.id];
-      const targetIds = Array.from(new Set(targetIdsRaw)).filter(Boolean);
+      const targetIds = targetProductIds;
+      if (targetIds.length === 0) {
+        setBarcodePrepError('Select at least one variation first.');
+        return;
+      }
 
       const toNumber = (v: any) => {
         if (v === null || v === undefined || v === '') return 0;
@@ -189,14 +211,34 @@ export default function BatchPriceUpdatePage() {
           group_by_sku: true 
         });
 
-        // catalogService flattens variants into .products when group_by_sku is true
+        const groupedList = res.grouped_products || [];
         const list = res.products || [];
         
-        const mapped: ProductPick[] = list.map((p) => ({
-          id: p.id as number,
-          name: p.name,
-          sku: p.sku,
-        }));
+        const mapped: ProductPick[] = groupedList.length > 0
+          ? groupedList.map((group: any) => {
+              const variants = [group.main_variant, ...(group.variants || [])].filter(Boolean);
+              const main = variants[0] || group.main_variant || group;
+              const variantIds = variants
+                .map((variant: any) => Number(variant?.id))
+                .filter((id: number) => Number.isFinite(id) && id > 0);
+
+              return {
+                id: Number(main?.id || group?.id),
+                name: String(group.base_name || main?.base_name || main?.name || 'Product'),
+                base_name: group.base_name || main?.base_name,
+                sku: main?.sku || group?.sku,
+                variants_count: Number(group?.variants_count || group?.total_variants || variantIds.length || 1),
+                variant_ids: variantIds,
+              };
+            })
+          : list.map((p) => ({
+              id: p.id as number,
+              name: p.name,
+              base_name: p.base_name,
+              sku: p.sku,
+              variants_count: p.total_variants || 1,
+              variant_ids: [p.id as number],
+            }));
 
         setProducts(mapped);
 
@@ -228,13 +270,14 @@ export default function BatchPriceUpdatePage() {
     });
   }, [products]);
 
-  // Load batches when product selected
+  // Load batches when selected product/selected same-SKU variations change
   useEffect(() => {
     const load = async () => {
-      if (!selectedProduct?.id) {
+      if (!selectedProduct?.id || targetProductIds.length === 0) {
         setBatches([]);
         setUpdates([]);
         setSellPrice('');
+        setCostPrice('');
         return;
       }
 
@@ -244,13 +287,17 @@ export default function BatchPriceUpdatePage() {
         setSuccessMsg(null);
         setUpdates([]);
 
+        const batchFilters = targetProductIds.length > 1
+          ? { product_ids: targetProductIds, per_page: 100 }
+          : { product_id: targetProductIds[0], per_page: 100 };
+
         const list = (await batchService.getBatchesAll(
-          { product_id: selectedProduct.id, per_page: 100 },
+          batchFilters,
           { max_items: 10000 }
         )).map((b: any) => ({
           ...b,
           product: b.product || {
-            id: selectedProduct.id,
+            id: b.product_id || selectedProduct.id,
             name: selectedProduct.name,
             sku: selectedProduct.sku
           },
@@ -285,7 +332,7 @@ export default function BatchPriceUpdatePage() {
     };
 
     load();
-  }, [selectedProduct?.id]);
+  }, [selectedProduct?.id, targetProductIdsKey]);
 
 
   // Load SKU-group variations when product selected (for bulk price update across variations)
@@ -307,7 +354,7 @@ export default function BatchPriceUpdatePage() {
         const list2 = res.products || [];
         const exact = list2
           .filter((p) => String(p.sku || '').trim() === sku)
-          .map((p) => ({ id: p.id, name: p.name, sku: p.sku } as ProductPick));
+          .map((p) => ({ id: p.id, name: p.name, base_name: p.base_name, sku: p.sku, variants_count: 1, variant_ids: [p.id] } as ProductPick));
 
         setSkuGroupProducts(exact);
         setSelectedVariationIds(exact.map((p) => p.id)); // default: select all, user can uncheck
@@ -387,9 +434,12 @@ export default function BatchPriceUpdatePage() {
   const selectNoVariations = () => setSelectedVariationIds([]);
 
   const onSelectProduct = (p: ProductPick) => {
+    const initialVariantIds = p.variant_ids?.length ? p.variant_ids : [p.id];
     setSelectedProduct(p);
+    setSkuGroupProducts([]);
+    setSelectedVariationIds(initialVariantIds);
     setProducts([]);
-    setSearch(`${p.name}${p.sku ? ` (${p.sku})` : ''}`);
+    setSearch(`${getProductDisplayName(p)}${p.sku ? ` (${p.sku})` : ''}`);
   };
 
   const onApply = async () => {
@@ -422,21 +472,19 @@ export default function BatchPriceUpdatePage() {
     try {
       setIsSaving(true);
 
-      const targetIdsRaw = selectedVariationIds.length ? selectedVariationIds : [selectedProduct.id];
-      const targetIds = Array.from(new Set(targetIdsRaw));
-
-      let firstSuccess: any = null;
+      const targetIds = targetProductIds;
+      if (targetIds.length === 0) {
+        setError('Select at least one variation first.');
+        return;
+      }
 
       const payload: any = {};
       if (sellPrice) payload.sell_price = priceNum;
       if (costPrice) payload.cost_price = costNum;
 
-      for (const pid of targetIds) {
-        const res = await batchService.updateAllBatchPrices(pid, payload);
-        if (!res?.success) {
-          throw new Error(res?.message || `Failed to update batch prices for product ${pid}.`);
-        }
-        if (!firstSuccess) firstSuccess = res;
+      const res = await batchService.updateAllBatchPrices(selectedProduct.id, payload, targetIds);
+      if (!res?.success) {
+        throw new Error(res?.message || 'Failed to update batch prices.');
       }
 
       let msg = '';
@@ -447,18 +495,18 @@ export default function BatchPriceUpdatePage() {
       setSuccessMsg(
         targetIds.length > 1
           ? `Updated ${msg} for all batches of ${targetIds.length} variations (same SKU).`
-          : (firstSuccess?.message || `Updated ${msg} for all batches.`)
+          : (res?.message || `Updated ${msg} for all batches.`)
       );
 
       sessionStorage.setItem('product_list_refresh_needed', '1');
-      // Show update rows from the first response
-      setUpdates(((firstSuccess?.data?.updates || []) as UpdateRow[]) || []);
+      // Show update rows from the scoped backend response
+      setUpdates(((res?.data?.updates || []) as UpdateRow[]) || []);
 
-      // Reload batches for the currently selected product
-      const list = await batchService.getBatchesAll(
-        { product_id: selectedProduct.id, per_page: 100 },
-        { max_items: 10000 }
-      );
+      // Reload batches for the currently selected product/variations
+      const batchFilters = targetIds.length > 1
+        ? { product_ids: targetIds, per_page: 100 }
+        : { product_id: targetIds[0], per_page: 100 };
+      const list = await batchService.getBatchesAll(batchFilters, { max_items: 10000 });
       setBatches(list);
     } catch (e: any) {
       setError(e?.response?.data?.message || e?.message || 'Failed to update batch prices.');
@@ -514,6 +562,8 @@ export default function BatchPriceUpdatePage() {
                       setSearchLimit(10);
                       setSearchHasMore(false);
                       setSelectedProduct(null);
+                      setSkuGroupProducts([]);
+                      setSelectedVariationIds([]);
                     }}
                     placeholder="Search product by name / SKU (type 2+ chars)..."
                     className="w-full rounded-lg bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-700 px-3 py-2 outline-none focus:border-gray-400 dark:focus:border-gray-500 text-gray-900 dark:text-gray-100"
@@ -524,32 +574,37 @@ export default function BatchPriceUpdatePage() {
                 {/* Search Results */}
                 {groupedProducts.length > 0 && (
                   <div className="mt-3 space-y-3">
-                    {groupedProducts.map(([sku, group]) => (
-                      <div key={sku} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20 overflow-hidden">
-                        <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                          <span>SKU: {sku}</span>
-                          <span className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px]">{group.length} {group.length === 1 ? 'variant' : 'variants'}</span>
-                        </div>
-                        <div className="divide-y divide-gray-200 dark:divide-gray-700">
-                          {group.map((p) => (
-                            <button
-                              key={p.id}
-                              onClick={() => onSelectProduct(p)}
-                              className="w-full text-left px-3 py-2.5 hover:bg-white dark:hover:bg-gray-700/40 transition-colors group"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="font-medium text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                                  {p.name}
-                                </div>
-                                <div className="shrink-0 text-[10px] font-mono bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
-                                  ID: {p.id}
-                                </div>
+                    {groupedProducts.map(([sku, group]) => {
+                      const representative = group[0];
+                      if (!representative) return null;
+                      const variantCount = Math.max(
+                        ...group.map((p) => p.variants_count || p.variant_ids?.length || 1),
+                        group.length
+                      );
+
+                      return (
+                        <div key={sku} className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-900/20 overflow-hidden">
+                          <div className="bg-gray-100 dark:bg-gray-800 px-3 py-1.5 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                            <span>SKU: {sku}</span>
+                            <span className="bg-gray-200 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px]">{variantCount} {variantCount === 1 ? 'variant' : 'variants'}</span>
+                          </div>
+                          <button
+                            key={representative.id}
+                            onClick={() => onSelectProduct(representative)}
+                            className="w-full text-left px-3 py-2.5 hover:bg-white dark:hover:bg-gray-700/40 transition-colors group"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="font-medium text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                {getProductDisplayName(representative)}
                               </div>
-                            </button>
-                          ))}
+                              <div className="shrink-0 text-[10px] font-mono bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400">
+                                SKU: {sku}
+                              </div>
+                            </div>
+                          </button>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     {searchHasMore && !isSearching && searchLimit < 500 && (
                       <div className="mt-2">
@@ -572,7 +627,7 @@ export default function BatchPriceUpdatePage() {
                       <div>
                         <div className="text-sm text-gray-600 dark:text-gray-400">Selected product</div>
                         <div className="font-semibold text-gray-900 dark:text-gray-100">
-                          {selectedProduct.name}{' '}
+                          {getProductDisplayName(selectedProduct)}{' '}
                           {selectedProduct.sku ? (
                             <span className="text-gray-500 dark:text-gray-400">({selectedProduct.sku})</span>
                           ) : null}
@@ -821,6 +876,7 @@ export default function BatchPriceUpdatePage() {
                       <table className="min-w-full text-sm">
                         <thead className="bg-gray-50 dark:bg-gray-900/40">
                           <tr className="text-left">
+                            <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Product</th>
                             <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Batch No</th>
                             <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Store</th>
                             <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Qty</th>
@@ -835,6 +891,7 @@ export default function BatchPriceUpdatePage() {
                             const isRowSaving = costSavingBatchId === b.id;
                             return (
                               <tr key={b.id} className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
+                                <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{b.product?.name || '-'}</td>
                                 <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{b.batch_number || `#${b.id}`}</td>
                                 <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{b.store?.name || '-'}</td>
                                 <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{b.quantity ?? '-'}</td>
@@ -903,6 +960,7 @@ export default function BatchPriceUpdatePage() {
                     <table className="min-w-full text-sm">
                       <thead className="bg-gray-50 dark:bg-gray-900/40">
                         <tr className="text-left">
+                          <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Product</th>
                           <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Batch ID</th>
                           <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Batch No</th>
                           <th className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">Store</th>
@@ -915,6 +973,7 @@ export default function BatchPriceUpdatePage() {
                       <tbody>
                         {updates.map((u) => (
                           <tr key={u.batch_id} className="border-b border-gray-200 dark:border-gray-700 last:border-b-0">
+                            <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{u.product_name || '-'}</td>
                             <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{u.batch_id}</td>
                             <td className="px-3 py-2 text-gray-900 dark:text-gray-100">{u.batch_number || '-'}</td>
                             <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{u.store}</td>

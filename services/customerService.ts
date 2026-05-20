@@ -51,6 +51,8 @@ export interface CustomerOrder {
   outstanding_amount: string;
   payment_status: string;
   status: string;
+  has_active_return?: boolean;
+  active_return?: any;
   store: {
     id: number;
     name: string;
