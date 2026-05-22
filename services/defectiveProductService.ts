@@ -66,6 +66,7 @@ export type DefectiveStatus =
 export interface DefectiveProductFilters {
   status?: DefectiveStatus;
   store_id?: number;
+  vendor_id?: number;
   severity?: Severity;
   defect_type?: DefectType;
   from_date?: string;
@@ -87,6 +88,7 @@ export interface MarkDefectiveRequest {
   product_batch_id?: number;
   defect_images?: File[];
   internal_notes?: string;
+  barcode_status?: 'employee_use';
 }
 
 export interface InspectRequest {
@@ -214,6 +216,10 @@ class DefectiveProductService {
     
     if (data.internal_notes) {
       formData.append('internal_notes', data.internal_notes);
+    }
+
+    if (data.barcode_status) {
+      formData.append('barcode_status', data.barcode_status);
     }
     
     // Append images if present

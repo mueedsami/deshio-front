@@ -24,6 +24,7 @@ export interface DefectFormData {
   defect_images?: File[];
   internal_notes?: string;
   is_used_item?: boolean;
+  is_employee_usage?: boolean;
 }
 
 export interface CustomerReturnFormData {
@@ -145,11 +146,14 @@ class DefectIntegrationService {
       const result = await defectiveProductService.markAsDefective({
         product_barcode_id: barcodeId,
         store_id: formData.store_id,
-        defect_type: formData.is_used_item ? 'other' : formData.defect_type,
-        defect_description: formData.is_used_item 
-          ? 'USED_ITEM - Product has been used' 
-          : formData.defect_description,
+        defect_type: formData.is_used_item || formData.is_employee_usage ? 'other' : formData.defect_type,
+        defect_description: formData.defect_description || (
+          formData.is_employee_usage
+            ? 'EMPLOYEE_USE - Product used by employee'
+            : 'USED_ITEM - Product has been used'
+        ),
         severity: formData.severity,
+        barcode_status: formData.is_employee_usage ? 'employee_use' : undefined,
         original_price: originalPrice,
         product_batch_id: batchId,
         defect_images: formData.defect_images,

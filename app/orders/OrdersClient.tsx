@@ -346,6 +346,7 @@ export default function OrdersDashboard() {
   const [storeFilter, setStoreFilter] = useState<number | 'All Stores'>('All Stores');
 
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(() => getTodayFilterValue());
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -379,6 +380,14 @@ export default function OrdersDashboard() {
   useEffect(() => {
     setViewMode(initialViewMode);
   }, [initialViewMode]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearch(search.trim());
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   // Default to Pending in Online Orders (as requested) for faster workflow.
   // Keeps Installments on "All" because installment statuses vary.
@@ -634,7 +643,7 @@ export default function OrdersDashboard() {
     }
     checkPrinterStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, storeFilter, dateFilterType, dateFilter, startDate, endDate]);
+  }, [viewMode, storeFilter, dateFilterType, dateFilter, startDate, endDate, debouncedSearch]);
 
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
@@ -1216,14 +1225,22 @@ export default function OrdersDashboard() {
     setIsLoading(true);
     try {
       let allOrders: any[] = [];
+      const activeSearch = debouncedSearch.trim();
+      const isSearching = activeSearch.length > 0;
+      const exactOrderNumber = /^#?\s*ORD[-A-Z0-9]+/i.test(activeSearch)
+        ? activeSearch.replace(/^#/, '').trim()
+        : undefined;
+
       const commonParams: any = {
         store_id: storeFilter === 'All Stores' ? undefined : storeFilter,
         sort_by: dateFilterType === 'updated_at' ? 'updated_at' : 'created_at',
         sort_order: 'desc',
         per_page: 1000,
         date_filter_type: dateFilterType,
-        date_from: startDate || dateFilter || undefined,
-        date_to: endDate || dateFilter || undefined,
+        search: isSearching ? activeSearch : undefined,
+        order_number: exactOrderNumber,
+        date_from: isSearching ? undefined : (startDate || dateFilter || undefined),
+        date_to: isSearching ? undefined : (endDate || dateFilter || undefined),
       };
 
       if (viewMode === 'installments') {
@@ -1323,8 +1340,9 @@ export default function OrdersDashboard() {
 
   useEffect(() => {
     let filtered = orders;
+    const isServerSearchActive = debouncedSearch.trim().length > 0;
 
-    if (search.trim()) {
+    if (search.trim() && !isServerSearchActive) {
       const q = search.trim().toLowerCase();
       filtered = filtered.filter(
         (o) =>
@@ -1339,30 +1357,32 @@ export default function OrdersDashboard() {
     // client-side date pass here; it can hide correct Last Updated results while
     // the API response is already scoped by created_at/updated_at.
 
-    // ✅ NEW: order type filter
-    if (orderTypeFilter !== 'All Types') {
-      const target = normalize(orderTypeFilter);
-      filtered = filtered.filter((o) => normalize(o.orderType) === target);
-    }
+    if (!isServerSearchActive) {
+      // ✅ NEW: order type filter
+      if (orderTypeFilter !== 'All Types') {
+        const target = normalize(orderTypeFilter);
+        filtered = filtered.filter((o) => normalize(o.orderType) === target);
+      }
 
-    if (orderStatusFilter !== 'All Order Status') {
-      const target = normalize(orderStatusFilter);
-      filtered = filtered.filter((o) => normalize(o.status) === target);
-    }
+      if (orderStatusFilter !== 'All Order Status') {
+        const target = normalize(orderStatusFilter);
+        filtered = filtered.filter((o) => normalize(o.status) === target);
+      }
 
-    if (paymentStatusFilter !== 'All Payment Status') {
-      const target = normalize(paymentStatusFilter);
-      filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
-    }
+      if (paymentStatusFilter !== 'All Payment Status') {
+        const target = normalize(paymentStatusFilter);
+        filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
+      }
 
-    // ✅ Courier marker filter
-    if (courierFilter !== 'All Couriers') {
-      const target = normalizeCourier(courierFilter);
-      filtered = filtered.filter((o) => normalizeCourier(o.intendedCourier) === target);
+      // ✅ Courier marker filter
+      if (courierFilter !== 'All Couriers') {
+        const target = normalizeCourier(courierFilter);
+        filtered = filtered.filter((o) => normalizeCourier(o.intendedCourier) === target);
+      }
     }
 
     setFilteredOrders(filtered);
-  }, [search, dateFilter, startDate, endDate, dateFilterType, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
+  }, [search, debouncedSearch, dateFilter, startDate, endDate, dateFilterType, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
 
   // 🧾 Bulk lookup Pathao status for displayed orders
   const filteredOrderNumbers = useMemo(() => {

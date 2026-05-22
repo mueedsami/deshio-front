@@ -81,6 +81,8 @@ export interface Order {
   intended_courier?: string | null;
   is_preorder?: boolean;
   fulfillment_status?: string | null;
+  has_service_items?: boolean;
+  service_items_count?: number;
   customer: {
     id: number;
     name: string;
@@ -131,6 +133,18 @@ export interface Order {
   fulfilled_at?: string;
   confirmed_at?: string;
   items?: OrderItem[];
+  services?: Array<{
+    id: number;
+    service_id?: number;
+    service_name: string;
+    service_code?: string;
+    quantity: number;
+    unit_price: string;
+    discount_amount?: string;
+    total_price?: string;
+    status?: string;
+    category?: string;
+  }>;
   payments?: OrderPayment[];
   notes?: string;
   shipping_address?: any;
@@ -156,8 +170,10 @@ export interface OrderFilters {
   date_filter_type?: string;
   today?: boolean;
   search?: string;
+  order_number?: string;
   overdue?: boolean;
   installment_only?: boolean;
+  has_service_items?: boolean;
   sort_by?: string;
   sort_order?: 'asc' | 'desc';
   per_page?: number;

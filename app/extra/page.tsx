@@ -10,9 +10,11 @@ import ReturnToVendorModal from '@/components/ReturnToVendorModal';
 import Toast from '@/components/Toast';
 import defectIntegrationService from '@/services/defectIntegrationService';
 import storeService from '@/services/storeService';
+import { vendorService } from '@/services/vendorService';
 import defectiveProductService from '@/services/defectiveProductService';
 import type { DefectiveProduct } from '@/services/defectiveProductService';
 import type { Store } from '@/services/storeService';
+import type { Vendor } from '@/services/vendorService';
 
 interface DefectItem {
   id: string;
@@ -29,8 +31,10 @@ interface DefectItem {
   costPrice?: number;
   returnReason?: string;
   store?: string;
+  vendor?: string;
   image?: string;
   batchId?: number;
+  barcodeStatus?: string;
 }
 
 const formatPrice = (price: number | undefined | null): string => {
@@ -45,14 +49,17 @@ export default function DefectsPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [defects, setDefects] = useState<DefectItem[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
+  const [vendors, setVendors] = useState<Vendor[]>([]);
   const [selectedStore, setSelectedStore] = useState<string>('all');
+  const [selectedVendor, setSelectedVendor] = useState<string>('all');
   const [expandedDefect, setExpandedDefect] = useState<string | null>(null);
-  const [filterType, setFilterType] = useState<'all' | 'defects' | 'used'>('all');
+  const [filterType, setFilterType] = useState<'all' | 'defects' | 'used' | 'employee_use'>('all');
   
   // Defect Identification
   const [barcodeInput, setBarcodeInput] = useState('');
   const [returnReason, setReturnReason] = useState('');
   const [isUsedItem, setIsUsedItem] = useState(false);
+  const [isEmployeeUsage, setIsEmployeeUsage] = useState(false);
   const [isDefect, setIsDefect] = useState(false);
   const [storeForDefect, setStoreForDefect] = useState('');
   const [scannedProduct, setScannedProduct] = useState<any>(null);
@@ -85,12 +92,13 @@ export default function DefectsPage() {
 
   useEffect(() => {
     fetchStores();
+    fetchVendors();
     fetchDefects();
   }, []);
 
   useEffect(() => {
     fetchDefects();
-  }, [selectedStore]);
+  }, [selectedStore, selectedVendor]);
 
   const fetchStores = async () => {
     try {
@@ -106,11 +114,23 @@ export default function DefectsPage() {
     }
   };
 
+  const fetchVendors = async () => {
+    try {
+      const vendorsData = await vendorService.getAll({ is_active: true });
+      setVendors(vendorsData);
+    } catch (error) {
+      console.error('Error fetching vendors:', error);
+    }
+  };
+
   const fetchDefects = async () => {
     try {
       const filters: any = {};
       if (selectedStore !== 'all') {
         filters.store_id = parseInt(selectedStore);
+      }
+      if (selectedVendor !== 'all') {
+        filters.vendor_id = parseInt(selectedVendor);
       }
       
       const result = await defectIntegrationService.getDefectiveProducts(filters);
@@ -169,9 +189,11 @@ export default function DefectsPage() {
           costPrice: parsePrice(d.product?.cost_price),
           returnReason: d.defect_description,
           store: d.store?.name,
+          vendor: d.product?.vendor?.name || d.vendor?.name,
           image: imageUrl,
           sellingPrice: parsePrice(d.suggested_selling_price),
           batchId: d.product_batch_id,
+          barcodeStatus: d.barcode?.current_status,
         };
       });
       
@@ -209,8 +231,8 @@ export default function DefectsPage() {
       return;
     }
 
-    if (!isDefect && !isUsedItem) {
-      alert('Please select at least one: Defect or Used Item');
+    if (!isDefect && !isUsedItem && !isEmployeeUsage) {
+      alert('Please select at least one: Defect, Used Item, or Employee Usage');
       return;
     }
 
@@ -227,13 +249,16 @@ export default function DefectsPage() {
     setLoading(true);
     try {
       // Build description based on selections
+      const tags: string[] = [];
+      if (isDefect) tags.push('DEFECT');
+      if (isUsedItem) tags.push('USED_ITEM');
+      if (isEmployeeUsage) tags.push('EMPLOYEE_USE');
+
       let description = '';
-      if (isDefect && isUsedItem) {
-        description = `DEFECT + USED_ITEM - ${returnReason}`;
-      } else if (isUsedItem) {
-        description = 'USED_ITEM - Product has been used';
-      } else if (isDefect) {
-        description = `DEFECT - ${returnReason}`;
+      if (tags.length > 0) {
+        description = isDefect && returnReason
+          ? `${tags.join(' + ')} - ${returnReason}`
+          : `${tags.join(' + ')} - Product marked for ${isEmployeeUsage ? 'employee usage' : 'used item'}`;
       } else {
         description = returnReason;
       }
@@ -245,17 +270,22 @@ export default function DefectsPage() {
         defect_description: description,
         severity: isDefect ? 'moderate' : 'minor',
         is_used_item: isUsedItem,
+        is_employee_usage: isEmployeeUsage,
         defect_images: defectImage ? [defectImage] : undefined,
         internal_notes: `Identified by employee at store ${storeForDefect}`,
       });
 
-      const statusText = isDefect && isUsedItem ? 'defective and used' : 
-                        isDefect ? 'defective' : 'used';
+      const statusParts: string[] = [];
+      if (isDefect) statusParts.push('defective');
+      if (isUsedItem) statusParts.push('used');
+      if (isEmployeeUsage) statusParts.push('employee usage');
+      const statusText = statusParts.join(' and ');
       setSuccessMessage(`Item marked as ${statusText} successfully!`);
       
       setBarcodeInput('');
       setReturnReason('');
       setIsUsedItem(false);
+      setIsEmployeeUsage(false);
       setIsDefect(false);
       setStoreForDefect('');
       setScannedProduct(null);
@@ -480,14 +510,19 @@ export default function DefectsPage() {
     if (filterType === 'all') return true;
     
     const hasUsedTag = d.returnReason?.includes('USED_ITEM');
+    const hasEmployeeUseTag = d.returnReason?.includes('EMPLOYEE_USE') || d.barcodeStatus === 'employee_use';
     // An item is a defect if:
     // 1. It has "DEFECT" tag in description, OR
-    // 2. It has a description that's not just "USED_ITEM", OR  
-    // 3. It doesn't have USED_ITEM tag and has some description
+    // 2. It has a description that's not only a usage tag, OR  
+    // 3. It doesn't have usage tags and has some description
     const hasDefectTag = d.returnReason?.includes('DEFECT') || 
-                         (d.returnReason && !d.returnReason.startsWith('USED_ITEM') && d.returnReason.trim().length > 0);
+                         (d.returnReason &&
+                          !d.returnReason.startsWith('USED_ITEM') &&
+                          !d.returnReason.startsWith('EMPLOYEE_USE') &&
+                          d.returnReason.trim().length > 0);
     
     if (filterType === 'used') return hasUsedTag;
+    if (filterType === 'employee_use') return hasEmployeeUseTag;
     if (filterType === 'defects') return hasDefectTag;
     
     return true;
@@ -536,30 +571,44 @@ export default function DefectsPage() {
                 </div>
               )}
 
-              {/* Store Selection */}
+              {/* Store and Vendor Selection */}
               <div className="mb-6 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <StoreIcon className="w-5 h-5 text-gray-600 dark:text-gray-400" />
                     <div>
-                      <h3 className="font-semibold text-gray-900 dark:text-white">Store Selection</h3>
+                      <h3 className="font-semibold text-gray-900 dark:text-white">Store & Vendor Selection</h3>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        Select store to view items • Barcode scanning auto-detects store
+                        Select store/vendor to view items • Barcode scanning auto-detects store
                       </p>
                     </div>
                   </div>
-                  <select
-                    value={selectedStore}
-                    onChange={(e) => setSelectedStore(e.target.value)}
-                    className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="all">View all stores</option>
-                    {stores.map(store => (
-                      <option key={store.id} value={store.id}>
-                        {store.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-3">
+                    <select
+                      value={selectedStore}
+                      onChange={(e) => setSelectedStore(e.target.value)}
+                      className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="all">View all stores</option>
+                      {stores.map(store => (
+                        <option key={store.id} value={store.id}>
+                          {store.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={selectedVendor}
+                      onChange={(e) => setSelectedVendor(e.target.value)}
+                      className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    >
+                      <option value="all">View all vendors</option>
+                      {vendors.map(vendor => (
+                        <option key={vendor.id} value={vendor.id}>
+                          {vendor.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
@@ -630,6 +679,24 @@ export default function DefectsPage() {
                           </div>
                           <div className="text-xs text-blue-700 dark:text-blue-400 mt-0.5">
                             Check this if the item has been used
+                          </div>
+                        </label>
+                      </div>
+
+                      <div className="flex items-start gap-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg">
+                        <input
+                          type="checkbox"
+                          id="isEmployeeUsage"
+                          checked={isEmployeeUsage}
+                          onChange={(e) => setIsEmployeeUsage(e.target.checked)}
+                          className="mt-0.5 w-4 h-4"
+                        />
+                        <label htmlFor="isEmployeeUsage" className="flex-1 cursor-pointer">
+                          <div className="text-sm font-medium text-amber-900 dark:text-amber-300">
+                            Mark as Employee Usage
+                          </div>
+                          <div className="text-xs text-amber-700 dark:text-amber-400 mt-0.5">
+                            Check this if the item is being used internally by an employee
                           </div>
                         </label>
                       </div>
@@ -711,6 +778,8 @@ export default function DefectsPage() {
                           )}
                           <span className="text-sm text-gray-500 dark:text-gray-400">
                             {selectedStore === 'all' ? 'All stores' : stores.find(s => s.id.toString() === selectedStore)?.name}
+                            {' • '}
+                            {selectedVendor === 'all' ? 'All vendors' : vendors.find(v => v.id.toString() === selectedVendor)?.name}
                           </span>
                         </div>
                       </div>
@@ -748,6 +817,16 @@ export default function DefectsPage() {
                           >
                             Used
                           </button>
+                          <button
+                            onClick={() => setFilterType('employee_use')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+                              filterType === 'employee_use'
+                                ? 'bg-amber-600 text-white'
+                                : 'bg-amber-100 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/30'
+                            }`}
+                          >
+                            Employee Usage
+                          </button>
                         </div>
                         
                         {pendingDefects.length > 0 && (
@@ -770,9 +849,12 @@ export default function DefectsPage() {
                       ) : (
                         pendingDefects.map((defect) => {
                           const hasUsedTag = defect.returnReason?.includes('USED_ITEM');
+                          const hasEmployeeUseTag = defect.returnReason?.includes('EMPLOYEE_USE') || defect.barcodeStatus === 'employee_use';
                           const hasDefectTag = defect.returnReason?.includes('DEFECT') || 
-                                              (defect.returnReason && !defect.returnReason.startsWith('USED_ITEM') && defect.returnReason.trim().length > 0);
-                          const isBoth = hasDefectTag && hasUsedTag;
+                                              (defect.returnReason &&
+                                               !defect.returnReason.startsWith('USED_ITEM') &&
+                                               !defect.returnReason.startsWith('EMPLOYEE_USE') &&
+                                               defect.returnReason.trim().length > 0);
 
                           return (
                             <div key={defect.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
@@ -791,24 +873,21 @@ export default function DefectsPage() {
                                         <h4 className="font-medium text-gray-900 dark:text-white text-sm truncate">
                                           {defect.productName}
                                         </h4>
-                                        {isBoth ? (
-                                          <>
-                                            <span className="px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs rounded font-medium">
-                                              Defect
-                                            </span>
-                                            <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded font-medium">
-                                              Used
-                                            </span>
-                                          </>
-                                        ) : hasUsedTag ? (
+                                        {hasDefectTag && (
+                                          <span className="px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs rounded font-medium">
+                                            Defect
+                                          </span>
+                                        )}
+                                        {hasUsedTag && (
                                           <span className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs rounded font-medium">
                                             Used
                                           </span>
-                                        ) : hasDefectTag ? (
-                                          <span className="px-2 py-0.5 bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400 text-xs rounded">
-                                            Defect
+                                        )}
+                                        {hasEmployeeUseTag && (
+                                          <span className="px-2 py-0.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-xs rounded font-medium">
+                                            Employee Use
                                           </span>
-                                        ) : null}
+                                        )}
                                       </div>
                                       
                                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-600 dark:text-gray-400">
@@ -819,6 +898,10 @@ export default function DefectsPage() {
                                         <span className="flex items-center gap-1">
                                           <MapPin className="w-3 h-3" />
                                           {defect.store || 'N/A'}
+                                        </span>
+                                        <span className="flex items-center gap-1">
+                                          <Truck className="w-3 h-3" />
+                                          {defect.vendor || 'N/A'}
                                         </span>
                                         <span className="flex items-center gap-1">
                                           <Calendar className="w-3 h-3" />

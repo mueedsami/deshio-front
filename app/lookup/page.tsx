@@ -602,6 +602,28 @@ export default function LookupPage() {
   // -----------------------
   const formatPhoneNumber = (phone: string) => phone.replace(/\D/g, '');
 
+  const customerPhoneMatches = (candidate: any, searchDigits: string) => {
+    const cPhone = formatPhoneNumber(candidate?.phone || '');
+    const cNameDigits = formatPhoneNumber(candidate?.name || '');
+    if (!searchDigits) return false;
+
+    return (
+      (
+        !!cPhone &&
+        (cPhone === searchDigits ||
+          cPhone.endsWith(searchDigits) ||
+          searchDigits.endsWith(cPhone) ||
+          cPhone.includes(searchDigits))
+      ) ||
+      (
+        !!cNameDigits &&
+        (cNameDigits === searchDigits ||
+          cNameDigits.endsWith(searchDigits) ||
+          searchDigits.endsWith(cNameDigits))
+      )
+    );
+  };
+
   // NOTE: backend may return numbers as strings with commas (e.g. "1,000"),
   // or with currency text (e.g. "BDT 1,000"). parseFloat("1,000") => 1.
   const toNumberString = (v: any) => {
@@ -821,6 +843,18 @@ export default function LookupPage() {
     );
   };
 
+
+  const formatMovementType = (h: any) => {
+    const type = String(h?.movement_type || '').toLowerCase();
+    const after = String(h?.status_after || '').toLowerCase();
+
+    if (after === 'employee_use' || type === 'employee_use') {
+      return 'Employee use';
+    }
+
+    return h?.movement_type || '—';
+  };
+
   // Backend is not consistent: some endpoints use metadata/meta, others use location_metadata.
   const readMeta = (x: any) =>
     x?.metadata ??
@@ -954,6 +988,43 @@ export default function LookupPage() {
     };
   };
 
+  const normalizeOrderNumberKey = (value: any) =>
+    String(value || '')
+      .trim()
+      .replace(/^#/, '')
+      .toLowerCase();
+
+  const findOrderByNumber = async (rawOrderNumber: string) => {
+    const cleanOrderNumber = rawOrderNumber.trim().replace(/^#/, '');
+    const cleanKey = normalizeOrderNumberKey(cleanOrderNumber);
+
+    const exactResponse: any = await orderService.getAll({
+      order_number: cleanOrderNumber,
+      per_page: 10,
+      skipStoreScope: true,
+    } as any);
+
+    const exactList = Array.isArray(exactResponse?.data) ? exactResponse.data : [];
+    const exactMatch = exactList.find((o: any) => normalizeOrderNumberKey(o?.order_number) === cleanKey);
+    if (exactMatch?.id) return exactMatch;
+
+    const searchResponse: any = await orderService.getAll({
+      search: cleanOrderNumber,
+      per_page: 100,
+      page: 1,
+      skipStoreScope: true,
+    });
+
+    const list = Array.isArray(searchResponse?.data) ? searchResponse.data : [];
+    return (
+      list.find((o: any) => normalizeOrderNumberKey(o?.order_number) === cleanKey) ||
+      list.find((o: any) => normalizeOrderNumberKey(o?.order_number).startsWith(cleanKey)) ||
+      list.find((o: any) => normalizeOrderNumberKey(o?.order_number).includes(cleanKey)) ||
+      list[0] ||
+      null
+    );
+  };
+
   // -----------------------
   // QZ single barcode print helper (reprint)
   // -----------------------
@@ -1048,6 +1119,7 @@ export default function LookupPage() {
       has_active_return: Boolean(o.has_active_return ?? payload?.has_active_return ?? payload?.active_return),
       active_return: o.active_return ?? payload?.active_return ?? null,
       active_returns: payload?.active_returns ?? o.active_returns ?? [],
+      customer: payload?.customer ?? o.customer ?? null,
       // Keep store info so UI can show "Sold From" (some lookup endpoints only include store/store_id inside order)
       store: o.store ?? payload?.store ?? null,
       store_id: o.store_id ?? payload?.store_id ?? o?.store?.id ?? payload?.store?.id ?? null,
@@ -1192,15 +1264,7 @@ export default function LookupPage() {
     setError('');
 
     try {
-      const res: any = await orderService.getAll({
-        search: clean.replace(/^#/, ''),
-        per_page: 50,
-        skipStoreScope: true
-      });
-      const list = res?.data || [];
-      const exact = list.find((o: any) => String(o.order_number).toLowerCase() === clean.toLowerCase())
-        || list.find((o: any) => String(o.order_number).toLowerCase().includes(clean.toLowerCase()))
-        || list[0];
+      const exact = await findOrderByNumber(clean);
 
       if (!exact?.id) throw new Error(`Order not found: ${clean}`);
       await openOrderById(exact.id);
@@ -1226,8 +1290,9 @@ export default function LookupPage() {
       const searchResults = await customerService.search({ phone: formattedSearch, per_page: 10 });
 
       const matching = searchResults.data.filter((c) => {
-        const cPhone = c.phone.replace(/\D/g, '');
-        return cPhone.startsWith(formattedSearch);
+        const cPhone = formatPhoneNumber(c.phone || '');
+        const cNameDigits = formatPhoneNumber(c.name || '');
+        return cPhone.startsWith(formattedSearch) || cNameDigits.startsWith(formattedSearch);
       });
 
       setSuggestions(matching);
@@ -1498,11 +1563,7 @@ export default function LookupPage() {
         return;
       }
 
-      const exact = searchResults.data.find((c) => c.phone.replace(/\D/g, '') === formattedPhone);
-      if (!exact) {
-        setError(`No customer found with phone number: ${phoneNumber}`);
-        return;
-      }
+      const exact = searchResults.data.find((c) => customerPhoneMatches(c, formattedPhone)) || searchResults.data[0];
 
       setCustomer(exact);
 
@@ -1543,21 +1604,12 @@ export default function LookupPage() {
 
     try {
       const cleanOrderNumber = orderNumber.trim().replace(/^#/, '');
+      const found = await findOrderByNumber(cleanOrderNumber);
 
-      const ordersResponse: any = await orderService.getAll({
-        search: cleanOrderNumber,
-        per_page: 50,
-        skipStoreScope: true,
-      });
-
-      if (!ordersResponse.data || ordersResponse.data.length === 0) {
+      if (!found?.id) {
         setError(`No order found with number: ${cleanOrderNumber}`);
         return;
       }
-
-      let found = ordersResponse.data.find((o: any) => o.order_number.toLowerCase() === cleanOrderNumber.toLowerCase());
-      if (!found) found = ordersResponse.data.find((o: any) => o.order_number.toLowerCase().includes(cleanOrderNumber.toLowerCase()));
-      if (!found) found = ordersResponse.data[0];
 
       await openOrderById(found.id);
     } catch (err: any) {
@@ -2703,6 +2755,34 @@ export default function LookupPage() {
                           </div>
                         </div>
 
+                        {((singleOrder as any).customer || customer) && (() => {
+                          const orderCustomer: any = (singleOrder as any).customer || customer;
+
+                          return (
+                            <div className="rounded border border-gray-200 dark:border-gray-800 bg-white dark:bg-black p-3 mb-3">
+                              <p className="text-[9px] font-semibold text-black dark:text-white uppercase mb-2">Customer Details</p>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <div>
+                                  <p className="text-[9px] text-gray-500 uppercase font-medium">Name</p>
+                                  <p className="text-sm font-semibold text-black dark:text-white">{orderCustomer?.name || '—'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 uppercase font-medium">Phone</p>
+                                  <p className="text-sm text-black dark:text-white">{orderCustomer?.phone || '—'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 uppercase font-medium">Code</p>
+                                  <p className="text-sm text-black dark:text-white">{orderCustomer?.customer_code || '—'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-gray-500 uppercase font-medium">Email</p>
+                                  <p className="text-sm text-black dark:text-white">{orderCustomer?.email || '—'}</p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         <div className="bg-white dark:bg-black rounded border border-gray-200 dark:border-gray-800 overflow-hidden">
                           <table className="w-full text-[10px]">
                             <thead className="bg-gray-50 dark:bg-gray-900">
@@ -3166,7 +3246,7 @@ export default function LookupPage() {
                                 return (
                                   <tr key={h.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/40">
                                     <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{formatDate(h.date)}</td>
-                                    <td className="px-2 py-2 font-semibold text-black dark:text-white">{h.movement_type || '—'}</td>
+                                    <td className="px-2 py-2 font-semibold text-black dark:text-white">{formatMovementType(h)}</td>
                                     <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{h.from_store || '—'}</td>
                                     <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{h.to_store || '—'}</td>
                                     <td className="px-2 py-2 text-gray-700 dark:text-gray-300">{(h.status_before || '—') + ' → ' + (h.status_after || '—')}</td>

@@ -49,7 +49,8 @@ const STATUS_CONFIG: Record<ReturnStatus, { label: string; bg: string; text: str
   pending:    { label: 'Pending',    bg: 'bg-amber-100 dark:bg-amber-900/20',  text: 'text-amber-700 dark:text-amber-400',  icon: Clock },
   approved:   { label: 'Approved',   bg: 'bg-blue-100 dark:bg-blue-900/20',    text: 'text-blue-700 dark:text-blue-400',    icon: CheckCircle },
   rejected:   { label: 'Rejected',   bg: 'bg-red-100 dark:bg-red-900/20',      text: 'text-red-700 dark:text-red-400',      icon: XCircle },
-  processed: { label: 'Processing', bg: 'bg-purple-100 dark:bg-purple-900/20',text: 'text-purple-700 dark:text-purple-400',icon: RefreshCcw },
+  processing: { label: 'Processing', bg: 'bg-purple-100 dark:bg-purple-900/20', text: 'text-purple-700 dark:text-purple-400', icon: RefreshCcw },
+  processed:  { label: 'Processed',  bg: 'bg-purple-100 dark:bg-purple-900/20', text: 'text-purple-700 dark:text-purple-400', icon: RefreshCcw },
   completed:  { label: 'Completed',  bg: 'bg-green-100 dark:bg-green-900/20',  text: 'text-green-700 dark:text-green-400',  icon: CheckCircle },
   refunded:   { label: 'Refunded',   bg: 'bg-teal-100 dark:bg-teal-900/20',    text: 'text-teal-700 dark:text-teal-400',    icon: DollarSign },
 };
@@ -561,9 +562,9 @@ function DetailModal({ ret, onClose }: DetailModalProps) {
               </div>
             )}
 
-            {/* Actions disabled on initiated-returns page */}
+            {/* Actions disabled on returns page */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Workflow actions are disabled here. This page is view-only for initiated returns.</p>
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Workflow actions are disabled here. This page is view-only for returns.</p>
               <button onClick={onClose}
                 className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
                 Close
@@ -592,7 +593,7 @@ export default function ReturnsPage() {
 
   // Filters
   const [search, setSearch] = useState('');
-  const [statusFilter] = useState<ReturnStatus | ''>('pending');
+  const [statusFilter, setStatusFilter] = useState<ReturnStatus | ''>('');
   const [storeFilter, setStoreFilter] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -610,7 +611,7 @@ export default function ReturnsPage() {
     try {
       const filters: ProductReturnFilters = {
         page, per_page: PER_PAGE,
-        status: 'pending',
+        ...(statusFilter ? { status: statusFilter } : {}),
         ...(storeFilter ? { store_id: parseInt(storeFilter) } : {}),
         ...(search ? { search } : {}),
         ...(fromDate ? { from_date: fromDate } : {}),
@@ -655,8 +656,8 @@ export default function ReturnsPage() {
             <div className="border-b border-gray-200 dark:border-gray-800 px-4 py-3">
               <div className="max-w-7xl mx-auto flex items-center justify-between">
                 <div>
-                  <h1 className="text-base font-semibold text-black dark:text-white">Initiated Returns</h1>
-                  <p className="text-xs text-gray-500 mt-0.5">View pending return and exchange requests. Workflow actions are disabled here.</p>
+                  <h1 className="text-base font-semibold text-black dark:text-white">Returns & Exchanges</h1>
+                  <p className="text-xs text-gray-500 mt-0.5">View product returns, including lookup-processed returns. Workflow actions are disabled here.</p>
                 </div>
                 <button onClick={load} disabled={loading}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
@@ -696,9 +697,12 @@ export default function ReturnsPage() {
                       placeholder="Search return# or order#..."
                       className="w-full pl-7 pr-3 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white" />
                   </div>
-                  <select value={statusFilter} disabled
-                    className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 focus:outline-none">
-                    <option value="pending">Initiated Only</option>
+                  <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value as any); setPage(1); }}
+                    className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white">
+                    <option value="">All Status</option>
+                    {(Object.keys(STATUS_CONFIG) as ReturnStatus[]).map(s => (
+                      <option key={s} value={s}>{STATUS_CONFIG[s].label}</option>
+                    ))}
                   </select>
                   <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setPage(1); }}
                     className="px-2 py-1.5 text-xs border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white">
@@ -720,7 +724,7 @@ export default function ReturnsPage() {
               {/* Table */}
               <div className="border border-gray-200 dark:border-gray-800 rounded-xl overflow-hidden">
                 <div className="bg-gray-50 dark:bg-gray-900 px-4 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-                  <h2 className="text-xs font-semibold text-gray-900 dark:text-white uppercase tracking-wide">Initiated Returns</h2>
+                  <h2 className="text-xs font-semibold text-gray-900 dark:text-white uppercase tracking-wide">Returns</h2>
                   <span className="text-[9px] px-2 py-0.5 bg-black dark:bg-white text-white dark:text-black rounded font-medium">{total}</span>
                 </div>
                 <div className="overflow-x-auto">
