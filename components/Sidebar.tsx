@@ -103,6 +103,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'View Inventory', href: '/inventory/view' },
         { label: 'Price Adjustment', href: '/inventory/batch-price-update' },
         { label: 'Barcode Relabeling', href: '/inventory/barcode-relabel' },
+        { label: 'Barcode Rescue', href: '/inventory/revive-barcodes' },
         { label: 'Dispatches', href: '/inventory/outlet-stock' },
         { label: 'Reports', href: '/inventory/reports' },
       ],

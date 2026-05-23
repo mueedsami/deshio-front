@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import { storeService, barcodeTransferService, type Store } from '@/services';
+import { storeService, barcodeTransferService, type Store, type BarcodeOrderLock } from '@/services';
 import {
   AlertCircle,
   CheckCircle2,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 
 type Mode = 'single' | 'bulk';
+type RescueType = 'order_lock' | 'dispatch';
 
 type LogItem = {
   id: string;
@@ -27,6 +28,9 @@ type LogItem = {
   sku?: string;
   fromStore?: string;
   toStore?: string;
+  releasedOrderLinks?: number;
+  releasedDispatchLinks?: number;
+  stockRestored?: boolean;
   at: string;
 };
 
@@ -45,6 +49,8 @@ export default function ReviveBarcodesPage() {
   const [stores, setStores] = useState<Store[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<number | ''>('');
 
+  const [rescueType, setRescueType] = useState<RescueType>('order_lock');
+  const [restoreStock, setRestoreStock] = useState(true);
   const [mode, setMode] = useState<Mode>('single');
 
   // Scanner input (used by both modes)
@@ -59,6 +65,12 @@ export default function ReviveBarcodesPage() {
   const [bulkSubmitting, setBulkSubmitting] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const [bulkErrors, setBulkErrors] = useState<Record<string, string>>({});
+
+  // Order-lock finder
+  const [lockSearch, setLockSearch] = useState('');
+  const [locks, setLocks] = useState<BarcodeOrderLock[]>([]);
+  const [locksLoading, setLocksLoading] = useState(false);
+  const [locksTotal, setLocksTotal] = useState<number | null>(null);
 
   // Shared
   const [logs, setLogs] = useState<LogItem[]>([]);
@@ -95,10 +107,10 @@ export default function ReviveBarcodesPage() {
     bootstrap();
   }, []);
 
-  // Keep scanner focus when switching modes
+  // Keep scanner focus when switching modes/rescue type
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 50);
-  }, [mode]);
+  }, [mode, rescueType]);
 
   const summary = useMemo(() => {
     const success = logs.filter((l) => l.ok).length;
@@ -119,12 +131,38 @@ export default function ReviveBarcodesPage() {
     );
   };
 
+  const fetchOrderLocks = async () => {
+    setLocksLoading(true);
+    setNotice('');
+    try {
+      const res = await barcodeTransferService.getOrderLocks({
+        search: lockSearch.trim() || undefined,
+        per_page: 20,
+      });
+      setLocks(res.data?.items || []);
+      setLocksTotal(res.data?.pagination?.total ?? 0);
+    } catch (err: any) {
+      setNotice(err?.response?.data?.message || err?.message || 'Failed to load locked barcodes.');
+    } finally {
+      setLocksLoading(false);
+    }
+  };
+
   const reviveOne = async (cleanBarcode: string) => {
-    const res = await barcodeTransferService.transferToStore({
+    if (rescueType === 'order_lock') {
+      return barcodeTransferService.reviveOrderLock({
+        barcode: cleanBarcode,
+        store_id: Number(selectedStoreId),
+        status: 'available',
+        restore_stock: restoreStock,
+      });
+    }
+
+    return barcodeTransferService.transferToStore({
       barcode: cleanBarcode,
       store_id: Number(selectedStoreId),
+      status: 'available',
     });
-    return res;
   };
 
   const handleReviveSingle = async (e?: React.FormEvent) => {
@@ -146,13 +184,17 @@ export default function ReviveBarcodesPage() {
           sku: res.data?.product?.sku,
           fromStore: res.data?.from_store?.name,
           toStore: res.data?.to_store?.name,
+          releasedOrderLinks: res.data?.released_order_links_count,
+          releasedDispatchLinks: res.data?.released_cancelled_dispatch_links,
+          stockRestored: res.data?.stock_restored,
         });
         setBarcode('');
+        if (rescueType === 'order_lock' && locks.length) fetchOrderLocks();
       } else {
-        pushLog({ barcode: cleanBarcode, ok: false, message: res?.message || 'Transfer failed' });
+        pushLog({ barcode: cleanBarcode, ok: false, message: res?.message || 'Revive failed' });
       }
     } catch (err: any) {
-      const msg = err?.response?.data?.message || err?.message || 'Transfer failed';
+      const msg = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Revive failed';
       pushLog({ barcode: cleanBarcode, ok: false, message: msg });
     } finally {
       setSubmitting(false);
@@ -238,15 +280,18 @@ export default function ReviveBarcodesPage() {
               sku: res.data?.product?.sku,
               fromStore: res.data?.from_store?.name,
               toStore: res.data?.to_store?.name,
+              releasedOrderLinks: res.data?.released_order_links_count,
+              releasedDispatchLinks: res.data?.released_cancelled_dispatch_links,
+              stockRestored: res.data?.stock_restored,
             });
           } else {
-            const msg = res?.message || 'Transfer failed';
+            const msg = res?.message || 'Revive failed';
             pushLog({ barcode: code, ok: false, message: msg });
             remaining.push(code);
             nextErrors[code] = msg;
           }
         } catch (err: any) {
-          const msg = err?.response?.data?.message || err?.message || 'Transfer failed';
+          const msg = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Revive failed';
           pushLog({ barcode: code, ok: false, message: msg });
           remaining.push(code);
           nextErrors[code] = msg;
@@ -255,6 +300,8 @@ export default function ReviveBarcodesPage() {
           setBulkProgress({ done, total: startList.length });
         }
       }
+
+      if (rescueType === 'order_lock' && locks.length) fetchOrderLocks();
     } finally {
       setPending(remaining);
       setBulkErrors(nextErrors);
@@ -294,9 +341,9 @@ export default function ReviveBarcodesPage() {
 
           <main className="flex-1 overflow-auto p-6">
             <div className="mb-6">
-              <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">Dispatch Barcode Revive</h1>
+              <h1 className="text-2xl font-semibold text-gray-900 dark:text-white">Barcode Rescue</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Scan stuck barcodes from cancelled dispatches and revive them back to any store inventory.
+                Fix barcodes blocked by cancelled, returned, exchanged, or changed orders. Dispatch revive is still available.
               </p>
             </div>
 
@@ -312,7 +359,7 @@ export default function ReviveBarcodesPage() {
                   <div className="flex items-center justify-between gap-2 mb-3">
                     <div className="flex items-center gap-2">
                       <RotateCcw className="w-4 h-4 text-gray-600 dark:text-gray-300" />
-                      <h2 className="font-medium text-gray-900 dark:text-white">Revive Panel</h2>
+                      <h2 className="font-medium text-gray-900 dark:text-white">Rescue Panel</h2>
                     </div>
 
                     {/* Mode Toggle */}
@@ -343,6 +390,55 @@ export default function ReviveBarcodesPage() {
                       </button>
                     </div>
                   </div>
+
+                  {/* Rescue type */}
+                  <div className="mb-3">
+                    <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Problem Type</label>
+                    <div className="grid grid-cols-2 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+                      <button
+                        type="button"
+                        onClick={() => setRescueType('order_lock')}
+                        disabled={disableInputs}
+                        className={`px-3 py-2 text-xs font-medium transition-colors ${
+                          rescueType === 'order_lock'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        Open Order Lock
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRescueType('dispatch')}
+                        disabled={disableInputs}
+                        className={`px-3 py-2 text-xs font-medium transition-colors ${
+                          rescueType === 'dispatch'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        Cancelled Dispatch
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">
+                      Use Open Order Lock for “barcode is already attached to another open order”.
+                    </p>
+                  </div>
+
+                  {rescueType === 'order_lock' && (
+                    <label className="mb-3 flex items-start gap-2 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 px-3 py-2 text-xs text-blue-800 dark:text-blue-200">
+                      <input
+                        type="checkbox"
+                        checked={restoreStock}
+                        onChange={(e) => setRestoreStock(e.target.checked)}
+                        disabled={disableInputs}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        Restore deducted stock if the old order item had already reduced inventory. Keep enabled for cancelled orders.
+                      </span>
+                    </label>
+                  )}
 
                   {/* Target store */}
                   <div className="mb-3">
@@ -531,66 +627,153 @@ export default function ReviveBarcodesPage() {
                 </div>
               </div>
 
-              <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="font-medium text-gray-900 dark:text-white">Recent Revive Activity</h2>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">Latest 50 actions</span>
-                </div>
-
-                {logs.length === 0 ? (
-                  <div className="h-64 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg flex items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-                    No activity yet. Select a store and start scanning.
-                  </div>
-                ) : (
-                  <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
-                    {logs.map((log) => (
-                      <div
-                        key={log.id}
-                        className={`rounded-lg border p-3 ${
-                          log.ok
-                            ? 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/10'
-                            : 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/10'
-                        }`}
-                      >
-                        <div className="flex items-start gap-2">
-                          {log.ok ? (
-                            <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-600 dark:text-green-400" />
-                          ) : (
-                            <AlertCircle className="w-4 h-4 mt-0.5 text-red-600 dark:text-red-400" />
-                          )}
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                              <span className="font-mono font-medium text-gray-900 dark:text-white">{log.barcode}</span>
-                              <span className="text-xs text-gray-500 dark:text-gray-400">• {log.at}</span>
-                            </div>
-                            <p
-                              className={`text-sm ${
-                                log.ok ? 'text-green-800 dark:text-green-200' : 'text-red-800 dark:text-red-200'
-                              }`}
-                            >
-                              {log.message}
-                            </p>
-                            {(log.productName || log.fromStore || log.toStore) && (
-                              <div className="mt-1 text-xs text-gray-600 dark:text-gray-300 space-y-0.5">
-                                {log.productName && (
-                                  <div>
-                                    Product: {log.productName}
-                                    {log.sku ? ` (${log.sku})` : ''}
-                                  </div>
-                                )}
-                                {(log.fromStore || log.toStore) && (
-                                  <div>
-                                    {log.fromStore || '-'} → {log.toStore || '-'}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </div>
+              <div className="lg:col-span-2 space-y-4">
+                {rescueType === 'order_lock' && (
+                  <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                      <div>
+                        <h2 className="font-medium text-gray-900 dark:text-white">Open Order Locked Barcodes</h2>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
+                          Search by barcode, product, SKU, or order number. These are the barcodes that can block fulfillment.
+                        </p>
                       </div>
-                    ))}
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={lockSearch}
+                          onChange={(e) => setLockSearch(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') fetchOrderLocks();
+                          }}
+                          placeholder="Search locked barcodes"
+                          className="w-56 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 px-3 py-2 text-sm text-gray-900 dark:text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={fetchOrderLocks}
+                          disabled={locksLoading}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 text-white px-3 py-2 text-sm font-medium disabled:opacity-50"
+                        >
+                          {locksLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <ListChecks className="w-4 h-4" />}
+                          Check
+                        </button>
+                      </div>
+                    </div>
+
+                    {locksTotal !== null && (
+                      <div className="mb-2 text-xs text-gray-500 dark:text-gray-400">Found {locksTotal} open-order locked barcode(s).</div>
+                    )}
+
+                    {locks.length > 0 && (
+                      <div className="space-y-2 max-h-80 overflow-auto pr-1">
+                        {locks.map((item) => (
+                          <div key={item.id} className="rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-900 dark:bg-orange-900/10 p-3">
+                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="font-mono text-sm font-semibold text-gray-900 dark:text-white break-all">{item.barcode}</div>
+                                <div className="text-xs text-gray-700 dark:text-gray-200 mt-0.5">
+                                  {item.product?.name || 'Unknown product'} {item.product?.sku ? `(${item.product.sku})` : ''}
+                                </div>
+                                <div className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                                  Status: {item.current_status || '-'} • Current store: {item.current_store?.name || '-'} • Locks: {item.locks_count}
+                                </div>
+                                {item.locks?.map((lock) => (
+                                  <div key={lock.order_item_id} className="mt-1 text-[11px] text-orange-800 dark:text-orange-200">
+                                    Order #{lock.order_number || lock.order_id} • {lock.order_status} • Qty {lock.quantity || 1}
+                                    {lock.is_inventory_deducted ? ' • stock deducted' : ''}
+                                  </div>
+                                ))}
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRescueType('order_lock');
+                                  setMode('single');
+                                  setBarcode(item.barcode);
+                                  setTimeout(() => inputRef.current?.focus(), 50);
+                                }}
+                                className="shrink-0 inline-flex items-center justify-center rounded-lg border border-orange-300 dark:border-orange-800 px-3 py-1.5 text-xs font-medium text-orange-800 dark:text-orange-200 hover:bg-orange-100 dark:hover:bg-orange-900/30"
+                              >
+                                Load to Scanner
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
+
+                <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="font-medium text-gray-900 dark:text-white">Recent Revive Activity</h2>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">Latest 50 actions</span>
+                  </div>
+
+                  {logs.length === 0 ? (
+                    <div className="h-64 border border-dashed border-gray-300 dark:border-gray-600 rounded-lg flex items-center justify-center text-sm text-gray-500 dark:text-gray-400">
+                      No activity yet. Select a store and start scanning.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[65vh] overflow-auto pr-1">
+                      {logs.map((log) => (
+                        <div
+                          key={log.id}
+                          className={`rounded-lg border p-3 ${
+                            log.ok
+                              ? 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/10'
+                              : 'border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/10'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2">
+                            {log.ok ? (
+                              <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-600 dark:text-green-400" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 mt-0.5 text-red-600 dark:text-red-400" />
+                            )}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                                <span className="font-mono font-medium text-gray-900 dark:text-white">{log.barcode}</span>
+                                <span className="text-xs text-gray-500 dark:text-gray-400">• {log.at}</span>
+                              </div>
+                              <p
+                                className={`text-sm ${
+                                  log.ok ? 'text-green-800 dark:text-green-200' : 'text-red-800 dark:text-red-200'
+                                }`}
+                              >
+                                {log.message}
+                              </p>
+                              {(log.productName || log.fromStore || log.toStore || log.releasedOrderLinks !== undefined || log.releasedDispatchLinks !== undefined) && (
+                                <div className="mt-1 text-xs text-gray-600 dark:text-gray-300 space-y-0.5">
+                                  {log.productName && (
+                                    <div>
+                                      Product: {log.productName}
+                                      {log.sku ? ` (${log.sku})` : ''}
+                                    </div>
+                                  )}
+                                  {(log.fromStore || log.toStore) && (
+                                    <div>
+                                      {log.fromStore || '-'} → {log.toStore || '-'}
+                                    </div>
+                                  )}
+                                  {log.releasedOrderLinks !== undefined && (
+                                    <div>
+                                      Released order link(s): {log.releasedOrderLinks}
+                                      {log.stockRestored ? ' • stock restored' : ''}
+                                    </div>
+                                  )}
+                                  {log.releasedDispatchLinks !== undefined && (
+                                    <div>Released dispatch link(s): {log.releasedDispatchLinks}</div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </main>
