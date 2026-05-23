@@ -403,13 +403,7 @@ export default function OrdersDashboard() {
       setOrderTypeFilter('social_commerce');
       setCourierFilter('pathao');
     } else {
-      setOrderStatusFilter('All Order Status');
-      setOrderTypeFilter('All Types');
-      setPaymentStatusFilter('All Payment Status');
-      setCourierFilter('All Couriers');
-      setDateFilter('');
-      setStartDate('');
-      setEndDate('');
+      setOrderStatusFilter('pending');
     }
   }, [initialViewMode]);
 
@@ -451,8 +445,6 @@ export default function OrdersDashboard() {
   const [installmentMethodId, setInstallmentMethodId] = useState<number | ''>('');
   const [installmentRef, setInstallmentRef] = useState('');
   const [installmentNotes, setInstallmentNotes] = useState('');
-  const [installmentCollectedBy, setInstallmentCollectedBy] = useState('');
-  const [installmentNextCollectionDate, setInstallmentNextCollectionDate] = useState('');
   const [installmentMethods, setInstallmentMethods] = useState<PaymentMethod[]>([]);
   const [isCollectingInstallment, setIsCollectingInstallment] = useState(false);
 
@@ -1062,15 +1054,7 @@ export default function OrdersDashboard() {
         order.is_installment_payment === 1 ||
         (order.installment_info && typeof order.installment_info === 'object' && Object.keys(order.installment_info).length > 0)
       ),
-      installmentInfo: order.installment_info ?? order.installment_plan
-        ? {
-            ...(order.installment_info ?? order.installment_plan),
-            total_installments: Number((order.installment_info ?? order.installment_plan)?.total_installments ?? 0) || 0,
-            paid_installments: Number((order.installment_info ?? order.installment_plan)?.paid_installments ?? 0) || 0,
-            installment_amount: parseMoney((order.installment_info ?? order.installment_plan)?.installment_amount),
-            next_payment_due: (order.installment_info ?? order.installment_plan)?.next_payment_due ?? null,
-          }
-        : null,
+      installmentInfo: (order.installment_info ?? order.installment_plan ?? null),
 
       salesBy: order.salesman?.name || userName || 'N/A',
       store: order.store?.name || '',
@@ -1217,18 +1201,6 @@ export default function OrdersDashboard() {
     return [...DEFAULT_COURIERS];
   }, [DEFAULT_COURIERS]);
 
-  const normalizeDateInput = (value: any): string => {
-    if (!value) return '';
-    const raw = String(value).trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    const dt = new Date(raw);
-    if (Number.isNaN(dt.getTime())) return '';
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const d = String(dt.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  };
-
   const loadAvailableCouriers = async () => {
     try {
       const list = await orderService.getAvailableCouriers();
@@ -1272,25 +1244,11 @@ export default function OrdersDashboard() {
       };
 
       if (viewMode === 'installments') {
-        const installmentParams: any = {
-          store_id: commonParams.store_id,
-          search: commonParams.search,
-          order_number: commonParams.order_number,
-          per_page: commonParams.per_page,
+        const inst = await orderService.getAll({
+          ...commonParams,
+          order_type: 'counter',
           installment_only: true,
-          sort_by: 'next_payment_due',
-          sort_order: 'asc',
-        };
-
-        // Only date-scope installments when the user explicitly sets a date/range.
-        // This prevents the default Online Orders "today" filter from hiding upcoming dues.
-        if (dateFilter || startDate || endDate) {
-          installmentParams.date_filter_type = dateFilterType;
-          installmentParams.date_from = startDate || dateFilter || undefined;
-          installmentParams.date_to = endDate || dateFilter || undefined;
-        }
-
-        const inst = await orderService.getAll(installmentParams);
+        });
 
         allOrders = inst.data || [];
       } else {
@@ -1309,14 +1267,6 @@ export default function OrdersDashboard() {
       }
 
       allOrders.sort((a: any, b: any) => {
-        if (viewMode === 'installments') {
-          const aDueRaw = a?.installment_info?.next_payment_due || a?.installment_plan?.next_payment_due || a?.next_payment_due || '9999-12-31';
-          const bDueRaw = b?.installment_info?.next_payment_due || b?.installment_plan?.next_payment_due || b?.next_payment_due || '9999-12-31';
-          const aDue = new Date(aDueRaw).getTime();
-          const bDue = new Date(bDueRaw).getTime();
-          if (aDue !== bDue) return aDue - bDue;
-        }
-
         const dateA = dateFilterType === 'updated_at' ? (a.updated_at || a.created_at) : a.created_at;
         const dateB = dateFilterType === 'updated_at' ? (b.updated_at || b.created_at) : b.created_at;
         return new Date(dateB).getTime() - new Date(dateA).getTime();
@@ -1601,14 +1551,12 @@ export default function OrdersDashboard() {
 
       const suggested = Math.min(
         outstanding,
-        parseMoney(info?.installment_amount ?? outstanding) || outstanding
+        Number(info?.installment_amount ?? outstanding) || outstanding
       );
 
       setInstallmentAmountInput((suggested || 0).toFixed(2));
       setInstallmentNotes('');
       setInstallmentRef('');
-      setInstallmentCollectedBy(userName || '');
-      setInstallmentNextCollectionDate(normalizeDateInput(info?.next_payment_due ?? full.next_payment_due) || '');
       setShowInstallmentModal(true);
     } catch (e: any) {
       console.error('Failed to open installment modal:', e);
@@ -1631,21 +1579,6 @@ export default function OrdersDashboard() {
       return;
     }
 
-    const collectedBy = installmentCollectedBy.trim();
-    if (!collectedBy) {
-      alert('Please enter the collector name');
-      return;
-    }
-
-    const currentOutstanding = parseMoney(selectedBackendOrder?.outstanding_amount);
-    const remainingAfterPayment = Math.max(0, currentOutstanding - amt);
-    const nextCollectionDate = normalizeDateInput(installmentNextCollectionDate);
-
-    if (remainingAfterPayment > 0 && !nextCollectionDate) {
-      alert('Please enter the next collection date');
-      return;
-    }
-
     setIsCollectingInstallment(true);
     try {
       await paymentService.addInstallmentPayment(installmentOrderId, {
@@ -1653,9 +1586,7 @@ export default function OrdersDashboard() {
         amount: amt,
         transaction_reference: installmentRef ? installmentRef.trim() : undefined,
         notes: installmentNotes ? installmentNotes.trim() : undefined,
-        collected_by_name: collectedBy,
-        next_collection_date: remainingAfterPayment > 0 ? nextCollectionDate : undefined,
-      } as any);
+      });
 
       // Refresh list + details
       await loadOrders();
@@ -3546,8 +3477,6 @@ export default function OrdersDashboard() {
                     setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
-                    setStartDate('');
-                    setEndDate('');
                     setSelectedOrders(new Set());
                   }}
                   className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${viewMode === 'online'
@@ -3567,8 +3496,6 @@ export default function OrdersDashboard() {
                     setCourierFilter('All Couriers');
                     setSearch('');
                     setDateFilter('');
-                    setStartDate('');
-                    setEndDate('');
                     setSelectedOrders(new Set());
                   }}
                   className={`px-3 py-1.5 rounded-full border text-xs font-semibold transition-all ${viewMode === 'installments'
@@ -4328,29 +4255,6 @@ export default function OrdersDashboard() {
               </div>
 
               <div>
-                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Collected By <span className="text-red-500">*</span></label>
-                <input
-                  value={installmentCollectedBy}
-                  onChange={(e) => setInstallmentCollectedBy(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
-                  placeholder="Collector name"
-                />
-              </div>
-
-              <div>
-                <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Next Collection Date</label>
-                <input
-                  type="date"
-                  value={installmentNextCollectionDate}
-                  onChange={(e) => setInstallmentNextCollectionDate(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
-                />
-                <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-1">
-                  Required if there will still be due amount after this collection.
-                </p>
-              </div>
-
-              <div>
                 <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Transaction Reference (optional)</label>
                 <input
                   value={installmentRef}
@@ -4809,8 +4713,8 @@ export default function OrdersDashboard() {
                           const info = selectedOrder.installmentInfo || (selectedBackendOrder?.installment_info ?? selectedBackendOrder?.installment_plan ?? null);
                           const totalIns = Number(info?.total_installments ?? 0) || 0;
                           const paidIns = Number(info?.paid_installments ?? selectedBackendOrder?.installment_info?.paid_installments ?? 0) || 0;
-                          const insAmt = parseMoney(info?.installment_amount ?? 0) || 0;
-                          const nextDue = info?.next_payment_due ?? selectedBackendOrder?.installment_info?.next_payment_due ?? selectedBackendOrder?.next_payment_due ?? null;
+                          const insAmt = Number(info?.installment_amount ?? 0) || 0;
+                          const nextDue = info?.next_payment_due ?? selectedBackendOrder?.installment_info?.next_payment_due ?? null;
 
                           return (
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -4835,56 +4739,6 @@ export default function OrdersDashboard() {
                             </div>
                           );
                         })()}
-
-                        {/* Payment history (installments only) */}
-                        {Array.isArray(selectedBackendOrder?.payments) &&
-                          selectedBackendOrder.payments.filter((p: any) => String(p.payment_type || '').toLowerCase().includes('installment')).length > 0 && (
-                            <div className="mt-4 border border-amber-100 dark:border-amber-900/20 rounded-lg overflow-hidden bg-white dark:bg-black/30">
-                              <div className="px-3 py-2 border-b border-amber-100 dark:border-amber-900/20 bg-amber-50/70 dark:bg-amber-900/10">
-                                <p className="text-[10px] font-bold text-amber-700 dark:text-amber-400 uppercase tracking-widest">Installment Payments</p>
-                              </div>
-
-                              <div className="divide-y divide-amber-100 dark:divide-amber-900/20">
-                                {selectedBackendOrder.payments
-                                  .filter((p: any) => String(p.payment_type || '').toLowerCase().includes('installment'))
-                                  .slice()
-                                  .reverse()
-                                  .slice(0, 8)
-                                  .map((p: any) => {
-                                    const paymentData = p.payment_data && typeof p.payment_data === 'object' ? p.payment_data : {};
-                                    const collectedBy = p.collected_by_name ?? paymentData.collected_by_name ?? '';
-                                    const nextCollection = p.next_collection_date ?? paymentData.next_collection_date ?? '';
-
-                                    return (
-                                      <div key={p.id} className="px-3 py-2 flex items-start justify-between gap-3">
-                                        <div>
-                                          <p className="text-xs font-bold text-black dark:text-white">
-                                            ৳{parseMoney(p.amount).toFixed(2)}
-                                            <span className="ml-2 text-[10px] font-medium text-gray-500 dark:text-gray-400">
-                                              {p.payment_method || p.payment_method_name || ''}
-                                            </span>
-                                          </p>
-                                          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-                                            {p.created_at ? new Date(p.created_at).toLocaleString('en-GB') : ''}
-                                            {p.transaction_reference ? ` • Ref: ${p.transaction_reference}` : ''}
-                                          </p>
-                                          {(collectedBy || nextCollection) && (
-                                            <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
-                                              {collectedBy ? `Collected by: ${collectedBy}` : ''}
-                                              {collectedBy && nextCollection ? ' • ' : ''}
-                                              {nextCollection ? `Next: ${new Date(nextCollection).toLocaleDateString('en-GB')}` : ''}
-                                            </p>
-                                          )}
-                                        </div>
-                                        <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                                          {statusLabel(p.status || '')}
-                                        </span>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          )}
                       </div>
                     )}
                   </div>
