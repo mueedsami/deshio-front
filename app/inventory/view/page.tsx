@@ -1,888 +1,497 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import {
-  BarChart3,
-  RefreshCw,
-  TrendingDown,
-  TrendingUp,
-  Tag,
-  Package,
-  CalendarDays,
-  AlertCircle,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, ChevronDown, ChevronUp, Package, Search } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
-import orderService, { type Order as ApiOrder, type OrderFilters } from '@/services/orderService';
-import inventoryService, { type GlobalInventoryItem } from '@/services/inventoryService';
-import productService, { type Product } from '@/services/productService';
-import categoryService, { type Category } from '@/services/groupInventory';
+import inventoryService, { type GlobalInventoryItem, type Store as StoreBreakdown } from '@/services/inventoryService';
+import { productService, type Product } from '@/services/productService';
+import defectiveProductService, { type DefectiveProduct, type DefectiveStatus } from '@/services/defectiveProductService';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
-type Metric = 'units' | 'net_sales';
+interface ProductVariation {
+  productId: number;
+  productName: string;
+  variationSuffix?: string;
+  quantity: number;
+  stores: StoreBreakdown[];
+  categoryId?: number;
+  categoryName?: string;
+  imageUrl?: string;
+  color?: string;
+  size?: string;
+}
 
-type ProductAgg = {
-  product_id: number;
-  name: string;
+interface GroupedProduct {
+  groupKey: string;
   sku: string;
-  category_id: number;
-  units: number;
-  gross: number;
-  discount: number;
-  tax: number;
-  net: number;
-  discountedNet: number;
-  fullPriceNet: number;
-};
-
-type CategoryAgg = {
-  category_id: number;
-  category_name: string;
-  units: number;
-  net: number;
-  stock_units: number;
-};
-
-type WeeklyRow = {
-  weekStart: string; // YYYY-MM-DD
-  weekEnd: string; // YYYY-MM-DD
-  top: { category: string; units: number }[];
-  slow: { category: string; units: number }[];
-};
-
-function toNumber(val: any): number {
-  if (val === null || val === undefined) return 0;
-  const n = Number(String(val).replace(/[^0-9.-]/g, ''));
-  return Number.isFinite(n) ? n : 0;
+  productName: string;
+  totalStock: number;
+  variations: ProductVariation[];
+  expanded: boolean;
+  productIds: number[];
+  categoryId?: number;
+  categoryName?: string;
+  imageUrl?: string;
+  extraDefective: number;
+  extraUsed: number;
+  extraEmployeeUse: number;
 }
 
-function yyyyMmDd(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+type ExtraCounts = { defective: number; used: number; employeeUse: number };
+type RateLimitState = { active: boolean; message?: string };
+type InventorySnapshot = { quantity: number; stores: StoreBreakdown[]; categoryId?: number; categoryName?: string };
+
+const ACTIVE_EXTRA_STATUSES: DefectiveStatus[] = [
+  'identified',
+  'inspected',
+  'available_for_sale',
+];
+
+const SERVER_PAGE_SIZE = 60;
+const SEARCH_DEBOUNCE_MS = 500;
+
+function unwrapArray<T = any>(payload: any): T[] {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.products)) return payload.products;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload?.data?.products)) return payload.data.products;
+  if (Array.isArray(payload?.data?.items)) return payload.data.items;
+  if (Array.isArray(payload?.data?.data)) return payload.data.data;
+  return [];
 }
 
-function addDays(d: Date, days: number): Date {
-  const x = new Date(d);
-  x.setDate(x.getDate() + days);
-  return x;
+function unwrapInventory(payload: any): GlobalInventoryItem[] {
+  return unwrapArray<GlobalInventoryItem>(payload);
 }
 
-function getWeekStartISO(date: Date): string {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  // Monday as week start
-  const day = d.getDay(); // 0..6 (Sun..Sat)
-  const diff = (day === 0 ? -6 : 1) - day;
-  d.setDate(d.getDate() + diff);
-  return yyyyMmDd(d);
+function isEmployeeUseItem(item: DefectiveProduct): boolean {
+  const desc = String(item.defect_description || '').toUpperCase();
+  const barcodeStatus = String((item as any)?.barcode?.current_status || '').toLowerCase();
+  return desc.includes('EMPLOYEE_USE') || barcodeStatus === 'employee_use';
 }
 
-function formatMoney(n: number): string {
-  // Keep it simple (no locale surprises)
-  const fixed = (Math.round(n * 100) / 100).toFixed(2);
-  return fixed;
+function isUsedItem(item: DefectiveProduct): boolean {
+  const desc = String(item.defect_description || '').toUpperCase();
+  return desc.includes('USED_ITEM');
 }
 
-// Minimal CSV parser (supports quoted fields + commas + newlines)
-function parseCsvText(text: string, maxRows = 60): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = '';
-  let inQuotes = false;
+function normalizeStockNumber(value: any): number {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+function getProductPayload(item: any) {
+  return item?.product || item?.product_data || item?.product_detail || item?.product_info || null;
+}
 
-    if (inQuotes) {
-      if (ch === '"') {
-        const next = text[i + 1];
-        if (next === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-      continue;
-    }
+function getCustomFieldValue(product: any, titles: string[]): string | undefined {
+  const list = Array.isArray(product?.custom_fields) ? product.custom_fields : [];
+  const lowerTitles = titles.map(t => t.toLowerCase());
+  const found = list.find((field: any) => lowerTitles.includes(String(field?.field_title || field?.title || field?.name || '').toLowerCase()));
+  const value = found?.value ?? found?.raw_value;
+  if (value === null || value === undefined || value === '') return undefined;
+  return String(value);
+}
 
-    if (ch === '"') {
-      inQuotes = true;
-      continue;
-    }
+function getProductColorSize(product: any) {
+  const color =
+    product?.color ||
+    product?.colour ||
+    product?.variant_color ||
+    product?.attributes?.color ||
+    product?.attributes?.colour ||
+    getCustomFieldValue(product, ['color', 'colour']);
 
-    if (ch === ',') {
-      row.push(field);
-      field = '';
-      continue;
-    }
+  const size =
+    product?.size ||
+    product?.variant_size ||
+    product?.attributes?.size ||
+    getCustomFieldValue(product, ['size']);
 
-    if (ch === '\n') {
-      row.push(field);
-      field = '';
-      rows.push(row);
-      row = [];
-      if (rows.length >= maxRows) break;
-      continue;
-    }
+  return {
+    color: color && String(color) !== 'Default' ? String(color) : undefined,
+    size: size && String(size) !== 'One Size' ? String(size) : undefined,
+  };
+}
 
-    if (ch === '\r') {
-      continue;
-    }
+function getCategoryNameFromProduct(product: any): string | undefined {
+  const category = product?.category;
+  const name =
+    product?.category_path ||
+    product?.category_name ||
+    product?.category_title ||
+    category?.full_name ||
+    category?.title ||
+    category?.name;
 
-    field += ch;
+  return name ? String(name) : undefined;
+}
+
+function getCategoryIdFromProduct(product: any): number | undefined {
+  const raw = product?.category_id ?? product?.category?.id;
+  const categoryId = Number(raw || 0);
+  return categoryId > 0 ? categoryId : undefined;
+}
+
+function pickImageFromAny(source: any): string | undefined {
+  if (!source) return undefined;
+
+  const customFieldImage = getCustomFieldValue(source, ['image', 'thumbnail', 'photo']);
+  if (customFieldImage) return customFieldImage;
+
+  const direct =
+    source?.thumbnail_url ||
+    source?.thumbnailUrl ||
+    source?.thumbnail ||
+    source?.product_thumbnail ||
+    source?.product_image ||
+    source?.image_url ||
+    source?.imageUrl ||
+    source?.image_path ||
+    source?.image ||
+    source?.photo ||
+    source?.picture;
+  if (direct) return String(direct);
+
+  const primaryImage = source?.primary_image || source?.primaryImage;
+  const primaryImageUrl = primaryImage?.url || primaryImage?.image_url || primaryImage?.imageUrl || primaryImage?.image_path || primaryImage?.path;
+  if (primaryImageUrl) return String(primaryImageUrl);
+
+  const displayImages = Array.isArray(source?.display_images) ? source.display_images : [];
+  const productImages = Array.isArray(source?.product_images) ? source.product_images : [];
+  const images = displayImages.length > 0
+    ? displayImages
+    : productImages.length > 0
+      ? productImages
+      : (Array.isArray(source?.images) ? source.images : []);
+
+  if (images.length > 0) {
+    const activeImages = images.filter((image: any) => image?.is_active !== false);
+    activeImages.sort((a: any, b: any) => {
+      if (a?.is_primary && !b?.is_primary) return -1;
+      if (!a?.is_primary && b?.is_primary) return 1;
+      return Number(a?.sort_order || 0) - Number(b?.sort_order || 0);
+    });
+    const imageUrl = activeImages[0]?.thumbnail_url || activeImages[0]?.image_url || activeImages[0]?.imageUrl || activeImages[0]?.image_path || activeImages[0]?.url || activeImages[0]?.path;
+    if (imageUrl) return String(imageUrl);
   }
 
-  if (rows.length < maxRows && (field.length > 0 || row.length > 0)) {
-    row.push(field);
-    rows.push(row);
+  return undefined;
+}
+
+function normalizeImageUrl(url?: string | null) {
+  const normalized = toAbsoluteAssetUrl(url);
+  return normalized || '/placeholder-image.jpg';
+}
+
+function flattenInventoryItems(inventoryItems: GlobalInventoryItem[]): any[] {
+  const rows: any[] = [];
+
+  for (const rawItem of inventoryItems) {
+    const item: any = rawItem;
+    const productId = item?.product_id ?? item?.product?.id;
+    const variants = Array.isArray(item?.products)
+      ? item.products
+      : Array.isArray(item?.variants)
+        ? item.variants
+        : [];
+
+    if (!productId && variants.length > 0) {
+      for (const variant of variants) {
+        rows.push({
+          ...item,
+          ...variant,
+          product: variant,
+          sku: item?.sku || variant?.sku,
+          base_name: item?.base_name || variant?.base_name,
+          category_id: variant?.category_id ?? item?.category_id,
+          category: variant?.category ?? item?.category,
+          stores: variant?.stores || item?.stores || [],
+          total_quantity: variant?.total_quantity ?? variant?.stock_quantity ?? variant?.quantity ?? 0,
+        });
+      }
+    } else {
+      rows.push(item);
+    }
   }
 
   return rows;
 }
 
+function buildInventoryMap(inventoryItems: GlobalInventoryItem[]): Map<number, InventorySnapshot> {
+  const map = new Map<number, InventorySnapshot>();
+
+  for (const rawItem of flattenInventoryItems(inventoryItems)) {
+    const item: any = rawItem;
+    const product = getProductPayload(item);
+    const productId = Number(item?.product_id ?? product?.id ?? item?.id ?? 0);
+    if (!productId) continue;
+
+    const current = map.get(productId) || { quantity: 0, stores: [] };
+    current.quantity += normalizeStockNumber(item?.total_quantity ?? item?.quantity ?? item?.stock_quantity);
+
+    const stores = Array.isArray(item?.stores) ? item.stores : [];
+    for (const store of stores) {
+      const existingStore = current.stores.find(currentStore => Number(currentStore.store_id) === Number(store.store_id));
+      if (existingStore) {
+        existingStore.quantity = normalizeStockNumber(existingStore.quantity) + normalizeStockNumber(store.quantity);
+        existingStore.batches_count = normalizeStockNumber(existingStore.batches_count) + normalizeStockNumber(store.batches_count);
+      } else {
+        current.stores.push({ ...store });
+      }
+    }
+
+    const categoryId = getCategoryIdFromProduct(item) || getCategoryIdFromProduct(product);
+    const categoryName = getCategoryNameFromProduct(item) || getCategoryNameFromProduct(product);
+    if (!current.categoryId && categoryId) current.categoryId = categoryId;
+    if (!current.categoryName && categoryName) current.categoryName = categoryName;
+
+    map.set(productId, current);
+  }
+
+  return map;
+}
+
+function getAllSkuGroupProducts(groupProduct: Product): any[] {
+  const variants = Array.isArray((groupProduct as any)?.variants) ? (groupProduct as any).variants : [];
+  const all = [groupProduct as any, ...variants];
+  const seen = new Set<number>();
+
+  return all.filter(product => {
+    const id = Number(product?.id || 0);
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+function buildGroupsFromBackendProducts(products: Product[], inventoryMap: Map<number, InventorySnapshot>): GroupedProduct[] {
+  return products.map((groupProduct: any) => {
+    const variants = getAllSkuGroupProducts(groupProduct);
+    const sku = String(groupProduct?.sku || '').trim() || 'NO-SKU';
+    const categoryId = getCategoryIdFromProduct(groupProduct);
+    const categoryName = getCategoryNameFromProduct(groupProduct);
+    const groupImage = pickImageFromAny(groupProduct);
+
+    const variations: ProductVariation[] = variants.map((product) => {
+      const productId = Number(product?.id || 0);
+      const inventory = inventoryMap.get(productId);
+      const imageUrl = pickImageFromAny(product) || groupImage;
+      const { color, size } = getProductColorSize(product);
+      const productCategoryId = getCategoryIdFromProduct(product) || inventory?.categoryId || categoryId;
+      const productCategoryName = getCategoryNameFromProduct(product) || inventory?.categoryName || categoryName;
+
+      return {
+        productId,
+        productName: String(product?.name || product?.base_name || groupProduct?.name || 'Unnamed Product'),
+        variationSuffix: product?.variation_suffix ? String(product.variation_suffix) : undefined,
+        quantity: inventory ? inventory.quantity : normalizeStockNumber(product?.stock_quantity ?? product?.total_quantity),
+        stores: inventory?.stores || [],
+        categoryId: productCategoryId,
+        categoryName: productCategoryName,
+        imageUrl: imageUrl ? normalizeImageUrl(imageUrl) : undefined,
+        color,
+        size,
+      };
+    });
+
+    const productIds = variations.map(variation => variation.productId).filter(Boolean);
+    const firstVariationCategory = variations.find(variation => variation.categoryName || variation.categoryId);
+    const firstVariationImage = variations.find(variation => variation.imageUrl);
+
+    return {
+      groupKey: `SKU-${sku}`,
+      sku,
+      productName: String(groupProduct?.base_name || groupProduct?.name || sku),
+      totalStock: variations.reduce((sum, variation) => sum + normalizeStockNumber(variation.quantity), 0),
+      variations,
+      expanded: false,
+      productIds,
+      categoryId: categoryId || firstVariationCategory?.categoryId,
+      categoryName: categoryName || firstVariationCategory?.categoryName,
+      imageUrl: groupImage ? normalizeImageUrl(groupImage) : firstVariationImage?.imageUrl,
+      extraDefective: 0,
+      extraUsed: 0,
+      extraEmployeeUse: 0,
+    };
+  });
+}
+
 export default function ViewInventoryPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  // Filters
-  const today = useMemo(() => new Date(), []);
-  const [dateFrom, setDateFrom] = useState<string>(yyyyMmDd(addDays(today, -30)));
-  const [dateTo, setDateTo] = useState<string>(yyyyMmDd(today));
-  const [metric, setMetric] = useState<Metric>('units');
-  const [topN, setTopN] = useState<number>(10);
-  const [lowThresholdUnits, setLowThresholdUnits] = useState<number>(5);
-  const [weeksToShow, setWeeksToShow] = useState<number>(8);
-  const [types, setTypes] = useState({
-    counter: true,
-    social_commerce: true,
-    ecommerce: true,
-  });
-  const [statuses, setStatuses] = useState({
-    pending_assignment: true,
-    completed: true,
-    pending: false,
-  });
-
-  // CSV Exports (Reporting API)
-  const [csvStoreId, setCsvStoreId] = useState('');
-  const [csvStatus, setCsvStatus] = useState(''); // empty = all statuses
-  const [csvCustomerId, setCsvCustomerId] = useState(''); // Sales/Booking CSV only
-  const [csvCategoryId, setCsvCategoryId] = useState(''); // Stock CSV only
-  const [csvProductId, setCsvProductId] = useState(''); // Stock/Booking CSV only
-  const [csvIncludeInactive, setCsvIncludeInactive] = useState(false); // Stock CSV only
-  const [csvPaymentToday, setCsvPaymentToday] = useState(false); // Payment Breakdown CSV only
-  const [csvPaymentOrderType, setCsvPaymentOrderType] = useState(''); // Payment Breakdown CSV only
-  // Purchase Order CSV
-  const [csvPoId, setCsvPoId] = useState('');
-  const [csvPoBusy, setCsvPoBusy] = useState(false);
-  const [csvPoBarcodeBusy, setCsvPoBarcodeBusy] = useState(false);
-
-  // Dispatch Barcode CSV
-  const [csvDispatchStoreId, setCsvDispatchStoreId] = useState('');
-  const [csvDispatchStatus, setCsvDispatchStatus] = useState('');
-  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState('');
-  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState('');
-  const [csvDispatchBusy, setCsvDispatchBusy] = useState(false);
-
-  // Installment CSV
-  const [csvInstallmentCustomerId, setCsvInstallmentCustomerId] = useState('');
-  const [csvInstallmentStoreId, setCsvInstallmentStoreId] = useState('');
-  const [csvInstallmentPaymentStatus, setCsvInstallmentPaymentStatus] = useState('');
-  const [csvInstallmentBusy, setCsvInstallmentBusy] = useState(false);
-
-  const [csvBusy, setCsvBusy] = useState<{ category: boolean; sales: boolean; stock: boolean; booking: boolean; payment: boolean }>({
-    category: false,
-    sales: false,
-    stock: false,
-    booking: false,
-    payment: false,
-  });
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewTitle, setPreviewTitle] = useState('');
-  const [previewHeader, setPreviewHeader] = useState<string[]>([]);
-  const [previewBody, setPreviewBody] = useState<string[][]>([]);
-  const [previewError, setPreviewError] = useState('');
-
-  // Data states
+  const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState('');
+  const [groupedProducts, setGroupedProducts] = useState<GroupedProduct[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string>('');
-  const [isTruncated, setIsTruncated] = useState(false);
-
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [inventory, setInventory] = useState<GlobalInventoryItem[]>([]);
-  const [orders, setOrders] = useState<ApiOrder[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [lastPage, setLastPage] = useState(1);
+  const [totalGroups, setTotalGroups] = useState(0);
+  const [extraMap, setExtraMap] = useState<Map<number, ExtraCounts>>(new Map());
+  const [rateLimit] = useState<RateLimitState>({ active: false });
 
   useEffect(() => {
-    loadAll();
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [searchTerm]);
+
+  const getCategoryForGroup = (group: GroupedProduct) => {
+    if (group.categoryName) return group.categoryName;
+
+    for (const variation of group.variations) {
+      if (variation.categoryName) return variation.categoryName;
+    }
+
+    return 'Uncategorized';
+  };
+
+  const getHeroImageForGroup = (group: GroupedProduct) => {
+    if (group.imageUrl) return normalizeImageUrl(group.imageUrl);
+
+    const variationWithImage = group.variations.find(variation => variation.imageUrl);
+    if (variationWithImage?.imageUrl) return normalizeImageUrl(variationWithImage.imageUrl);
+
+    return '/placeholder-image.jpg';
+  };
+
+  const fetchAllActiveExtraItems = async (): Promise<DefectiveProduct[]> => {
+    const all: DefectiveProduct[] = [];
+    const perPage = 200;
+
+    for (const status of ACTIVE_EXTRA_STATUSES) {
+      let page = 1;
+
+      while (true) {
+        const response = await defectiveProductService.getAll({ status, per_page: perPage, page });
+        const root = response?.data;
+        const rows: DefectiveProduct[] = Array.isArray(root) ? root : (root?.data || []);
+        all.push(...rows);
+
+        if (Array.isArray(root)) break;
+
+        const currentRootPage = Number(root?.current_page || page);
+        const rootLastPage = Number(root?.last_page || currentRootPage);
+        if (rows.length === 0 || currentRootPage >= rootLastPage) break;
+
+        page += 1;
+      }
+    }
+
+    return all;
+  };
+
+  const buildExtraMapByProduct = (items: DefectiveProduct[]) => {
+    const map = new Map<number, ExtraCounts>();
+
+    for (const item of items) {
+      const productId = Number(item.product_id || 0);
+      if (!productId) continue;
+
+      const entry = map.get(productId) || { defective: 0, used: 0, employeeUse: 0 };
+      if (isEmployeeUseItem(item)) entry.employeeUse += 1;
+      else if (isUsedItem(item)) entry.used += 1;
+      else entry.defective += 1;
+
+      map.set(productId, entry);
+    }
+
+    return map;
+  };
+
+  const fetchProducts = useCallback(async (page = 1, append = false) => {
+    try {
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+
+      const [productsResponse, inventoryResponse] = await Promise.all([
+        productService.getAll({
+          page,
+          per_page: SERVER_PAGE_SIZE,
+          search: debouncedSearchTerm || undefined,
+          group_by_sku: true,
+          sort_by: 'created_at',
+          sort_direction: 'desc',
+        }),
+        inventoryService.getGlobalInventory({ skipStoreScope: true }),
+      ]);
+
+      const inventoryMap = buildInventoryMap(unwrapInventory(inventoryResponse));
+      const nextGroups = buildGroupsFromBackendProducts(productsResponse.data || [], inventoryMap);
+
+      setGroupedProducts(prev => append ? [...prev, ...nextGroups] : nextGroups);
+      setCurrentPage(Number(productsResponse.current_page || page));
+      setLastPage(Math.max(1, Number(productsResponse.last_page || 1)));
+      setTotalGroups(Number(productsResponse.total || nextGroups.length));
+    } catch (error) {
+      console.error('Error fetching inventory data:', error);
+      if (!append) setGroupedProducts([]);
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [debouncedSearchTerm]);
+
+  useEffect(() => {
+    fetchProducts(1, false);
+  }, [fetchProducts]);
+
+  useEffect(() => {
+    const loadExtras = async () => {
+      try {
+        const extraItems = await fetchAllActiveExtraItems();
+        setExtraMap(buildExtraMapByProduct(extraItems));
+      } catch (error) {
+        console.warn('Failed to load defective/used/employee-use counts', error);
+      }
+    };
+
+    loadExtras();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const loadAll = async () => {
-    setLoading(true);
-    setError('');
-    setIsTruncated(false);
-    try {
-      // Fetch reference data (products/categories/stock)
-      const [catRes, invRes] = await Promise.all([
-        categoryService.getCategories({ per_page: 1000 }),
-        inventoryService.getGlobalInventory(),
-      ]);
+  const toggleExpand = (groupKey: string) => {
+    setGroupedProducts(prev => prev.map(item => (
+      item.groupKey === groupKey ? { ...item, expanded: !item.expanded } : item
+    )));
+  };
 
-      const categoriesData: Category[] = (catRes as any)?.data?.data || (catRes as any)?.data || [];
-      setCategories(categoriesData);
+  const groupsWithExtras = useMemo(() => {
+    if (extraMap.size === 0) return groupedProducts;
 
-      const inventoryData: GlobalInventoryItem[] = (invRes as any)?.data || [];
-      setInventory(inventoryData);
+    return groupedProducts.map(group => {
+      let defective = 0;
+      let used = 0;
+      let employeeUse = 0;
 
-      // Products can be paginated; fetch multiple pages up to a sane limit.
-      const allProducts: Product[] = [];
-      let page = 1;
-      const perPage = 500;
-      for (let i = 0; i < 10; i++) {
-        const res = await productService.getAll({ per_page: perPage, page });
-        allProducts.push(...(res.data || []));
-        if (page >= (res.last_page || 1)) break;
-        page += 1;
+      for (const productId of group.productIds) {
+        const counts = extraMap.get(productId);
+        if (!counts) continue;
+        defective += counts.defective;
+        used += counts.used;
+        employeeUse += counts.employeeUse;
       }
-      setProducts(allProducts);
 
-      // Fetch orders based on current filters
-      const fetched = await fetchOrders();
-      setOrders(fetched.orders);
-      setIsTruncated(fetched.isTruncated);
-    } catch (e: any) {
-      console.error(e);
-      setError(e?.message || 'Failed to load reports');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchOrders = async (): Promise<{ orders: ApiOrder[]; isTruncated: boolean }> => {
-    const selectedTypes = Object.entries(types)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-    const selectedStatuses = Object.entries(statuses)
-      .filter(([, v]) => v)
-      .map(([k]) => k);
-
-    const maxPagesPerQuery = 25; // hard limit to protect the browser
-    const perPage = 200;
-    let truncated = false;
-
-    const all: ApiOrder[] = [];
-
-    for (const order_type of selectedTypes) {
-      for (const status of selectedStatuses) {
-        let page = 1;
-        while (true) {
-          const params: OrderFilters = {
-            order_type: order_type as any,
-            status,
-            date_from: dateFrom,
-            date_to: dateTo,
-            sort_by: 'created_at',
-            sort_order: 'desc',
-            per_page: perPage,
-            page,
-          };
-
-          const res = await orderService.getAll(params);
-          all.push(...(res.data || []));
-          if (page >= (res.last_page || 1)) break;
-          page += 1;
-          if (page > maxPagesPerQuery) {
-            truncated = true;
-            break;
-          }
-        }
-      }
-    }
-
-    // De-dup by order id (because we may fetch multiple statuses/types)
-    const uniq = new Map<number, ApiOrder>();
-    for (const o of all) uniq.set(o.id, o);
-    return { orders: Array.from(uniq.values()), isTruncated: truncated };
-  };
-
-  // --- CSV Exports (Reporting API) helpers ---
-  const buildCategorySalesQuery = () => {
-    const q = new URLSearchParams();
-    if (dateFrom) q.set('date_from', dateFrom);
-    if (dateTo) q.set('date_to', dateTo);
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-    return q;
-  };
-
-  const buildSalesQuery = () => {
-    const q = buildCategorySalesQuery();
-    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
-    return q;
-  };
-
-  const buildStockQuery = () => {
-    const q = new URLSearchParams();
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvCategoryId.trim()) q.set('category_id', csvCategoryId.trim());
-    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
-    if (csvIncludeInactive) q.set('include_inactive', 'true');
-    return q;
-  };
-
-  const buildBookingQuery = () => {
-    const q = new URLSearchParams();
-    if (dateFrom) q.set('date_from', dateFrom);
-    if (dateTo) q.set('date_to', dateTo);
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-    if (csvCustomerId.trim()) q.set('customer_id', csvCustomerId.trim());
-    if (csvProductId.trim()) q.set('product_id', csvProductId.trim());
-    return q;
-  };
-
-
-  const buildPaymentBreakdownQuery = () => {
-    const q = new URLSearchParams();
-
-    // today=true overrides date_from/date_to
-    if (csvPaymentToday) {
-      q.set('today', 'true');
-    } else {
-      if (dateFrom) q.set('date_from', dateFrom);
-      if (dateTo) q.set('date_to', dateTo);
-    }
-
-    if (csvStoreId.trim()) q.set('store_id', csvStoreId.trim());
-    if (csvPaymentOrderType.trim()) q.set('order_type', csvPaymentOrderType.trim());
-    if (csvStatus.trim()) q.set('status', csvStatus.trim());
-
-    return q;
-  };
-  const getAuthHeader = (): HeadersInit => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  };
-
-  const downloadCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to download report');
-    }
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const m = cd.match(/filename="?([^";]+)"?/i);
-    const filename = m?.[1] || 'report.csv';
-
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  };
-
-  const previewCsv = async (endpoint: string, query: URLSearchParams) => {
-    const res = await fetch(`${endpoint}?${query.toString()}`, { headers: { ...getAuthHeader() } });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to load report');
-    }
-    const text = await res.text();
-    const parsed = parseCsvText(text, 60);
-    const header = parsed[0] || [];
-    const body = parsed.slice(1);
-    return { header, body };
-  };
-
-  const doDownloadCategory = async () => {
-    setCsvBusy((s) => ({ ...s, category: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/category-sales', buildCategorySalesQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, category: false }));
-    }
-  };
-
-  const doDownloadSales = async () => {
-    setCsvBusy((s) => ({ ...s, sales: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/sales', buildSalesQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, sales: false }));
-    }
-  };
-
-  const doDownloadStock = async () => {
-    setCsvBusy((s) => ({ ...s, stock: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/stock', buildStockQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, stock: false }));
-    }
-  };
-
-  const doDownloadBooking = async () => {
-    setCsvBusy((s) => ({ ...s, booking: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/booking', buildBookingQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, booking: false }));
-    }
-  };
-
-
-  const doDownloadPaymentBreakdown = async () => {
-    setCsvBusy((s) => ({ ...s, payment: true }));
-    setPreviewError('');
-    try {
-      await downloadCsv('/api/reporting/csv/payment-breakdown', buildPaymentBreakdownQuery());
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download CSV');
-    } finally {
-      setCsvBusy((s) => ({ ...s, payment: false }));
-    }
-  };
-  const getApiBase = () => {
-    const raw = process.env.NEXT_PUBLIC_API_URL || '';
-    return raw.replace(/\/$/, '');
-  };
-
-  const downloadExternalCsv = async (url: string, filename: string) => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('authToken') || '' : '';
-    const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || 'Failed to download report');
-    }
-    const blob = await res.blob();
-    const cd = res.headers.get('content-disposition') || '';
-    const m = cd.match(/filename="?([^";]+)"?/i);
-    const fname = m?.[1] || filename;
-    const objUrl = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl;
-    a.download = fname;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(objUrl);
-  };
-
-  /**
-   * Accepts either a plain numeric ID (e.g. "123") or a formatted PO number
-   * like "PO-20260310-000012". Returns the numeric ID string, or null if invalid.
-   */
-  const parsePOId = (input: string): string | null => {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-    // Plain numeric
-    if (/^\d+$/.test(trimmed)) return trimmed;
-    // PO-YYYYMMDD-NNNNNN or similar — grab last numeric segment
-    const parts = trimmed.split('-');
-    const lastNumeric = [...parts].reverse().find((p) => /^\d+$/.test(p));
-    if (lastNumeric) return String(parseInt(lastNumeric, 10)); // strip leading zeros
-    return null;
-  };
-
-  const doDownloadPODetail = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
-    setCsvPoBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/csv`, `PO-${csvPoId.trim()}-detail.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download PO CSV');
-    } finally {
-      setCsvPoBusy(false);
-    }
-  };
-
-  const doDownloadPOBarcodes = async () => {
-    const poId = parsePOId(csvPoId);
-    if (!poId) { setPreviewError('Please enter a valid Purchase Order ID (e.g. 123 or PO-20260310-000012).'); return; }
-    setCsvPoBarcodeBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      await downloadExternalCsv(`${api}/purchase-orders/${poId}/barcodes/csv`, `PO-${csvPoId.trim()}-barcodes.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download PO Barcodes CSV');
-    } finally {
-      setCsvPoBarcodeBusy(false);
-    }
-  };
-
-  const doDownloadDispatchBarcodes = async () => {
-    if (!csvDispatchDateFrom || !csvDispatchDateTo) {
-      setPreviewError('Date From and Date To are required for Dispatch Barcodes CSV.');
-      return;
-    }
-    setCsvDispatchBusy(true);
-    setPreviewError('');
-    try {
-      const api = getApiBase();
-      const q = new URLSearchParams();
-      q.set('date_from', csvDispatchDateFrom);
-      q.set('date_to', csvDispatchDateTo);
-      if (csvDispatchStoreId.trim()) q.set('store_id', csvDispatchStoreId.trim());
-      if (csvDispatchStatus.trim()) q.set('status', csvDispatchStatus.trim());
-      await downloadExternalCsv(`${api}/dispatches/barcodes/csv?${q.toString()}`, `Dispatch-Barcodes-${csvDispatchDateFrom}-to-${csvDispatchDateTo}.csv`);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download Dispatch Barcodes CSV');
-    } finally {
-      setCsvDispatchBusy(false);
-    }
-  };
-
-  const doDownloadInstallments = async () => {
-    setCsvInstallmentBusy(true);
-    setPreviewError('');
-    try {
-      const q = new URLSearchParams();
-      if (dateFrom) q.set('date_from', dateFrom);
-      if (dateTo) q.set('date_to', dateTo);
-      if (csvInstallmentCustomerId.trim()) q.set('customer_id', csvInstallmentCustomerId.trim());
-      if (csvInstallmentStoreId.trim()) q.set('store_id', csvInstallmentStoreId.trim());
-      if (csvInstallmentPaymentStatus.trim()) q.set('payment_status', csvInstallmentPaymentStatus.trim());
-      await downloadCsv('/api/reporting/csv/installments', q);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to download Installments CSV');
-    } finally {
-      setCsvInstallmentBusy(false);
-    }
-  };
-
-  const doPreview = async (type: 'category' | 'sales' | 'stock' | 'booking' | 'payment') => {
-    setPreviewError('');
-    try {
-      const endpoint =
-        type === 'category'
-          ? '/api/reporting/csv/category-sales'
-          : type === 'sales'
-            ? '/api/reporting/csv/sales'
-            : type === 'stock'
-              ? '/api/reporting/csv/stock'
-              : type === 'booking'
-                ? '/api/reporting/csv/booking'
-                : '/api/reporting/csv/payment-breakdown';
-
-      const q =
-        type === 'category'
-          ? buildCategorySalesQuery()
-          : type === 'sales'
-            ? buildSalesQuery()
-            : type === 'stock'
-              ? buildStockQuery()
-              : type === 'booking'
-                ? buildBookingQuery()
-                : buildPaymentBreakdownQuery();
-
-      const { header, body } = await previewCsv(endpoint, q);
-      setPreviewTitle(
-        type === 'category'
-          ? 'Category Sales CSV'
-          : type === 'sales'
-            ? 'Sales CSV'
-            : type === 'stock'
-              ? 'Stock CSV'
-              : type === 'booking'
-                ? 'Booking CSV'
-                : 'Payment Breakdown CSV'
-      );
-      setPreviewHeader(header);
-      setPreviewBody(body);
-      setPreviewOpen(true);
-    } catch (e: any) {
-      setPreviewError(e?.message || 'Failed to preview CSV');
-    }
-  };
-
-  const categoryName = (categoryId: number): string => {
-    if (!categoryId) return 'Uncategorized';
-    const cat = categories.find((c) => c.id === categoryId);
-    if (!cat) return 'Uncategorized';
-    if (cat.parent_id) {
-      const parent = categories.find((p) => p.id === cat.parent_id);
-      return parent ? `${parent.title} / ${cat.title}` : cat.title;
-    }
-    return cat.title;
-  };
-
-  const report = useMemo(() => {
-    // Maps
-    const productById = new Map<number, Product>();
-    products.forEach((p) => productById.set(p.id, p));
-
-    const stockByProductId = new Map<number, number>();
-    inventory.forEach((inv) => stockByProductId.set(inv.product_id, inv.total_quantity || 0));
-
-    const productAgg = new Map<number, ProductAgg>();
-    const categoryAgg = new Map<number, CategoryAgg>();
-    const weekly = new Map<string, Map<number, number>>(); // weekStart -> categoryId -> units
-
-    let discountedSales = 0;
-    let fullPriceSales = 0;
-    let totalUnits = 0;
-    let totalNetSales = 0;
-
-    for (const o of orders) {
-      // Basic guard
-      if (!o || !Array.isArray(o.items)) continue;
-      if (String(o.status || '').toLowerCase() === 'cancelled') continue;
-
-      const orderDate = new Date(o.order_date || o.created_at);
-      const weekStart = getWeekStartISO(orderDate);
-
-      for (const item of o.items || []) {
-        const qty = toNumber(item.quantity);
-        if (qty <= 0) continue;
-
-        const unitPrice = toNumber(item.unit_price);
-        const gross = unitPrice * qty;
-        const discount = toNumber(item.discount_amount);
-        const tax = toNumber(item.tax_amount);
-        const totalAmount = toNumber(item.total_amount);
-        const net = totalAmount > 0 ? totalAmount : gross - discount + tax;
-
-        const discounted = discount > 0.000001;
-
-        totalUnits += qty;
-        totalNetSales += net;
-        if (discounted) discountedSales += net;
-        else fullPriceSales += net;
-
-        const product = productById.get(item.product_id);
-        const productName =
-          product?.name || (item as any).product_name || (item as any).name || 'Unknown Product';
-        const sku =
-          product?.sku || (item as any).product_sku || (item as any).sku || (item as any).productSku || 'NO-SKU';
-        const category_id = product?.category_id || 0;
-
-        // Product agg
-        const existing = productAgg.get(item.product_id);
-        const next: ProductAgg = existing
-          ? { ...existing }
-          : {
-              product_id: item.product_id,
-              name: productName,
-              sku,
-              category_id,
-              units: 0,
-              gross: 0,
-              discount: 0,
-              tax: 0,
-              net: 0,
-              discountedNet: 0,
-              fullPriceNet: 0,
-            };
-        next.units += qty;
-        next.gross += gross;
-        next.discount += discount;
-        next.tax += tax;
-        next.net += net;
-        if (discounted) next.discountedNet += net;
-        else next.fullPriceNet += net;
-        productAgg.set(item.product_id, next);
-
-        // Category agg
-        const catId = category_id || 0;
-        const catExisting = categoryAgg.get(catId);
-        const catNext: CategoryAgg = catExisting
-          ? { ...catExisting }
-          : {
-              category_id: catId,
-              category_name: categoryName(catId),
-              units: 0,
-              net: 0,
-              stock_units: 0,
-            };
-        catNext.units += qty;
-        catNext.net += net;
-        categoryAgg.set(catId, catNext);
-
-        // Weekly
-        if (!weekly.has(weekStart)) weekly.set(weekStart, new Map());
-        const wk = weekly.get(weekStart)!;
-        wk.set(catId, (wk.get(catId) || 0) + qty);
-      }
-    }
-
-    // Attach category stock
-    for (const p of products) {
-      const catId = p.category_id || 0;
-      const stock = stockByProductId.get(p.id) || 0;
-      const cat = categoryAgg.get(catId) || {
-        category_id: catId,
-        category_name: categoryName(catId),
-        units: 0,
-        net: 0,
-        stock_units: 0,
-      };
-      cat.stock_units += stock;
-      categoryAgg.set(catId, cat);
-    }
-
-    // Lists
-    const productsList = Array.from(productAgg.values());
-    const categoriesList = Array.from(categoryAgg.values());
-
-    const sortByMetric = <T extends { units: number; net: number }>(arr: T[], m: Metric): T[] => {
-      const key = m === 'units' ? 'units' : 'net';
-      return [...arr].sort((a, b) => (b[key] || 0) - (a[key] || 0));
-    };
-
-    const topProducts = sortByMetric(productsList, metric).slice(0, topN);
-    const topCategories = sortByMetric(categoriesList, metric).slice(0, topN);
-
-    const zeroSellingProducts = products
-      .filter((p) => (stockByProductId.get(p.id) || 0) > 0)
-      .filter((p) => !productAgg.has(p.id))
-      .map((p) => ({
-        product_id: p.id,
-        name: p.name,
-        sku: p.sku,
-        category: categoryName(p.category_id || 0),
-        stock: stockByProductId.get(p.id) || 0,
-      }))
-      .slice(0, 200);
-
-    const lowSellingProducts = productsList
-      .filter((p) => (stockByProductId.get(p.product_id) || 0) > 0)
-      .filter((p) => p.units > 0 && p.units <= lowThresholdUnits)
-      .sort((a, b) => a.units - b.units)
-      .slice(0, 200)
-      .map((p) => ({
-        ...p,
-        stock: stockByProductId.get(p.product_id) || 0,
-        category: categoryName(p.category_id || 0),
-      }));
-
-    const zeroSellingCategories = categoriesList
-      .filter((c) => c.stock_units > 0)
-      .filter((c) => c.units === 0)
-      .sort((a, b) => b.stock_units - a.stock_units)
-      .slice(0, 100);
-
-    const lowSellingCategories = categoriesList
-      .filter((c) => c.stock_units > 0)
-      .filter((c) => c.units > 0 && c.units <= lowThresholdUnits)
-      .sort((a, b) => a.units - b.units)
-      .slice(0, 100);
-
-    // Category sell-through (sold / (sold + stock))
-    const categorySellThrough = categoriesList
-      .filter((c) => c.stock_units > 0 || c.units > 0)
-      .map((c) => {
-        const denom = c.units + c.stock_units;
-        const sellThrough = denom > 0 ? (c.units / denom) * 100 : 0;
-        const soldVsStock = c.stock_units > 0 ? (c.units / c.stock_units) * 100 : 0;
-        return { ...c, sellThrough, soldVsStock };
-      })
-      .sort((a, b) => b.sellThrough - a.sellThrough);
-
-    // Weekly top/slow categories
-    const weekKeys = Array.from(weekly.keys()).sort((a, b) => (a < b ? 1 : -1));
-    const weeks = weekKeys.slice(0, weeksToShow).map((wk) => {
-      const map = weekly.get(wk) || new Map();
-      const rows = Array.from(map.entries()).map(([catId, units]) => ({
-        catId,
-        category: categoryName(catId),
-        units,
-      }));
-      rows.sort((a, b) => b.units - a.units);
-
-      const top = rows.slice(0, 5).map((r) => ({ category: r.category, units: r.units }));
-      const slow = [...rows]
-        .sort((a, b) => a.units - b.units)
-        .slice(0, 5)
-        .map((r) => ({ category: r.category, units: r.units }));
-
-      const start = new Date(wk);
-      const end = addDays(start, 6);
       return {
-        weekStart: wk,
-        weekEnd: yyyyMmDd(end),
-        top,
-        slow,
-      } as WeeklyRow;
+        ...group,
+        extraDefective: defective,
+        extraUsed: used,
+        extraEmployeeUse: employeeUse,
+      };
     });
+  }, [groupedProducts, extraMap]);
 
-    const discountedPct = totalNetSales > 0 ? (discountedSales / totalNetSales) * 100 : 0;
-    const fullPct = totalNetSales > 0 ? (fullPriceSales / totalNetSales) * 100 : 0;
-
-    return {
-      totals: {
-        orders: orders.length,
-        units: totalUnits,
-        netSales: totalNetSales,
-        discountedSales,
-        fullPriceSales,
-        discountedPct,
-        fullPct,
-      },
-      topProducts,
-      topCategories,
-      zeroSellingProducts,
-      lowSellingProducts,
-      zeroSellingCategories,
-      lowSellingCategories,
-      categorySellThrough,
-      weeks,
-    };
-  }, [orders, products, categories, inventory, metric, topN, lowThresholdUnits, weeksToShow]);
-
-  const handleRefresh = async () => {
-    setLoading(true);
-    setError('');
-    setIsTruncated(false);
-    try {
-      const fetched = await fetchOrders();
-      setOrders(fetched.orders);
-      setIsTruncated(fetched.isTruncated);
-    } catch (e: any) {
-      console.error(e);
-      setError(e?.message || 'Failed to refresh orders');
-    } finally {
-      setLoading(false);
-    }
+  const renderFallbackImage = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    if (image.dataset.fallbackApplied) return;
+    image.dataset.fallbackApplied = '1';
+    image.src = '/placeholder-image.jpg';
   };
-
-  const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) => (
-    <button
-      type="button"
-      onClick={onChange}
-      className={`px-3 py-2 rounded-lg text-sm border transition-colors
-        ${checked
-          ? 'bg-blue-600 text-white border-blue-600'
-          : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'}
-      `}
-    >
-      {label}
-    </button>
-  );
 
   if (loading) {
     return (
@@ -890,11 +499,15 @@ export default function ViewInventoryPage() {
         <div className="flex h-screen bg-gray-50 dark:bg-gray-900">
           <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
           <div className="flex-1 flex flex-col overflow-hidden">
-            <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+            <Header
+              darkMode={darkMode}
+              setDarkMode={setDarkMode}
+              toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+            />
             <main className="flex-1 overflow-auto p-6 flex items-center justify-center">
               <div className="text-center">
                 <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 dark:border-white mb-4" />
-                <p className="text-gray-500 dark:text-gray-400">Loading inventory reports...</p>
+                <p className="text-gray-500 dark:text-gray-400">Loading inventory...</p>
               </div>
             </main>
           </div>
@@ -909,1024 +522,266 @@ export default function ViewInventoryPage() {
         <Sidebar isOpen={sidebarOpen} setIsOpen={setSidebarOpen} />
 
         <div className="flex-1 flex flex-col overflow-hidden">
-          <Header darkMode={darkMode} setDarkMode={setDarkMode} toggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+          <Header
+            darkMode={darkMode}
+            setDarkMode={setDarkMode}
+            toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+          />
 
           <main className="flex-1 overflow-auto p-6">
-            {/* Header */}
-            <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
-              <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                  <BarChart3 className="w-6 h-6" />
-                  Inventory Sales Reports
-                </h1>
-                <p className="text-gray-600 dark:text-gray-400 mt-1">
-                  High/low selling, discount share, sell-through, and weekly movement.
-                </p>
-                {isTruncated && (
-                  <div className="mt-2 inline-flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 px-3 py-2 rounded-lg">
-                    <AlertCircle className="w-4 h-4" />
-                    Data was truncated (too many pages). Narrow your date range for full accuracy.
-                  </div>
-                )}
-                {error && (
-                  <div className="mt-2 inline-flex items-center gap-2 text-sm text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 px-3 py-2 rounded-lg">
-                    <AlertCircle className="w-4 h-4" />
-                    {error}
-                  </div>
-                )}
-              </div>
-
-              <button
-                onClick={handleRefresh}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:opacity-90 transition"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Refresh
-              </button>
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+                Inventory Overview
+              </h1>
+              <p className="text-gray-600 dark:text-gray-400">
+                View all products and their stock levels across outlets
+              </p>
             </div>
 
-            {/* Filters */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4" /> Date from
-                  </label>
-                  <input
-                    type="date"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                    <CalendarDays className="w-4 h-4" /> Date to
-                  </label>
-                  <input
-                    type="date"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Sort metric</label>
-                  <select
-                    value={metric}
-                    onChange={(e) => setMetric(e.target.value as Metric)}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  >
-                    <option value="units">Units sold</option>
-                    <option value="net_sales">Net sales (BDT)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2 items-center">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Order types:</span>
-                <Toggle
-                  checked={types.counter}
-                  onChange={() => setTypes((p) => ({ ...p, counter: !p.counter }))}
-                  label="Counter"
-                />
-                <Toggle
-                  checked={types.social_commerce}
-                  onChange={() => setTypes((p) => ({ ...p, social_commerce: !p.social_commerce }))}
-                  label="Social Commerce"
-                />
-                <Toggle
-                  checked={types.ecommerce}
-                  onChange={() => setTypes((p) => ({ ...p, ecommerce: !p.ecommerce }))}
-                  label="E-commerce"
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search by product name, SKU or category"
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-
-              <div className="mt-3 flex flex-wrap gap-2 items-center">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">Order status:</span>
-                <Toggle
-                  checked={statuses.pending_assignment}
-                  onChange={() => setStatuses((p) => ({ ...p, pending_assignment: !p.pending_assignment }))}
-                  label="Pending Assignment"
-                />
-                <Toggle
-                  checked={statuses.completed}
-                  onChange={() => setStatuses((p) => ({ ...p, completed: !p.completed }))}
-                  label="Completed"
-                />
-                <Toggle
-                  checked={statuses.pending}
-                  onChange={() => setStatuses((p) => ({ ...p, pending: !p.pending }))}
-                  label="Pending"
-                />
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Top N</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={topN}
-                    onChange={(e) => setTopN(Math.max(1, Math.min(50, toNumber(e.target.value))))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Low-selling threshold (units)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={lowThresholdUnits}
-                    onChange={(e) => setLowThresholdUnits(Math.max(1, toNumber(e.target.value)))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-                <div>
-                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">Weekly rows to show</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={26}
-                    value={weeksToShow}
-                    onChange={(e) => setWeeksToShow(Math.max(1, Math.min(26, toNumber(e.target.value))))}
-                    className="mt-1 w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
-                </div>
-              </div>
-
-              <div className="mt-4 text-sm text-gray-600 dark:text-gray-400">
-                After changing filters, hit <span className="font-semibold">Refresh</span>.
-              </div>
+              <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                Search is sent to the backend and products are grouped by backend SKU groups.
+              </p>
             </div>
 
-            {/* Summary */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Orders (in range)</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{report.totals.orders}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Units sold</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{report.totals.units}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Net sales</p>
-                <p className="text-2xl font-semibold text-gray-900 dark:text-white">{formatMoney(report.totals.netSales)}</p>
-              </div>
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400">Discounted vs Full</p>
-                <div className="mt-2">
-                  <div className="flex items-center justify-between text-sm text-gray-700 dark:text-gray-200">
-                    <span className="inline-flex items-center gap-1"><Tag className="w-4 h-4" /> Discounted</span>
-                    <span className="font-semibold">{report.totals.discountedPct.toFixed(1)}%</span>
-                  </div>
-                  <div className="w-full h-2 rounded bg-gray-200 dark:bg-gray-700 mt-2 overflow-hidden">
-                    <div className="h-full bg-blue-600" style={{ width: `${Math.min(100, Math.max(0, report.totals.discountedPct))}%` }} />
-                  </div>
-                  <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mt-2">
-                    <span>Disc: {formatMoney(report.totals.discountedSales)}</span>
-                    <span>Full: {formatMoney(report.totals.fullPriceSales)}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* High selling */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5" /> High selling products
-                  </h2>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Top {topN}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 dark:bg-gray-900/40">
-                      <tr>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">SKU</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Units</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Net</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.topProducts.map((p) => (
-                        <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                          <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium truncate max-w-[220px]">{p.name}</td>
-                          <td className="py-2 px-3 text-sm text-gray-600 dark:text-gray-400 font-mono">{p.sku}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.units}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{formatMoney(p.net)}</td>
-                        </tr>
-                      ))}
-                      {report.topProducts.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                            No sales data for this range.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingUp className="w-5 h-5" /> High selling categories
-                  </h2>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">Top {topN}</span>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="bg-gray-50 dark:bg-gray-900/40">
-                      <tr>
-                        <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Units</th>
-                        <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Net</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {report.topCategories.map((c) => (
-                        <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                          <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">{c.category_name}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                          <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{formatMoney(c.net)}</td>
-                        </tr>
-                      ))}
-                      {report.topCategories.length === 0 && (
-                        <tr>
-                          <td colSpan={3} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                            No sales data for this range.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            {/* Low / Zero selling */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingDown className="w-5 h-5" /> Zero & low selling products
-                  </h2>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Only considers products that currently have stock.
-                  </p>
-                </div>
-                <div className="p-4">
-                  <div className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Zero selling (in-stock)</div>
-                  <div className="max-h-52 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.zeroSellingProducts.map((p) => (
-                          <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white truncate max-w-[260px]">
-                              {p.name}
-                              <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">{p.sku}</div>
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.stock}</td>
-                          </tr>
-                        ))}
-                        {report.zeroSellingProducts.length === 0 && (
-                          <tr>
-                            <td colSpan={2} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None 🎉
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                    Low selling (≤ {lowThresholdUnits} units)
-                  </div>
-                  <div className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Product</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.lowSellingProducts.map((p) => (
-                          <tr key={p.product_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white truncate max-w-[260px]">
-                              {p.name}
-                              <div className="text-xs text-gray-500 dark:text-gray-400">{p.category}</div>
-                            </td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.units}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{p.stock}</td>
-                          </tr>
-                        ))}
-                        {report.lowSellingProducts.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None for this threshold.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                    <TrendingDown className="w-5 h-5" /> Zero & low selling categories
-                  </h2>
-                  <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                    Uses current stock + sales in the selected date range.
-                  </p>
-                </div>
-                <div className="p-4">
-                  <div className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">Zero selling (in-stock)</div>
-                  <div className="max-h-52 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.zeroSellingCategories.map((c) => (
-                          <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white">{c.category_name}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                          </tr>
-                        ))}
-                        {report.zeroSellingCategories.length === 0 && (
-                          <tr>
-                            <td colSpan={2} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None 🎉
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <div className="mt-6 mb-3 text-sm font-semibold text-gray-700 dark:text-gray-200">
-                    Low selling (≤ {lowThresholdUnits} units)
-                  </div>
-                  <div className="max-h-64 overflow-auto border border-gray-200 dark:border-gray-700 rounded-lg">
-                    <table className="w-full">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40">
-                        <tr>
-                          <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                          <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {report.lowSellingCategories.map((c) => (
-                          <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                            <td className="py-2 px-3 text-sm text-gray-900 dark:text-white">{c.category_name}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                            <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                          </tr>
-                        ))}
-                        {report.lowSellingCategories.length === 0 && (
-                          <tr>
-                            <td colSpan={3} className="py-6 text-center text-sm text-gray-600 dark:text-gray-400">
-                              None for this threshold.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Category-wise sales % on stock */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-                <Package className="w-5 h-5" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Category sell-through (sales % on stock)</h2>
-              </div>
-              <div className="p-4 text-sm text-gray-600 dark:text-gray-400">
-                Sell-through = <span className="font-semibold">sold / (sold + current stock)</span>. (Also shown: sold vs current stock)
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-gray-900/40">
-                    <tr>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Category</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Stock</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sell-through</th>
-                      <th className="text-right py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Sold/Stock</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.categorySellThrough.slice(0, 50).map((c) => (
-                      <tr key={c.category_id} className="border-t border-gray-100 dark:border-gray-700">
-                        <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">{c.category_name}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.units}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.stock_units}</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.sellThrough.toFixed(1)}%</td>
-                        <td className="py-2 px-3 text-sm text-right text-gray-900 dark:text-white">{c.soldVsStock.toFixed(1)}%</td>
-                      </tr>
-                    ))}
-                    {report.categorySellThrough.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-8 text-center text-sm text-gray-600 dark:text-gray-400">
-                          No data.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* CSV Exports */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2">
-                <BarChart3 className="w-5 h-5" />
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">CSV Exports</h2>
-              </div>
-              <div className="p-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {rateLimit.active && (
+              <div className="mb-6 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="w-5 h-5 text-amber-700 dark:text-amber-300 mt-0.5" />
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                    <input
-                      value={csvStoreId}
-                      onChange={(e) => setCsvStoreId(e.target.value)}
-                      placeholder="e.g. 1"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
-                    <select
-                      value={csvStatus}
-                      onChange={(e) => setCsvStatus(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    >
-                      <option value="">All statuses</option>
-                      <option value="completed">completed</option>
-                      <option value="pending_assignment">pending_assignment</option>
-                      <option value="pending">pending</option>
-                      <option value="cancelled">cancelled</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (Sales CSV only)</label>
-                    <input
-                      value={csvCustomerId}
-                      onChange={(e) => setCsvCustomerId(e.target.value)}
-                      placeholder="e.g. 25"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div className="flex items-end gap-2">
-                    <button
-                      onClick={() => loadAll()}
-                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Refresh data
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mt-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Category ID (Stock CSV only)</label>
-                    <input
-                      value={csvCategoryId}
-                      onChange={(e) => setCsvCategoryId(e.target.value)}
-                      placeholder="e.g. 12"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Product ID (Stock/Booking CSV)</label>
-                    <input
-                      value={csvProductId}
-                      onChange={(e) => setCsvProductId(e.target.value)}
-                      placeholder="e.g. 105"
-                      className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                    />
-                  </div>
-                  <div className="flex items-end">
-                    <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
-                      <input
-                        type="checkbox"
-                        checked={csvIncludeInactive}
-                        onChange={(e) => setCsvIncludeInactive(e.target.checked)}
-                        className="w-4 h-4"
-                      />
-                      Include inactive batches (Stock)
-                    </label>
-                  </div>
-                  <div className="flex items-end">
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      Date range applies to: <span className="font-semibold">Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>, <span className="font-semibold">Payment Breakdown</span>
-                    </div>
-                  </div>
-                </div>
-
-                {previewError && (
-                  <div className="mt-3 p-3 rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 text-sm text-red-700 dark:text-red-300">
-                    {previewError}
-                  </div>
-                )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Category Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Grouped by product category. Columns: Sold Qty, SUB Total, Discount, Exchange, Return, Net Sales (ex-VAT), VAT Amount (actual tax from orders), Net Amount. Default: completed + pending_assignment orders.</p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('category')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.category}
-                        onClick={doDownloadCategory}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.category ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Sales CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Order-level export (customer, products, delivery, payment, status).</p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Columns: Creation Date, Invoice Number, Customer Name, Customer Phone, Customer Address, Product Name And QTY, Product Specification,
-                      Product Attribute, Sub Total Price, Discount, Price After Discount, Delivery Charge, Total Price, Paid Amount, Vat Amount,
-                      Total Without Vat, Due Amount, Delivery Partner, Delivery Area, Payment Method, Order Status.
+                    <p className="text-sm font-semibold text-amber-900 dark:text-amber-100">Rate limit detected</p>
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      {rateLimit.message || 'Too many requests. Slowing down requests and retrying automatically.'}
                     </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('sales')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.sales}
-                        onClick={doDownloadSales}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.sales ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Stock CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Batch-wise stock with sold quantity + remaining stock value. Filters: store/category/product, include inactive.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('stock')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.stock}
-                        onClick={doDownloadStock}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.stock ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h3 className="font-semibold text-gray-900 dark:text-white">Booking CSV</h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Order-items export with barcode, batch pricing, and payable/paid/due. Filters: date/store/status/customer/product.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('booking')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.booking}
-                        onClick={doDownloadBooking}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.booking ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="font-semibold text-gray-900 dark:text-white">Payment Breakdown CSV</h3>
-                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                          Payment method-wise breakdown (Cash / Mobile Banking / Bank). Supports Today-only, order type, store, status, and date range.
-                        </p>
-                      </div>
-                      <div className="shrink-0 text-xs text-gray-500 dark:text-gray-400">Completed payments only</div>
-                    </div>
-
-                    <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <label className="inline-flex items-center gap-2 text-sm text-gray-900 dark:text-white">
-                        <input
-                          type="checkbox"
-                          checked={csvPaymentToday}
-                          onChange={(e) => setCsvPaymentToday(e.target.checked)}
-                          className="w-4 h-4"
-                        />
-                        Today only
-                      </label>
-                      <div>
-                        <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Order Type (optional)</label>
-                        <select
-                          value={csvPaymentOrderType}
-                          onChange={(e) => setCsvPaymentOrderType(e.target.value)}
-                          className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                        >
-                          <option value="">All types</option>
-                          <option value="counter">counter (POS)</option>
-                          <option value="ecommerce">ecommerce</option>
-                          <option value="social_commerce">social_commerce</option>
-                          <option value="service">service</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex gap-2">
-                      <button
-                        onClick={() => doPreview('payment')}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                      >
-                        Preview
-                      </button>
-                      <button
-                        disabled={csvBusy.payment}
-                        onClick={doDownloadPaymentBreakdown}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvBusy.payment ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Payment Breakdown columns</h4>
-                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                      Date, Invoice Number, Store/Branch, Customer Name, Customer Phone, Customer Address, Product Name, Quantity, Cash Paid,
-                      Bkash/Mobile Banking Paid, Bank Paid, Due, System (Online/POS), Order Status.
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
-                      Tip: If <span className="font-semibold">Today only</span> is enabled, date_from/date_to are ignored.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-4 text-xs text-gray-500 dark:text-gray-400">
-                  Date range: <span className="font-semibold">{dateFrom}</span> → <span className="font-semibold">{dateTo}</span>. Applies to:
-                  <span className="font-semibold"> Category Sales</span>, <span className="font-semibold">Sales</span>, <span className="font-semibold">Booking</span>,
-                  <span className="font-semibold"> Payment Breakdown</span> (unless Today only is enabled).
-                </div>
-
-                {/* ── Purchase Order CSVs ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Purchase Order Exports</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Purchase Order ID <span className="text-red-500">*</span></label>
-                      <input
-                        value={csvPoId}
-                        onChange={(e) => setCsvPoId(e.target.value)}
-                        placeholder="e.g. 123 or PO-20260310-000012"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Detail CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Full breakdown of a single PO: vendor, store, employee tracking, item-by-item pricing (50+ columns).
-                      </p>
-                      <div className="mt-3">
-                        <button
-                          disabled={csvPoBusy}
-                          onClick={doDownloadPODetail}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                        >
-                          {csvPoBusy ? 'Preparing…' : 'Download CSV'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">PO Barcodes CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Atomic barcode list for a PO — one row per physical unit. Includes batch info, active/defective flags, current location.
-                      </p>
-                      <div className="mt-3">
-                        <button
-                          disabled={csvPoBarcodeBusy}
-                          onClick={doDownloadPOBarcodes}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                        >
-                          {csvPoBarcodeBusy ? 'Preparing…' : 'Download CSV'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Dispatch Barcode Breakdown CSV ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Dispatch Barcode Breakdown</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date From <span className="text-red-500">*</span></label>
-                      <input
-                        type="date"
-                        value={csvDispatchDateFrom}
-                        onChange={(e) => setCsvDispatchDateFrom(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Date To <span className="text-red-500">*</span></label>
-                      <input
-                        type="date"
-                        value={csvDispatchDateTo}
-                        onChange={(e) => setCsvDispatchDateTo(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                      <input
-                        value={csvDispatchStoreId}
-                        onChange={(e) => setCsvDispatchStoreId(e.target.value)}
-                        placeholder="Matches source or destination"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Status (optional)</label>
-                      <select
-                        value={csvDispatchStatus}
-                        onChange={(e) => setCsvDispatchStatus(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">All statuses</option>
-                        <option value="pending">pending</option>
-                        <option value="in_transit">in_transit</option>
-                        <option value="delivered">delivered</option>
-                        <option value="cancelled">cancelled</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                    <h4 className="font-semibold text-gray-900 dark:text-white">Dispatch Barcodes CSV</h4>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Atomic barcode-level breakdown of dispatches — one row per scanned unit. Includes source/destination stores, carrier, product info, scan timestamp.
-                    </p>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Requires date range. Store filter matches <span className="font-semibold">either</span> source or destination.
-                    </p>
-                    <div className="mt-3">
-                      <button
-                        disabled={csvDispatchBusy}
-                        onClick={doDownloadDispatchBarcodes}
-                        className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                      >
-                        {csvDispatchBusy ? 'Preparing…' : 'Download CSV'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ── Customer Installment / Partial Payment CSV ── */}
-                <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-5">
-                  <h3 className="text-sm font-bold text-gray-800 dark:text-gray-100 mb-3 uppercase tracking-wide">Customer Installments & Partial Payments</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Customer ID (optional)</label>
-                      <input
-                        value={csvInstallmentCustomerId}
-                        onChange={(e) => setCsvInstallmentCustomerId(e.target.value)}
-                        placeholder="e.g. 25"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Store ID (optional)</label>
-                      <input
-                        value={csvInstallmentStoreId}
-                        onChange={(e) => setCsvInstallmentStoreId(e.target.value)}
-                        placeholder="e.g. 1"
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-600 dark:text-gray-400 mb-1">Payment Status (optional)</label>
-                      <select
-                        value={csvInstallmentPaymentStatus}
-                        onChange={(e) => setCsvInstallmentPaymentStatus(e.target.value)}
-                        className="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-sm text-gray-900 dark:text-white"
-                      >
-                        <option value="">All statuses</option>
-                        <option value="unpaid">unpaid</option>
-                        <option value="partial">partial</option>
-                        <option value="paid">paid</option>
-                        <option value="overdue">overdue</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-                      <h4 className="font-semibold text-gray-900 dark:text-white">Installments / Partial Payments CSV</h4>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                        Customer info, order details, full payment history — one row per payment. Includes balance before/after, installment number, payment method, due dates.
-                      </p>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Uses the main date range filter above. Leave all filters blank to export all installment orders.
-                      </p>
-                      <div className="mt-3">
-                        <button
-                          disabled={csvInstallmentBusy}
-                          onClick={doDownloadInstallments}
-                          className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-60"
-                        >
-                          {csvInstallmentBusy ? 'Preparing…' : 'Download CSV'}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4 bg-gray-50/60 dark:bg-gray-900/30">
-                      <h4 className="text-sm font-semibold text-gray-900 dark:text-white">Installments CSV columns</h4>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
-                        Order Number, Order Date, Store, Customer Name, Customer Phone, Customer Email, Customer Address, Products, Total Items,
-                        Order Total, Total Paid, Outstanding, Payment Status, Next Payment Due,
-                        Payment Number, Payment Date, Payment Amount, Payment Method, Payment Type, Installment #,
-                        Balance Before, Balance After, Processed By, Payment Notes.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Weekly report */}
-            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Weekly best selling & slow moving categories</h2>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  Based on units sold per week (Mon–Sun).
-                </p>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 dark:bg-gray-900/40">
-                    <tr>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Week</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Best selling</th>
-                      <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">Slow moving</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.weeks.map((w) => (
-                      <tr key={w.weekStart} className="border-t border-gray-100 dark:border-gray-700 align-top">
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white font-medium whitespace-nowrap">
-                          {w.weekStart} → {w.weekEnd}
-                        </td>
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white">
-                          {w.top.length === 0 ? (
-                            <span className="text-gray-500 dark:text-gray-400">No sales</span>
-                          ) : (
-                            <ul className="space-y-1">
-                              {w.top.map((r, idx) => (
-                                <li key={idx} className="flex items-center justify-between gap-3">
-                                  <span className="truncate max-w-[320px]">{r.category}</span>
-                                  <span className="text-gray-600 dark:text-gray-400">{r.units}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                        <td className="py-3 px-3 text-sm text-gray-900 dark:text-white">
-                          {w.slow.length === 0 ? (
-                            <span className="text-gray-500 dark:text-gray-400">No sales</span>
-                          ) : (
-                            <ul className="space-y-1">
-                              {w.slow.map((r, idx) => (
-                                <li key={idx} className="flex items-center justify-between gap-3">
-                                  <span className="truncate max-w-[320px]">{r.category}</span>
-                                  <span className="text-gray-600 dark:text-gray-400">{r.units}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {report.weeks.length === 0 && (
-                      <tr>
-                        <td colSpan={3} className="py-10 text-center text-sm text-gray-600 dark:text-gray-400">
-                          No weekly data for this range.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* CSV Preview Modal */}
-            {previewOpen && (
-              <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setPreviewOpen(false)}>
-                <div
-                  className="w-full max-w-5xl max-h-[85vh] bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden flex flex-col"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{previewTitle}</h3>
-                      <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">Showing first {previewBody.length} rows</p>
-                    </div>
-                    <button
-                      onClick={() => setPreviewOpen(false)}
-                      className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700"
-                    >
-                      Close
-                    </button>
-                  </div>
-
-                  <div className="overflow-auto">
-                    <table className="w-full text-sm">
-                      <thead className="bg-gray-50 dark:bg-gray-900/40 sticky top-0">
-                        <tr>
-                          {previewHeader.map((h, idx) => (
-                            <th
-                              key={idx}
-                              className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400 whitespace-nowrap"
-                            >
-                              {h}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {previewBody.map((r, ridx) => (
-                          <tr key={ridx} className="border-t border-gray-100 dark:border-gray-700">
-                            {r.map((c, cidx) => (
-                              <td key={cidx} className="py-2 px-3 text-gray-900 dark:text-white whitespace-nowrap">
-                                {c}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                        {previewBody.length === 0 && (
-                          <tr>
-                            <td colSpan={previewHeader.length || 1} className="py-10 text-center text-gray-600 dark:text-gray-400">
-                              No rows.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
                   </div>
                 </div>
               </div>
             )}
+
+            <div className="space-y-4">
+              {groupsWithExtras.length === 0 ? (
+                <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-12 text-center">
+                  <Package className="w-16 h-16 text-gray-400 dark:text-gray-500 mx-auto mb-4" />
+                  <p className="text-gray-600 dark:text-gray-400">No inventory items found</p>
+                </div>
+              ) : (
+                <>
+                  {groupsWithExtras.map((item) => {
+                    const categoryLabel = getCategoryForGroup(item);
+                    const heroImage = getHeroImageForGroup(item);
+
+                    return (
+                      <div
+                        key={item.groupKey}
+                        className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden"
+                      >
+                        <div className="p-4">
+                          <div className="flex items-start gap-4">
+                            <div className="w-20 h-20 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded-lg overflow-hidden">
+                              <img
+                                src={heroImage}
+                                alt={item.productName}
+                                className="w-full h-full object-cover"
+                                onError={renderFallbackImage}
+                              />
+                            </div>
+
+                            <div className="flex-1 min-w-0">
+                              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+                                {item.productName}
+                              </h3>
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">SKU:</span>
+                                  <span className="font-mono">{item.sku}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">Category:</span>
+                                  <span>{categoryLabel}</span>
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <span className="font-medium">Items:</span>
+                                  <span>{item.variations.length}</span>
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-6">
+                              <div className="text-right">
+                                <p className="text-sm text-gray-600 dark:text-gray-400">Total Stock</p>
+                                <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+                                  {item.totalStock}
+                                </p>
+
+                                {(item.extraDefective > 0 || item.extraUsed > 0 || item.extraEmployeeUse > 0) && (
+                                  <div className="mt-2 flex flex-col items-end gap-1">
+                                    {item.extraDefective > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300 rounded">
+                                        Def: {item.extraDefective}
+                                      </span>
+                                    )}
+                                    {item.extraUsed > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 rounded">
+                                        Used: {item.extraUsed}
+                                      </span>
+                                    )}
+                                    {item.extraEmployeeUse > 0 && (
+                                      <span className="inline-flex items-center px-2 py-1 text-xs font-medium bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 rounded">
+                                        Emp: {item.extraEmployeeUse}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(item.groupKey)}
+                                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                              >
+                                {item.expanded ? (
+                                  <ChevronUp className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                                ) : (
+                                  <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {item.expanded && (
+                          <div className="border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                            <div className="p-4">
+                              <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                                Items & Stock Distribution
+                              </h4>
+                              <div className="space-y-4">
+                                {item.variations.map((variation) => {
+                                  const productId = variation.productId;
+                                  const image = variation.imageUrl ? normalizeImageUrl(variation.imageUrl) : '/placeholder-image.jpg';
+                                  const color = variation.color;
+                                  const size = variation.size;
+
+                                  return (
+                                    <div
+                                      key={productId}
+                                      className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4"
+                                    >
+                                      <div className="flex items-center gap-4 mb-3">
+                                        <div className="w-16 h-16 flex-shrink-0 bg-gray-100 dark:bg-gray-700 rounded overflow-hidden">
+                                          <img
+                                            src={image}
+                                            alt={variation.productName}
+                                            className="w-full h-full object-cover"
+                                            onError={renderFallbackImage}
+                                          />
+                                        </div>
+                                        <div className="flex-1">
+                                          <div className="font-medium text-sm text-gray-900 dark:text-white mb-2">
+                                            {variation.productName}
+                                          </div>
+                                          <div className="flex flex-wrap items-center gap-2 mb-1">
+                                            {color ? (
+                                              <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 text-xs font-medium rounded-full">
+                                                Color: {color}
+                                              </span>
+                                            ) : null}
+                                            {size ? (
+                                              <span className="px-3 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-800 dark:text-purple-300 text-xs font-medium rounded-full">
+                                                Size: {size}
+                                              </span>
+                                            ) : null}
+                                            {!color && !size ? (
+                                              <span className="px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-xs font-medium rounded-full">
+                                                Product ID: {productId}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                                            Total:{' '}
+                                            <span className="font-semibold text-gray-900 dark:text-white">
+                                              {variation.quantity}
+                                            </span>{' '}
+                                            units
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {variation.stores.length > 0 && (
+                                        <div className="overflow-x-auto">
+                                          <table className="w-full">
+                                            <thead>
+                                              <tr className="border-b border-gray-200 dark:border-gray-700">
+                                                <th className="text-left py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Store
+                                                </th>
+                                                <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Quantity
+                                                </th>
+                                                <th className="text-center py-2 px-3 text-xs font-semibold text-gray-600 dark:text-gray-400">
+                                                  Batches
+                                                </th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>
+                                              {variation.stores.map((store, storeIndex) => (
+                                                <tr
+                                                  key={`${store.store_id}-${storeIndex}`}
+                                                  className="border-b border-gray-200 dark:border-gray-700 last:border-0"
+                                                >
+                                                  <td className="py-2 px-3 text-sm text-gray-900 dark:text-white font-medium">
+                                                    {store.store_name || `Store #${store.store_id}`}
+                                                  </td>
+                                                  <td className="py-2 px-3 text-center">
+                                                    <span className="inline-flex items-center justify-center px-2 py-1 text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded">
+                                                      {store.quantity}
+                                                    </span>
+                                                  </td>
+                                                  <td className="py-2 px-3 text-center text-sm text-gray-600 dark:text-gray-400">
+                                                    {store.batches_count || 0}
+                                                  </td>
+                                                </tr>
+                                              ))}
+                                            </tbody>
+                                          </table>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {currentPage < lastPage && (
+                    <div className="flex justify-center pt-2">
+                      <button
+                        type="button"
+                        disabled={loadingMore}
+                        onClick={() => fetchProducts(currentPage + 1, true)}
+                        className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        {loadingMore ? 'Loading more...' : `Load more (${Math.max(totalGroups - groupsWithExtras.length, 0)} remaining)`}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </main>
         </div>
       </div>

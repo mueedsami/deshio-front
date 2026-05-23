@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, Search, ArrowRightLeft, Calculator, Barcode, Trash2, CheckCircle2, AlertCircle, RotateCcw } from 'lucide-react';
 import axiosInstance from '@/lib/axios';
 import storeService, { type Store } from '@/services/storeService';
+import productReturnService from '@/services/productReturnService';
 
 interface ExchangeProductModalProps {
   order: any;
@@ -17,6 +18,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   const [barcodeInput, setBarcodeInput] = useState('');
   const [replacementBarcodeInput, setReplacementBarcodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [allowPartialRefunds, setAllowPartialRefunds] = useState(false);
   const [scanningMode, setScanningMode] = useState<'return' | 'replacement'>('return');
 
   const returnInputRef = useRef<HTMLInputElement>(null);
@@ -46,6 +48,9 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
   useEffect(() => {
     fetchStores();
+    productReturnService.getPartialRefundSetting()
+      .then((res: any) => setAllowPartialRefunds(Boolean(res?.data?.enabled)))
+      .catch(() => setAllowPartialRefunds(false));
     if (returnInputRef.current) returnInputRef.current.focus();
   }, []);
 
@@ -327,6 +332,8 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     ? Math.max(0, Math.abs(totals.difference) - totalPaid)
     : 0;
   const immediateRefundEntered = totals.difference < 0 ? Math.min(totalPaid, Math.abs(totals.difference)) : 0;
+  const refundOverpaid = totals.difference < 0 && totalPaid - Math.abs(totals.difference) > 0.01;
+  const refundBlocking = !allowPartialRefunds && totals.difference < 0 && refundDue > 0.01;
 
   const handleProcessExchange = async () => {
     if (removedItems.length === 0) {
@@ -341,6 +348,16 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
     if (totals.difference > 0 && remainingDue > 0) {
       setError(`Please collect the remaining ৳${remainingDue.toLocaleString()} before submitting this exchange`);
+      return;
+    }
+
+    if (refundOverpaid) {
+      setError('Refund amount cannot exceed the exchange refund due amount');
+      return;
+    }
+
+    if (refundBlocking) {
+      setError('Partial refunds are disabled. Enter the full refund amount before submitting this exchange.');
       return;
     }
 
@@ -605,6 +622,12 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                     </div>
                   </div>
 
+                  {totals.difference < 0 && (
+                    <div className={`rounded-2xl p-3 text-[10px] font-black uppercase tracking-widest ${allowPartialRefunds ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/10 dark:text-blue-400' : 'bg-amber-50 text-amber-600 dark:bg-amber-900/10 dark:text-amber-400'}`}>
+                      {allowPartialRefunds ? 'Partial refund is enabled: this exchange can be submitted with store credit remaining.' : 'Partial refund is disabled: full refund must be entered before exchange.'}
+                    </div>
+                  )}
+
                   {(totals.difference !== 0) && (
                     <div className="pt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                       <div className="flex items-center justify-between">
@@ -654,23 +677,31 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                         </div>
                       )}
                       {totals.difference < 0 && (
-                        <div className="space-y-2 text-[10px] font-black uppercase tracking-widest">
-                          <div className="flex justify-between text-green-600">
-                            <span>Immediate refund</span>
-                            <span>৳{immediateRefundEntered.toLocaleString()}</span>
+                        <>
+                          <div className="space-y-2 text-[10px] font-black uppercase tracking-widest">
+                            <div className="flex justify-between text-green-600">
+                              <span>Immediate refund</span>
+                              <span>৳{immediateRefundEntered.toLocaleString()}</span>
+                            </div>
+                            <div className="flex justify-between text-blue-600">
+                              <span>Store credit</span>
+                              <span>৳{refundDue.toLocaleString()}</span>
+                            </div>
                           </div>
-                          <div className="flex justify-between text-blue-600">
-                            <span>Store credit</span>
-                            <span>৳{refundDue.toLocaleString()}</span>
-                          </div>
-                        </div>
+                          {refundOverpaid && (
+                            <p className="text-[10px] font-black uppercase tracking-widest text-red-500">Refund entered is higher than refund due.</p>
+                          )}
+                          {refundBlocking && (
+                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Enter full refund or enable partial refund from Returns page.</p>
+                          )}
+                        </>
                       )}
                     </div>
                   )}
 
                   <button
                     onClick={handleProcessExchange}
-                    disabled={isProcessing || removedItems.length === 0 || replacementItems.length === 0 || (totals.difference > 0 && remainingDue > 0)}
+                    disabled={isProcessing || removedItems.length === 0 || replacementItems.length === 0 || (totals.difference > 0 && remainingDue > 0) || refundOverpaid || refundBlocking}
                     className="w-full py-5 bg-black dark:bg-white text-white dark:text-black rounded-3xl font-black text-xl shadow-2xl shadow-black/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30 disabled:hover:scale-100 flex items-center justify-center gap-4 mt-8"
                   >
                     {isProcessing ? (

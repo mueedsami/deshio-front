@@ -425,6 +425,20 @@ export const productService = {
     }
   },
 
+  /** Append or update one custom field on a product without touching other fields */
+  async updateCustomField(id: number | string, data: { field_id: number; value: any }): Promise<Product> {
+    try {
+      const response = await axiosInstance.post(`/products/${id}/custom-fields`, data, {
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const result = response.data;
+      return transformProduct(result.data || result);
+    } catch (error: any) {
+      console.error('Update custom field error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to update custom field');
+    }
+  },
+
   /** Create product (simple or with variants) */
   async create(data: CreateProductData | CreateProductWithVariantsData): Promise<Product> {
     try {

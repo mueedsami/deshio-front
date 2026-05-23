@@ -278,10 +278,26 @@ function ProcessModal({ ret, onClose, onDone }: ProcessModalProps) {
   );
 }
 
-interface CreateRefundModalProps { ret: ProductReturn; onClose: () => void; onDone: () => void; }
-function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
+interface CreateRefundModalProps { ret: ProductReturn; allowPartialRefund: boolean; onClose: () => void; onDone: () => void; }
+const getCompletedRefundedAmount = (ret: ProductReturn) => (ret.refunds || [])
+  .filter((refund: any) => refund.status === 'completed')
+  .reduce((sum: number, refund: any) => sum + (parseFloat(String(refund.refund_amount ?? 0)) || 0), 0);
+
+const getRemainingRefundAmount = (ret: ProductReturn) => {
+  if (ret.remaining_refund_amount !== undefined && ret.remaining_refund_amount !== null) {
+    return Math.max(0, parseFloat(String(ret.remaining_refund_amount)) || 0);
+  }
+
+  return Math.max(0, (parseFloat(String(ret.total_refund_amount ?? 0)) || 0) - getCompletedRefundedAmount(ret));
+};
+
+const canIssueReturnRefund = (ret: ProductReturn) => !['rejected'].includes(ret.status) && getRemainingRefundAmount(ret) > 0.01;
+
+function CreateRefundModal({ ret, allowPartialRefund, onClose, onDone }: CreateRefundModalProps) {
+  const alreadyRefundedAmount = getCompletedRefundedAmount(ret);
+  const remainingRefundAmount = getRemainingRefundAmount(ret);
   const [method, setMethod] = useState<RefundMethod>('cash');
-  const [amount, setAmount] = useState(String(ret.total_refund_amount ?? ret.total_return_value ?? 0));
+  const [amount, setAmount] = useState(String(remainingRefundAmount || ret.total_refund_amount || ret.total_return_value || 0));
   const [txRef, setTxRef] = useState('');
   const [bkashNumber, setBkashNumber] = useState('');
   const [bankAccount, setBankAccount] = useState('');
@@ -291,34 +307,37 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
 
   const METHODS: { value: RefundMethod; label: string }[] = [
     { value: 'cash', label: 'Cash' },
-    { value: 'mobile_banking', label: 'Mobile Banking (bKash/Nagad)' },
+    { value: 'digital_wallet', label: 'Mobile Banking (bKash/Nagad)' },
+    { value: 'card_refund', label: 'Card Refund' },
     { value: 'bank_transfer', label: 'Bank Transfer' },
     { value: 'store_credit', label: 'Store Credit' },
-    { value: 'original_payment_method', label: 'Original Payment Method' },
   ];
 
   const handle = async () => {
+    const refundAmount = parseFloat(amount) || 0;
+    if (refundAmount <= 0) { setErr('Refund amount must be greater than zero'); return; }
+    if (refundAmount - remainingRefundAmount > 0.01) { setErr(`Refund amount cannot exceed remaining amount ${fmt(remainingRefundAmount)}`); return; }
+    if (!allowPartialRefund && remainingRefundAmount - refundAmount > 0.01) { setErr(`Partial refunds are disabled. Issue the full remaining refund of ${fmt(remainingRefundAmount)}.`); return; }
+
     setLoading(true); setErr('');
     try {
       const data: CreateRefundRequest = {
         return_id: ret.id,
         order_id: ret.order_id,
         customer_id: ret.customer_id,
-        refund_type: 'full',
-        refund_amount: parseFloat(amount),
+        refund_type: 'partial_amount',
+        refund_amount: refundAmount,
         refund_method: method,
-        internal_notes: notes || undefined,
-        refund_method_details: method === 'mobile_banking' ? { provider: 'bKash', account_number: bkashNumber }
+        internal_notes: notes || 'Refund issued from returns page',
+        refund_method_details: method === 'digital_wallet' ? { provider: 'bKash/Nagad', account_number: bkashNumber }
           : method === 'bank_transfer' ? { account_number: bankAccount }
           : undefined,
       };
       const refundRes = await refundService.create(data);
       const refundId = refundRes?.data?.id;
-      if (refundId && txRef) {
+      if (refundId) {
         await refundService.process(refundId);
-        await refundService.complete(refundId, { transaction_reference: txRef });
-      } else if (refundId) {
-        await refundService.process(refundId);
+        await refundService.complete(refundId, { transaction_reference: txRef || `RETURN-REFUND-${Date.now()}` });
       }
       onDone();
     } catch (e: any) {
@@ -354,9 +373,9 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Refund Amount (৳)</label>
             <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
               className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500" />
-            <p className="text-[10px] text-gray-500 mt-1">Approved refund amount: {fmt(ret.total_refund_amount)}</p>
+            <p className="text-[10px] text-gray-500 mt-1">Approved: {fmt(ret.total_refund_amount)} • Already refunded: {fmt(alreadyRefundedAmount)} • Remaining: {fmt(remainingRefundAmount)}</p>
           </div>
-          {method === 'mobile_banking' && (
+          {method === 'digital_wallet' && (
             <div>
               <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">bKash/Nagad Number</label>
               <input type="text" value={bkashNumber} onChange={e => setBkashNumber(e.target.value)} placeholder="+8801..."
@@ -374,7 +393,7 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Transaction Reference (optional)</label>
             <input type="text" value={txRef} onChange={e => setTxRef(e.target.value)} placeholder="TXN ID, receipt number..."
               className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-teal-500" />
-            <p className="text-[10px] text-gray-500 mt-1">If provided, refund will be marked as completed immediately</p>
+            <p className="text-[10px] text-gray-500 mt-1">Refund will be processed and completed immediately. This reference is optional.</p>
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Notes (optional)</label>
@@ -389,7 +408,7 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
         </div>
         <div className="px-6 pb-6 flex gap-3">
           <button onClick={onClose} className="flex-1 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800">Cancel</button>
-          <button onClick={handle} disabled={loading}
+          <button onClick={handle} disabled={loading || remainingRefundAmount <= 0}
             className="flex-1 px-4 py-2 text-sm bg-teal-600 hover:bg-teal-700 text-white rounded-lg disabled:opacity-50 font-medium">
             {loading ? 'Processing...' : 'Issue Refund'}
           </button>
@@ -400,9 +419,11 @@ function CreateRefundModal({ ret, onClose, onDone }: CreateRefundModalProps) {
 }
 
 // ─── Detail modal ─────────────────────────────────────────────
-interface DetailModalProps { ret: ProductReturn; onClose: () => void; onAction: () => void; }
-function DetailModal({ ret, onClose }: DetailModalProps) {
+interface DetailModalProps { ret: ProductReturn; onClose: () => void; onIssueRefund: (ret: ProductReturn) => void; }
+function DetailModal({ ret, onClose, onIssueRefund }: DetailModalProps) {
   const isCrossStore = ret.received_at_store_id && ret.store_id && ret.received_at_store_id !== ret.store_id;
+  const remainingRefundAmount = getRemainingRefundAmount(ret);
+  const canIssueRefund = canIssueReturnRefund(ret);
 
   return (
     <>
@@ -562,13 +583,21 @@ function DetailModal({ ret, onClose }: DetailModalProps) {
               </div>
             )}
 
-            {/* Actions disabled on returns page */}
+            {/* Actions */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Workflow actions are disabled here. This page is view-only for returns.</p>
-              <button onClick={onClose}
-                className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
-                Close
-              </button>
+              <p className="text-xs font-semibold text-gray-500 dark:text-gray-400">Remaining refund: {fmt(remainingRefundAmount)}</p>
+              <div className="flex gap-2">
+                {canIssueRefund && (
+                  <button onClick={() => onIssueRefund(ret)}
+                    className="px-4 py-2 text-sm bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-medium">
+                    Issue Refund
+                  </button>
+                )}
+                <button onClick={onClose}
+                  className="px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -590,6 +619,7 @@ export default function ReturnsPage() {
   const [error, setError] = useState('');
   const [stats, setStats] = useState<any>(null);
   const [stores, setStores] = useState<Store[]>([]);
+  const [partialRefundEnabled, setPartialRefundEnabled] = useState(false);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -605,6 +635,7 @@ export default function ReturnsPage() {
 
   // Selected
   const [selectedReturn, setSelectedReturn] = useState<ProductReturn | null>(null);
+  const [refundReturn, setRefundReturn] = useState<ProductReturn | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
@@ -635,7 +666,21 @@ export default function ReturnsPage() {
       const list = Array.isArray(r) ? r : Array.isArray(r?.data) ? r.data : Array.isArray(r?.data?.data) ? r.data.data : [];
       setStores(list);
     }).catch(() => {});
+    productReturnService.getPartialRefundSetting()
+      .then((r: any) => setPartialRefundEnabled(Boolean(r?.data?.enabled)))
+      .catch(() => setPartialRefundEnabled(false));
   }, []);
+
+  const togglePartialRefund = async () => {
+    const next = !partialRefundEnabled;
+    setPartialRefundEnabled(next);
+    try {
+      await productReturnService.updatePartialRefundSetting(next);
+    } catch (e: any) {
+      setPartialRefundEnabled(!next);
+      setError(e?.response?.data?.message || e?.message || 'Failed to update partial refund setting');
+    }
+  };
 
   const statusCounts = {
     pending: stats?.pending_returns ?? 0,
@@ -643,6 +688,8 @@ export default function ReturnsPage() {
     completed: stats?.completed_returns ?? 0,
     refunded: (stats?.total_returns ?? 0) - (stats?.pending_returns ?? 0) - (stats?.approved_returns ?? 0) - (stats?.completed_returns ?? 0) - (stats?.rejected_returns ?? 0),
   };
+
+  const canIssueRefund = (ret: ProductReturn) => canIssueReturnRefund(ret);
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -657,13 +704,22 @@ export default function ReturnsPage() {
               <div className="max-w-7xl mx-auto flex items-center justify-between">
                 <div>
                   <h1 className="text-base font-semibold text-black dark:text-white">Returns & Exchanges</h1>
-                  <p className="text-xs text-gray-500 mt-0.5">View product returns, including lookup-processed returns. Workflow actions are disabled here.</p>
+                  <p className="text-xs text-gray-500 mt-0.5">View product returns, including lookup-processed returns, and issue remaining refund balances.</p>
                 </div>
-                <button onClick={load} disabled={loading}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
-                  <RefreshCcw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-                  Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                  <button onClick={togglePartialRefund}
+                    className={`flex items-center gap-2 px-3 py-1.5 text-xs rounded-lg border font-semibold ${partialRefundEnabled ? 'bg-teal-50 border-teal-200 text-teal-700 dark:bg-teal-900/20 dark:border-teal-800 dark:text-teal-300' : 'bg-gray-50 border-gray-200 text-gray-600 dark:bg-gray-900 dark:border-gray-700 dark:text-gray-300'}`}>
+                    <span className={`w-7 h-4 rounded-full relative transition-colors ${partialRefundEnabled ? 'bg-teal-500' : 'bg-gray-400'}`}>
+                      <span className={`absolute top-0.5 w-3 h-3 bg-white rounded-full transition-all ${partialRefundEnabled ? 'left-3.5' : 'left-0.5'}`} />
+                    </span>
+                    Partial Refund {partialRefundEnabled ? 'On' : 'Off'}
+                  </button>
+                  <button onClick={load} disabled={loading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700">
+                    <RefreshCcw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -766,10 +822,18 @@ export default function ReturnsPage() {
                             <td className="px-3 py-2"><StatusBadge status={ret.status} /></td>
                             <td className="px-3 py-2 text-gray-500 text-[10px]">{fmtDate(ret.return_date)}</td>
                             <td className="px-3 py-2">
-                              <button onClick={() => setSelectedReturn(ret)}
-                                className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg" title="View details">
-                                <Eye className="w-3.5 h-3.5 text-gray-500" />
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => setSelectedReturn(ret)}
+                                  className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg" title="View details">
+                                  <Eye className="w-3.5 h-3.5 text-gray-500" />
+                                </button>
+                                {canIssueRefund(ret) && (
+                                  <button onClick={() => setRefundReturn(ret)}
+                                    className="p-1.5 hover:bg-teal-50 dark:hover:bg-teal-900/20 rounded-lg" title={`Issue remaining refund: ${fmt(getRemainingRefundAmount(ret))}`}>
+                                    <DollarSign className="w-3.5 h-3.5 text-teal-600" />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -804,7 +868,16 @@ export default function ReturnsPage() {
         <DetailModal
           ret={selectedReturn}
           onClose={() => setSelectedReturn(null)}
-          onAction={() => { load(); setSelectedReturn(null); }}
+          onIssueRefund={(ret) => { setSelectedReturn(null); setRefundReturn(ret); }}
+        />
+      )}
+
+      {refundReturn && (
+        <CreateRefundModal
+          ret={refundReturn}
+          allowPartialRefund={partialRefundEnabled}
+          onClose={() => setRefundReturn(null)}
+          onDone={() => { setRefundReturn(null); load(); }}
         />
       )}
     </div>

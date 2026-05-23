@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, RotateCcw, Calculator, Barcode, Trash2, AlertCircle, Info } from 'lucide-react';
 import storeService, { type Store } from '@/services/storeService';
+import productReturnService from '@/services/productReturnService';
 
 type ReturnReason = 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
 type ReturnType = 'customer_return' | 'store_return' | 'warehouse_return';
@@ -16,6 +17,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
   const [isProcessing, setIsProcessing] = useState(false);
   const [barcodeInput, setBarcodeInput] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [allowPartialRefunds, setAllowPartialRefunds] = useState(false);
   
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const barcodeScanTimerRef = useRef<number | null>(null);
@@ -45,6 +47,9 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
 
   useEffect(() => {
     fetchStores();
+    productReturnService.getPartialRefundSetting()
+      .then((res: any) => setAllowPartialRefunds(Boolean(res?.data?.enabled)))
+      .catch(() => setAllowPartialRefunds(false));
     if (barcodeInputRef.current) barcodeInputRef.current.focus();
   }, []);
 
@@ -239,10 +244,23 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
   const effectiveRefundCash = cashFromNotes > 0 ? cashFromNotes : refundDetails.cash;
   const totalRefundProcessed = effectiveRefundCash + refundDetails.card + refundDetails.bkash + refundDetails.nagad;
   const remainingRefund = totals.refundToCustomer - totalRefundProcessed;
+  const refundOverpaid = totalRefundProcessed - totals.refundToCustomer > 0.01;
+  const refundUnderpaid = totals.refundToCustomer > 0.01 && remainingRefund > 0.01;
+  const refundBlocking = !allowPartialRefunds && refundUnderpaid;
 
   const handleProcessReturn = async () => {
     if (returnedItems.length === 0) {
       setError('Please scan at least one item to return');
+      return;
+    }
+
+    if (refundOverpaid) {
+      setError('Refund amount cannot exceed the refund due amount');
+      return;
+    }
+
+    if (refundBlocking) {
+      setError('Partial refunds are disabled. Enter the full refund amount before processing this return.');
       return;
     }
 
@@ -455,6 +473,10 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                     </div>
                   </div>
 
+                  <div className={`rounded-2xl p-3 text-[10px] font-black uppercase tracking-widest ${allowPartialRefunds ? 'bg-blue-50 text-blue-600 dark:bg-blue-900/10 dark:text-blue-400' : 'bg-amber-50 text-amber-600 dark:bg-amber-900/10 dark:text-amber-400'}`}>
+                    {allowPartialRefunds ? 'Partial refund is enabled: this return can be processed with a remaining refund balance.' : 'Partial refund is disabled: full refund must be entered before processing.'}
+                  </div>
+
                   {(
                     <div className="pt-8 space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                       <div className="flex items-center justify-between">
@@ -502,13 +524,19 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                             ৳{Math.abs(remainingRefund).toLocaleString()}
                           </span>
                         </div>
+                        {refundOverpaid && (
+                          <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-red-500">Refund entered is higher than refund due.</p>
+                        )}
+                        {refundBlocking && (
+                          <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-amber-500">Enter full refund or enable partial refund from Returns page.</p>
+                        )}
                       </div>
                     </div>
                   )}
 
                   <button
                     onClick={handleProcessReturn}
-                    disabled={isProcessing || returnedItems.length === 0}
+                    disabled={isProcessing || returnedItems.length === 0 || refundOverpaid || refundBlocking}
                     className="w-full py-5 bg-black dark:bg-white text-white dark:text-black rounded-3xl font-black text-xl shadow-2xl shadow-black/20 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-30 disabled:hover:scale-100 flex items-center justify-center gap-4 mt-8"
                   >
                     {isProcessing ? (

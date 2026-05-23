@@ -144,6 +144,11 @@ export default function AddEditProductPage({
   const [skuUpdateProductIds, setSkuUpdateProductIds] = useState<number[]>([]);
   const [skuUpdateSaving, setSkuUpdateSaving] = useState<boolean>(false);
 
+  // Field append: add one custom field to the selected products without touching SKU/common info
+  const [fieldUpdateFieldId, setFieldUpdateFieldId] = useState<string>('');
+  const [fieldUpdateValue, setFieldUpdateValue] = useState<any>('');
+  const [fieldUpdateSaving, setFieldUpdateSaving] = useState<boolean>(false);
+
   const [formData, setFormData] = useState({
     name: '',
     sku: '',
@@ -677,6 +682,79 @@ export default function AddEditProductPage({
       setToast({ message: error?.message || 'Failed to update SKU', type: 'error' });
     } finally {
       setSkuUpdateSaving(false);
+    }
+  };
+
+  const getFieldUpdateOptions = () => {
+    const excluded = new Set(['Primary Image', 'Additional Images', 'SKU', 'Product Name', 'Description', 'Category', 'Vendor']);
+    return availableFields.filter((field) => !excluded.has(String(field.title || '').trim()));
+  };
+
+  const selectedBulkField = getFieldUpdateOptions().find((item) => String(item.id) === String(fieldUpdateFieldId));
+  const selectedBulkFieldInput: FieldValue | null = selectedBulkField ? {
+    fieldId: selectedBulkField.id,
+    fieldName: selectedBulkField.title,
+    fieldType: selectedBulkField.type,
+    value: fieldUpdateValue,
+    instanceId: 'bulk-field-update',
+  } : null;
+
+  const onBulkFieldChange = (fieldId: string) => {
+    setFieldUpdateFieldId(fieldId);
+    const field = getFieldUpdateOptions().find((item) => String(item.id) === String(fieldId));
+    setFieldUpdateValue(field?.type === 'boolean' ? 'false' : '');
+  };
+
+  const isFieldUpdateValueEmpty = (value: any) => {
+    if (Array.isArray(value)) return value.length === 0;
+    return value === null || value === undefined || String(value).trim() === '';
+  };
+
+  const applyFieldUpdate = async () => {
+    const fieldId = parseInt(String(fieldUpdateFieldId || ''), 10);
+    const field = getFieldUpdateOptions().find((item) => item.id === fieldId);
+
+    if (!field || !fieldId || Number.isNaN(fieldId)) {
+      setToast({ message: 'Select a field first.', type: 'warning' });
+      return;
+    }
+
+    if (skuUpdateProductIds.length === 0) {
+      setToast({ message: 'Select at least one product below.', type: 'warning' });
+      return;
+    }
+
+    if (field.type !== 'boolean' && isFieldUpdateValueEmpty(fieldUpdateValue)) {
+      setToast({ message: 'Enter the field value first.', type: 'warning' });
+      return;
+    }
+
+    try {
+      setFieldUpdateSaving(true);
+
+      for (const id of skuUpdateProductIds) {
+        await productService.updateCustomField(id, {
+          field_id: fieldId,
+          value: fieldUpdateValue,
+        });
+      }
+
+      const updatedCurrentProduct = skuUpdateProductIds.some((id) => String(id) === String(productId));
+      setToast({
+        message: `Appended ${field.title} to ${skuUpdateProductIds.length} product(s).`,
+        type: 'success',
+      });
+      setSkuUpdateProductIds([]);
+      setFieldUpdateFieldId('');
+      setFieldUpdateValue('');
+
+      if (productId) await fetchSkuGroupByProductId(productId);
+      if (updatedCurrentProduct) await fetchProduct();
+    } catch (error: any) {
+      console.error('Field update failed:', error);
+      setToast({ message: error?.message || 'Failed to append field', type: 'error' });
+    } finally {
+      setFieldUpdateSaving(false);
     }
   };
 
@@ -1891,7 +1969,7 @@ export default function AddEditProductPage({
                               <button
                                 type="button"
                                 onClick={applySkuUpdate}
-                                disabled={skuUpdateSaving || skuUpdateProductIds.length === 0}
+                                disabled={skuUpdateSaving || fieldUpdateSaving || skuUpdateProductIds.length === 0}
                                 className="shrink-0 px-4 py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                               >
                                 {skuUpdateSaving ? (
@@ -1925,6 +2003,73 @@ export default function AddEditProductPage({
                             </div>
                           </div>
 
+                          <div className="mb-6 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-4">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <div className="font-semibold text-gray-900 dark:text-white">Append Field to Selected Products</div>
+                                <div className="text-xs text-gray-600 dark:text-gray-400">
+                                  Select one field and value, then append it to the selected products. This does not update SKU.
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={applyFieldUpdate}
+                                disabled={fieldUpdateSaving || skuUpdateSaving || skuUpdateProductIds.length === 0}
+                                className="shrink-0 px-4 py-2 rounded-lg bg-gray-900 dark:bg-white text-white dark:text-gray-900 hover:bg-gray-800 dark:hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                              >
+                                {fieldUpdateSaving ? (
+                                  <span className="inline-flex items-center gap-2">
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                    Applying...
+                                  </span>
+                                ) : (
+                                  'Append Field'
+                                )}
+                              </button>
+                            </div>
+
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-[280px_1fr_auto] gap-4 items-end">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  Field <span className="text-red-500">*</span>
+                                </label>
+                                <select
+                                  value={fieldUpdateFieldId}
+                                  onChange={(e) => onBulkFieldChange(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 focus:border-transparent dark:bg-gray-700 dark:text-white"
+                                >
+                                  <option value="">Select field</option>
+                                  {getFieldUpdateOptions().map((field) => (
+                                    <option key={field.id} value={field.id}>{field.title}</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  Value <span className="text-red-500">*</span>
+                                </label>
+                                {selectedBulkFieldInput ? (
+                                  <DynamicFieldInput
+                                    field={selectedBulkFieldInput}
+                                    availableFields={availableFields}
+                                    onUpdate={setFieldUpdateValue}
+                                    onRemove={() => onBulkFieldChange('')}
+                                  />
+                                ) : (
+                                  <div className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                                    Select a field first
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="text-sm text-gray-700 dark:text-gray-300">
+                                Selected: <strong>{skuUpdateProductIds.length}</strong> / {skuGroupProducts.length}
+                              </div>
+                            </div>
+                          </div>
+
                           {quickEditMode ? (
                             <div className="overflow-x-auto">
                               <div className="flex items-center justify-between mb-3">
@@ -1949,7 +2094,7 @@ export default function AddEditProductPage({
                                         type="checkbox"
                                         checked={skuGroupProducts.length > 0 && skuUpdateProductIds.length === skuGroupProducts.length}
                                         onChange={toggleAllSkuProductSelection}
-                                        aria-label="Select all products for SKU update"
+                                        aria-label="Select all products for selected update"
                                         className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                       />
                                     </th>
@@ -1982,7 +2127,7 @@ export default function AddEditProductPage({
                                             type="checkbox"
                                             checked={skuUpdateProductIds.includes(p.id)}
                                             onChange={() => toggleSkuProductSelection(p.id)}
-                                            aria-label={`Select ${p.name} for SKU update`}
+                                            aria-label={`Select ${p.name} for selected update`}
                                             className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                           />
                                         </td>
@@ -2070,7 +2215,7 @@ export default function AddEditProductPage({
                                         type="checkbox"
                                         checked={skuGroupProducts.length > 0 && skuUpdateProductIds.length === skuGroupProducts.length}
                                         onChange={toggleAllSkuProductSelection}
-                                        aria-label="Select all products for SKU update"
+                                        aria-label="Select all products for selected update"
                                         className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                       />
                                     </th>
@@ -2096,7 +2241,7 @@ export default function AddEditProductPage({
                                             type="checkbox"
                                             checked={skuUpdateProductIds.includes(p.id)}
                                             onChange={() => toggleSkuProductSelection(p.id)}
-                                            aria-label={`Select ${p.name} for SKU update`}
+                                            aria-label={`Select ${p.name} for selected update`}
                                             className="h-4 w-4 rounded border-gray-300 dark:border-gray-600"
                                           />
                                         </td>

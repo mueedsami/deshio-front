@@ -4207,7 +4207,7 @@ export default function OrdersDashboard() {
 
       {/* Collect Installment Modal */}
       {showInstallmentModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4">
           <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full border border-gray-200 dark:border-gray-800">
             <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
               <div>
