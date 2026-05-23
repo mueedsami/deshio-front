@@ -144,7 +144,7 @@ function parseCsvText(text: string, maxRows = 60): string[][] {
   return rows;
 }
 
-export default function InventoryReportsPage() {
+export default function ViewInventoryPage() {
   const [darkMode, setDarkMode] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
@@ -184,8 +184,8 @@ export default function InventoryReportsPage() {
   // Dispatch Barcode CSV
   const [csvDispatchStoreId, setCsvDispatchStoreId] = useState('');
   const [csvDispatchStatus, setCsvDispatchStatus] = useState('');
-  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState('');
-  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState('');
+  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState(dateFrom);
+  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState(dateTo);
   const [csvDispatchBusy, setCsvDispatchBusy] = useState(false);
 
   // Installment CSV
@@ -536,20 +536,24 @@ export default function InventoryReportsPage() {
   };
 
   const doDownloadDispatchBarcodes = async () => {
-    if (!csvDispatchDateFrom || !csvDispatchDateTo) {
+    const dispatchFrom = csvDispatchDateFrom || dateFrom;
+    const dispatchTo = csvDispatchDateTo || dateTo;
+
+    if (!dispatchFrom || !dispatchTo) {
       setPreviewError('Date From and Date To are required for Dispatch Barcodes CSV.');
       return;
     }
+
     setCsvDispatchBusy(true);
     setPreviewError('');
     try {
       const api = getApiBase();
       const q = new URLSearchParams();
-      q.set('date_from', csvDispatchDateFrom);
-      q.set('date_to', csvDispatchDateTo);
+      q.set('date_from', dispatchFrom);
+      q.set('date_to', dispatchTo);
       if (csvDispatchStoreId.trim()) q.set('store_id', csvDispatchStoreId.trim());
       if (csvDispatchStatus.trim()) q.set('status', csvDispatchStatus.trim());
-      await downloadExternalCsv(`${api}/dispatches/barcodes/csv?${q.toString()}`, `Dispatch-Barcodes-${csvDispatchDateFrom}-to-${csvDispatchDateTo}.csv`);
+      await downloadExternalCsv(`${api}/dispatches/barcodes/csv?${q.toString()}`, `Dispatch-Barcodes-${dispatchFrom}-to-${dispatchTo}.csv`);
     } catch (e: any) {
       setPreviewError(e?.message || 'Failed to download Dispatch Barcodes CSV');
     } finally {
@@ -1718,10 +1722,10 @@ export default function InventoryReportsPage() {
                   <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-4">
                     <h4 className="font-semibold text-gray-900 dark:text-white">Dispatch Barcodes CSV</h4>
                     <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                      Atomic barcode-level breakdown of dispatches — one row per scanned unit. Includes source/destination stores, carrier, product info, scan timestamp.
+                      Atomic dispatch report with product info, batch info, barcode details, source/destination transfer data, scan/receive status, and item values.
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Requires date range. Store filter matches <span className="font-semibold">either</span> source or destination.
+                      Defaults to the main report date range. Store filter matches <span className="font-semibold">either</span> source or destination.
                     </p>
                     <div className="mt-3">
                       <button
