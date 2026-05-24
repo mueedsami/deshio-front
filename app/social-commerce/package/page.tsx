@@ -21,6 +21,7 @@ import barcodeService from '@/services/barcodeService';
 import productService from '@/services/productService';
 import Toast from '@/components/Toast';
 import ImageLightboxModal from '@/components/ImageLightboxModal';
+import OpenOrderLockRescueWidget, { readOpenOrderLockError } from '@/components/barcode/OpenOrderLockRescueWidget';
 
 interface ScannedItemTracking {
   required: number;
@@ -125,6 +126,11 @@ export default function WarehouseFulfillmentPage() {
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<'success' | 'error' | 'info' | 'warning'>('success');
+  const [openOrderLockHint, setOpenOrderLockHint] = useState<{
+    barcode: string;
+    message?: string;
+    signal: number;
+  } | null>(null);
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -421,8 +427,19 @@ export default function WarehouseFulfillmentPage() {
       const scanResult = await barcodeService.scanBarcode(barcode);
 
       if (!scanResult.success || !scanResult.data || !scanResult.data.product) {
-        displayToast('❌ Barcode not found in system', 'error');
-        addToScanHistory(barcode, 'error', 'Barcode not found');
+        const lockDetection = readOpenOrderLockError(scanResult, barcode);
+        if (lockDetection) {
+          setOpenOrderLockHint({
+            barcode: lockDetection.barcode || barcode,
+            message: lockDetection.message || (scanResult as any)?.message,
+            signal: Date.now(),
+          });
+          displayToast('Open order lock detected. Use the floating rescue popup.', 'warning');
+          addToScanHistory(barcode, 'error', lockDetection.message || 'Open order lock detected');
+        } else {
+          displayToast((scanResult as any)?.message || '❌ Barcode not found in system', 'error');
+          addToScanHistory(barcode, 'error', (scanResult as any)?.message || 'Barcode not found');
+        }
         playErrorSound();
         return;
       }
@@ -528,8 +545,19 @@ if (!matchingItem) {
       }, 100);
     } catch (error: any) {
       console.error('❌ Scan error:', error);
-      displayToast('Scan error: ' + error.message, 'error');
-      addToScanHistory(barcode, 'error', error.message);
+      const message = error?.response?.data?.message || error?.message || 'Failed to scan barcode';
+      const lockDetection = readOpenOrderLockError(error, barcode);
+      if (lockDetection) {
+        setOpenOrderLockHint({
+          barcode: lockDetection.barcode || barcode,
+          message: lockDetection.message || message,
+          signal: Date.now(),
+        });
+        displayToast('Open order lock detected. Use the floating rescue popup.', 'warning');
+      } else {
+        displayToast('Scan error: ' + message, 'error');
+      }
+      addToScanHistory(barcode, 'error', message);
       playErrorSound();
     }
   };
@@ -763,6 +791,15 @@ if (!matchingItem) {
             </main>
           </div>
         </div>
+
+        <OpenOrderLockRescueWidget
+          contextLabel="Social Order Packing"
+          selectedStoreId={orderDetails?.store_id || orderDetails?.assigned_store_id || orderDetails?.store?.id || orderDetails?.fulfillment_store_id || null}
+          detectedBarcode={openOrderLockHint?.barcode || null}
+          detectedMessage={openOrderLockHint?.message || null}
+          triggerKey={openOrderLockHint?.signal || null}
+          onRevived={(barcode) => displayToast(`Barcode ${barcode} revived. Scan again now.`, 'success')}
+        />
 
         {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}
 
@@ -1165,6 +1202,15 @@ if (!matchingItem) {
           </main>
         </div>
       </div>
+
+      <OpenOrderLockRescueWidget
+        contextLabel="Social Order Packing"
+        selectedStoreId={orderDetails?.store_id || orderDetails?.assigned_store_id || orderDetails?.store?.id || orderDetails?.fulfillment_store_id || null}
+        detectedBarcode={openOrderLockHint?.barcode || null}
+        detectedMessage={openOrderLockHint?.message || null}
+        triggerKey={openOrderLockHint?.signal || null}
+        onRevived={(barcode) => displayToast(`Barcode ${barcode} revived. Scan again now.`, 'success')}
+      />
 
       {/* Toast Notification */}
       {showToast && <Toast message={toastMessage} type={toastType} onClose={() => setShowToast(false)} />}

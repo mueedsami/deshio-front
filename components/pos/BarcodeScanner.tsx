@@ -3,12 +3,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { Scan, Keyboard, Loader2 } from 'lucide-react';
 import barcodeService from '@/services/barcodeService';
+import { readOpenOrderLockError } from '@/components/barcode/OpenOrderLockRescueWidget';
 
 interface BarcodeScannerProps {
   isEnabled: boolean;
   selectedOutlet: string;
   onProductScanned: (product: ScannedProduct) => void;
   onError: (message: string) => void;
+  onOpenOrderLock?: (payload: { barcode: string; message?: string; raw?: any }) => void;
 }
 
 export interface ScannedProduct {
@@ -25,7 +27,8 @@ export default function BarcodeScanner({
   isEnabled, 
   selectedOutlet, 
   onProductScanned, 
-  onError 
+  onError,
+  onOpenOrderLock 
 }: BarcodeScannerProps) {
   const [barcodeInput, setBarcodeInput] = useState('');
   const [isScanning, setIsScanning] = useState(false);
@@ -127,7 +130,15 @@ export default function BarcodeScanner({
       const response = await barcodeService.scanBarcode(barcode, selectedOutlet);
       
       if (!response.success || !response.data) {
-        onError(`Barcode not found: ${barcode}`);
+        const lockDetection = readOpenOrderLockError(response, barcode);
+        if (lockDetection) {
+          onOpenOrderLock?.({
+            barcode: lockDetection.barcode || barcode,
+            message: lockDetection.message || (response as any)?.message,
+            raw: response,
+          });
+        }
+        onError((response as any)?.message || `Barcode not found: ${barcode}`);
         setIsScanning(false);
         return;
       }
@@ -192,7 +203,16 @@ export default function BarcodeScanner({
       
     } catch (error: any) {
       console.error('❌ Barcode scan error:', error);
-      onError(error.response?.data?.message || error.message || 'Failed to scan barcode');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to scan barcode';
+      const lockDetection = readOpenOrderLockError(error, barcode);
+      if (lockDetection) {
+        onOpenOrderLock?.({
+          barcode: lockDetection.barcode || barcode,
+          message: lockDetection.message || errorMessage,
+          raw: error.response?.data,
+        });
+      }
+      onError(errorMessage);
     } finally {
       setIsScanning(false);
     }

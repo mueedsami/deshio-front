@@ -42,6 +42,7 @@ import CustomerFormModal from '@/components/pos/CustomerFormModal';
 import { useCustomerLookup } from '@/lib/hooks/useCustomerLookup';
 import { checkQZStatus, printReceipt } from '@/lib/qz-tray';
 import DailyCashReportModal from '@/components/pos/DailyCashReportModal';
+import OpenOrderLockRescueWidget from '@/components/barcode/OpenOrderLockRescueWidget';
 
 interface Store {
   id: number;
@@ -280,6 +281,13 @@ export default function POSPage() {
 
   // ✅ Reports
   const [showDailyReportModal, setShowDailyReportModal] = useState(false);
+
+  // ✅ Inline barcode order-lock rescue popup
+  const [openOrderLockHint, setOpenOrderLockHint] = useState<{
+    barcode: string;
+    message?: string;
+    signal: number;
+  } | null>(null);
 
   // ============ TOAST HELPER ============
   const showToast = (message: string, type: 'success' | 'error') => {
@@ -1634,6 +1642,14 @@ export default function POSPage() {
                       selectedOutlet={selectedOutlet}
                       onProductScanned={handleProductScanned}
                       onError={(msg) => showToast(msg, 'error')}
+                      onOpenOrderLock={(payload) => {
+                        setOpenOrderLockHint({
+                          barcode: payload.barcode,
+                          message: payload.message,
+                          signal: Date.now(),
+                        });
+                        showToast('Open order lock detected. Use the floating rescue popup.', 'error');
+                      }}
                     />
                   )}
 
@@ -2381,6 +2397,15 @@ export default function POSPage() {
           }}
         />
       )}
+      <OpenOrderLockRescueWidget
+        contextLabel="POS"
+        selectedStoreId={selectedOutlet}
+        detectedBarcode={openOrderLockHint?.barcode || null}
+        detectedMessage={openOrderLockHint?.message || null}
+        triggerKey={openOrderLockHint?.signal || null}
+        onRevived={(barcode) => showToast(`Barcode ${barcode} revived. Scan again now.`, 'success')}
+      />
+
       <DailyCashReportModal
         isOpen={showDailyReportModal}
         onClose={() => setShowDailyReportModal(false)}

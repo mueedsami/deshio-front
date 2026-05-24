@@ -17,6 +17,7 @@ import storeService, { Store } from '@/services/storeService';
 import ReturnExchangeFromOrder from '@/components/lookup/ReturnExchangeFromOrder';
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import OpenOrderLockRescueWidget, { readOpenOrderLockError } from '@/components/barcode/OpenOrderLockRescueWidget';
 import productReturnService, { type CreateReturnRequest } from '@/services/productReturnService';
 import refundService, { type CreateRefundRequest } from '@/services/refundService';
 import { connectQZ, getDefaultPrinter } from '@/lib/qz-tray';
@@ -462,6 +463,11 @@ export default function LookupPage() {
   const [barcodeProductImageUrl, setBarcodeProductImageUrl] = useState<string | null>(null);
   const [barcodeImagePreviewOpen, setBarcodeImagePreviewOpen] = useState(false);
   const [barcodeImagePreviewUrl, setBarcodeImagePreviewUrl] = useState<string | null>(null);
+  const [openOrderLockHint, setOpenOrderLockHint] = useState<{
+    barcode: string;
+    message?: string;
+    signal: number;
+  } | null>(null);
 
   // Modal states for Return/Exchange
   const [showReturnModal, setShowReturnModal] = useState(false);
@@ -2093,14 +2099,35 @@ export default function LookupPage() {
     try {
       const res = await barcodeTrackingService.getBarcodeHistory(code);
       if (!res?.success) {
-        setError('Barcode not found');
+        const lockDetection = readOpenOrderLockError(res, code);
+        if (lockDetection) {
+          setOpenOrderLockHint({
+            barcode: lockDetection.barcode || code,
+            message: lockDetection.message,
+            signal: Date.now(),
+          });
+          setError('Open order lock detected. Use the floating rescue popup.');
+        } else {
+          setError((res as any)?.message || 'Barcode not found');
+        }
         return;
       }
       const enriched = await enrichBarcodeHistoryWithBatchPrices(res.data as any);
       setBarcodeData(enriched as any);
       await resolveBarcodePurchaseInfo(code, enriched as any);
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch barcode history');
+      const message = err?.response?.data?.message || err?.message || 'Failed to fetch barcode history';
+      const lockDetection = readOpenOrderLockError(err, code);
+      if (lockDetection) {
+        setOpenOrderLockHint({
+          barcode: lockDetection.barcode || code,
+          message: lockDetection.message || message,
+          signal: Date.now(),
+        });
+        setError('Open order lock detected. Use the floating rescue popup.');
+      } else {
+        setError(message);
+      }
     } finally {
       setBarcodeLoading(false);
     }
@@ -3725,6 +3752,15 @@ export default function LookupPage() {
                 </>
               )}
             </div>
+
+            <OpenOrderLockRescueWidget
+              contextLabel="Lookup"
+              selectedStoreId={null}
+              detectedBarcode={openOrderLockHint?.barcode || null}
+              detectedMessage={openOrderLockHint?.message || null}
+              triggerKey={openOrderLockHint?.signal || null}
+              onRevived={(barcode) => setError(`Barcode ${barcode} revived. Search/scan it again now.`)}
+            />
 
             {/* Barcode Product Image Preview Modal */}
             {barcodeImagePreviewOpen && barcodeImagePreviewUrl && (
