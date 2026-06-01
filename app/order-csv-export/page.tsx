@@ -4,20 +4,9 @@ import { useState } from 'react';
 import axiosInstance from '@/lib/axios';
 import { useAuth } from '@/contexts/AuthContext';
 
-const extractFilename = (contentDisposition?: string) => {
-  if (!contentDisposition) return '';
-
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    try {
-      return decodeURIComponent(utf8Match[1].replace(/['"]/g, ''));
-    } catch {
-      return utf8Match[1].replace(/['"]/g, '');
-    }
-  }
-
-  const normalMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-  return normalMatch?.[1] || '';
+const getApiBaseUrl = () => {
+  const baseUrl = axiosInstance.defaults.baseURL || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+  return String(baseUrl).replace(/\/$/, '');
 };
 
 export default function OrderCsvExportPage() {
@@ -32,30 +21,25 @@ export default function OrderCsvExportPage() {
     setError('');
 
     try {
-      const response = await axiosInstance.get('/orders/export/full-csv', {
-        responseType: 'blob',
-        headers: {
-          Accept: 'text/csv',
-        },
-      });
+      // First create a short-lived token with the normal authenticated API request.
+      // Then let the browser download the CSV directly instead of loading a huge Blob in JS.
+      const response = await axiosInstance.post('/orders/export/full-csv-token');
+      const token = response.data?.data?.token;
 
-      const blob = new Blob([response.data], { type: 'text/csv;charset=utf-8;' });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      const filename = extractFilename(response.headers['content-disposition']) ||
-        `deshio_full_orders_export_${new Date().toISOString().slice(0, 10)}.csv`;
+      if (!token) {
+        throw new Error('CSV download token was not returned by the server.');
+      }
 
-      link.href = url;
-      link.setAttribute('download', filename);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-
+      const downloadUrl = `${getApiBaseUrl()}/orders/export/full-csv-download?token=${encodeURIComponent(token)}`;
+      window.location.assign(downloadUrl);
       setMessage('CSV download started.');
     } catch (err: any) {
       console.error('Order CSV export failed:', err);
-      setError(err?.response?.data?.message || 'Could not download the order CSV. Please check login/session and try again.');
+      setError(
+        err?.response?.data?.message ||
+        err?.message ||
+        'Could not start the order CSV download. Please check login/session and try again.'
+      );
     } finally {
       setDownloading(false);
     }
