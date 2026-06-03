@@ -1225,7 +1225,7 @@ export default function POSPage() {
 
   const fetchOutlets = async (role: string, storeId: string) => {
     try {
-      const response = await storeService.getStores({ is_active: true });
+      const response = await storeService.getStores({ is_active: true, per_page: 100 });
 
       // ✅ FIXED: Handle response type correctly
       if (!response || (typeof response === 'object' && 'success' in response && !response.success)) {

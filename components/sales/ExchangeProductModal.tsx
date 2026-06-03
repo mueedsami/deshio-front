@@ -30,7 +30,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
   // Store selection
   const [stores, setStores] = useState<Store[]>([]);
-  const [exchangeAtStoreId, setExchangeAtStoreId] = useState<number>(order.store?.id || 1);
+  const [exchangeAtStoreId, setExchangeAtStoreId] = useState<number>(Number(order.store?.id || order.store_id || 0));
 
   // Payment/Refund states
   const [paymentDetails, setPaymentDetails] = useState({
@@ -56,7 +56,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
   const fetchStores = async () => {
     try {
-      const response = await storeService.getStores({ is_active: true });
+      const response = await storeService.getStores({ is_active: true, per_page: 100 });
       let storesData: Store[] = [];
       if (response?.success && response?.data) {
         storesData = Array.isArray(response.data.data) ? response.data.data : (Array.isArray(response.data) ? response.data : []);
@@ -64,6 +64,9 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         storesData = response;
       }
       setStores(storesData);
+      if (!exchangeAtStoreId && storesData.length > 0) {
+        setExchangeAtStoreId(Number(storesData[0].id));
+      }
     } catch (error) {
       console.error('Failed to fetch stores:', error);
     }
@@ -336,6 +339,11 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   const refundBlocking = !allowPartialRefunds && totals.difference < 0 && refundDue > 0.01;
 
   const handleProcessExchange = async () => {
+    if (!exchangeAtStoreId) {
+      setError('Please select the store processing this exchange');
+      return;
+    }
+
     if (removedItems.length === 0) {
       setError('Please scan at least one item to return');
       return;
@@ -428,6 +436,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                   onChange={(e) => setExchangeAtStoreId(Number(e.target.value))}
                   className="w-full px-4 py-3 bg-white dark:bg-gray-800 border-2 border-gray-100 dark:border-gray-700 rounded-xl focus:border-orange-500 outline-none transition-all text-sm font-bold uppercase tracking-widest"
                 >
+                  <option value={0} disabled>Select store</option>
                   {stores.map(store => (
                     <option key={store.id} value={store.id}>
                       {store.name} {store.is_warehouse ? '(WAREHOUSE)' : '(STORE)'}

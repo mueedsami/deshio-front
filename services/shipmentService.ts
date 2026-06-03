@@ -64,9 +64,12 @@ export interface ShipmentStatistics {
 }
 
 export interface BulkSendImmediateFailure {
-  shipment_id: number;
-  shipment_number: string;
+  order_id?: number | null;
+  order_number?: string | null;
+  shipment_id?: number | null;
+  shipment_number?: string | null;
   reason: string;
+  user_message?: string;
 }
 
 export interface BulkSendSyncResult {
@@ -87,6 +90,9 @@ export interface BulkSendQueuedResult {
   batch_id: number;
   queued_count: number;
   immediate_failures: BulkSendImmediateFailure[];
+  rate_limit_per_minute?: number;
+  spacing_ms?: number;
+  estimated_seconds?: number;
   status_url: string;
 }
 
@@ -101,6 +107,12 @@ export interface BulkBatchSummary {
   progress: number;
   started_at?: string | null;
   completed_at?: string | null;
+  rate_limit_per_minute?: number;
+  spacing_ms?: number;
+  next_available_at?: string | null;
+  immediate_failed?: number;
+  display_total?: number;
+  display_processed?: number;
 }
 
 export interface BulkBatchDetailedResult {
@@ -109,12 +121,15 @@ export interface BulkBatchDetailedResult {
   order_number?: string | null;
   success: boolean;
   message: string;
+  user_message?: string | null;
+  raw_message?: string | null;
   consignment_id?: string | null;
   processed_at?: string | null;
 }
 
 export interface BulkBatchDetails {
   summary: BulkBatchSummary;
+  immediate_failures?: BulkSendImmediateFailure[];
   results: BulkBatchDetailedResult[];
 }
 
@@ -190,24 +205,55 @@ class ShipmentService {
   }
 
   /**
-   * Backward-compatible sync bulk send helper
+   * Backward-compatible helper. The backend no longer sends whole batches synchronously,
+   * so this returns a queued batch result without risking a timeout.
    */
-  async bulkSendToPathao(shipmentIds: number[]): Promise<BulkSendSyncResult> {
-    const data = await this.startBulkSendToPathao(shipmentIds, { sync: true });
-    if ('success' in data && 'failed' in data) {
-      return data;
-    }
+  async bulkSendToPathao(shipmentIds: number[]): Promise<BulkSendQueuedResult> {
+    return this.startBulkSendToPathao(shipmentIds) as Promise<BulkSendQueuedResult>;
+  }
 
-    return {
-      success: [],
-      failed: [
-        {
-          shipment_id: 0,
-          shipment_number: data.batch_code,
-          reason: 'Queued in async mode. Use bulk status APIs for progress.',
-        },
-      ],
-    };
+  /**
+   * Start Pathao bulk send directly from selected order IDs. Backend creates/uses
+   * pending shipments only for packed social-commerce/e-commerce orders.
+   */
+  async bulkSendOrdersToPathao(orderIds: number[]): Promise<BulkSendQueuedResult> {
+    try {
+      const response = await axiosInstance.post('/shipments/bulk-send-orders-to-pathao', {
+        order_ids: orderIds,
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to start Pathao bulk send');
+      }
+
+      return result.data;
+    } catch (error: any) {
+      console.error('Bulk send orders to Pathao error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to start Pathao bulk send');
+    }
+  }
+
+  /**
+   * Ask backend to process one due Pathao shipment for a batch. The backend enforces
+   * the 19 orders/minute spacing, even if this is called frequently.
+   */
+  async runPathaoQueueTick(batchCode?: string): Promise<BulkBatchSummary | null> {
+    try {
+      const response = await axiosInstance.post('/shipments/pathao-queue-tick', {
+        batch_code: batchCode,
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to process Pathao queue tick');
+      }
+
+      return result.data || null;
+    } catch (error: any) {
+      console.error('Pathao queue tick error:', error);
+      throw new Error(error.response?.data?.message || 'Failed to process Pathao queue tick');
+    }
   }
 
   /**

@@ -2172,7 +2172,6 @@ export default function SocialCommercePage() {
         order_type: 'social_commerce',
         ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
         ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
-        store_id: parseInt(selectedStore),
         salesman_id: parseInt(selectedEmployee),
         customer: {
           name: userName,

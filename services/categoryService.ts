@@ -1,4 +1,5 @@
 import axiosInstance from '@/lib/axios';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
 // Types
 export interface Category {
@@ -109,19 +110,9 @@ class CategoryService {
 
   
 private normalizeCategory<T extends Category | CategoryTree>(category: T): T {
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL;
-  const normalizeAsset = (value?: string | null) => {
-    if (!value) return value as any;
-    if (value.startsWith('http') || value.startsWith('blob:') || value.startsWith('data:')) return value;
-    let path = value;
-    if (!path.startsWith('/')) path = '/' + path;
-    if (!path.startsWith('/storage/')) path = '/storage' + path;
-    return (baseUrl || '') + path;
-  };
-
-  category.image_url = normalizeAsset(category.image_url || category.image || undefined);
-  category.thumbnail_url = normalizeAsset(category.thumbnail_url || category.thumbnail_image || category.image_url || undefined);
-  category.banner_url = normalizeAsset(category.banner_url || category.banner_image || undefined);
+  category.image_url = toAbsoluteAssetUrl(category.image_url || category.image || undefined);
+  category.thumbnail_url = toAbsoluteAssetUrl(category.thumbnail_url || category.thumbnail_image || category.image_url || undefined);
+  category.banner_url = toAbsoluteAssetUrl(category.banner_url || category.banner_image || undefined);
 
   // Recursively normalize nested categories
   if (category.parent) {

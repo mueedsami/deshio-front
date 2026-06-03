@@ -51,6 +51,12 @@ const isCustomerRoute = (url?: string): boolean => {
 // Request interceptor to add auth token (skip for public routes)
 axiosInstance.interceptors.request.use(
   (config) => {
+    // Let the browser set multipart/form-data boundaries for FormData uploads.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+      delete (config.headers as any)['Content-Type'];
+      delete (config.headers as any)['content-type'];
+    }
+
     // Skip adding token for public routes
     if (isPublicRoute(config.url)) {
       console.log('🌐 Public route detected, skipping auth:', config.url);

@@ -141,7 +141,6 @@ function parseCsvText(text: string, maxRows = 60): string[][] {
     rows.push(row);
   }
 
-  if (rows[0]?.[0]) rows[0][0] = rows[0][0].replace(/^\uFEFF/, '');
   return rows;
 }
 

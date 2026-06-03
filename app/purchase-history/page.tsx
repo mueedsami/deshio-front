@@ -335,7 +335,7 @@ export default function PurchaseHistoryPage() {
       nagad: number;
       total: number;
     };
-    returnReason: 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
+    returnReason: 'defective_product' | 'wrong_item' | 'wrong_product' | 'wrong_customer' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
     returnType: 'customer_return' | 'store_return' | 'warehouse_return';
     customerNotes?: string;
   }) => {

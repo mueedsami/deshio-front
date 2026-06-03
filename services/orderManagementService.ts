@@ -147,58 +147,37 @@ class OrderManagementService {
       throw new Error('Invalid order/store selection');
     }
 
-    // Try canonical payload first, then a couple of common backend variants.
-    const payloadVariants: Array<Record<string, any>> = [
-      { store_id: normalizedStoreId, notes: payload?.notes },
-      { assigned_store_id: normalizedStoreId, notes: payload?.notes },
-      { storeId: normalizedStoreId, notes: payload?.notes },
-    ];
+    try {
+      const body = { store_id: normalizedStoreId, notes: payload?.notes };
+      console.log('📍 Assigning order to store:', { orderId: normalizedOrderId, body });
 
-    let lastError: any = null;
+      const response = await axiosInstance.post(
+        `/order-management/orders/${normalizedOrderId}/assign-store`,
+        body
+      );
 
-    for (const body of payloadVariants) {
-      try {
-        console.log('📍 Assigning order to store:', { orderId: normalizedOrderId, body });
+      console.log('✅ Order assigned successfully:', response.data?.data || response.data);
+      return response.data?.data?.order || response.data?.data || response.data;
+    } catch (error: any) {
+      const serverMessage = error?.response?.data?.message;
+      console.error('❌ Assign attempt failed:', {
+        status: error?.response?.status,
+        serverMessage,
+        responseData: error?.response?.data,
+      });
 
-        const response = await axiosInstance.post(
-          `/order-management/orders/${normalizedOrderId}/assign-store`,
-          body
-        );
-
-        console.log('✅ Order assigned successfully:', response.data?.data || response.data);
-
-        return response.data?.data?.order || response.data?.data || response.data;
-      } catch (error: any) {
-        lastError = error;
-        const status = error?.response?.status;
-        const serverMessage = error?.response?.data?.message;
-        console.error('❌ Assign attempt failed:', {
-          status,
-          serverMessage,
-          responseData: error?.response?.data,
-        });
-
-        // For clear client errors, no need to retry variants.
-        if (status === 400 || status === 404 || status === 422) {
-          if (error.response?.data?.data) {
-            const { product, required, available } = error.response.data.data;
-            if (product && required != null && available != null) {
-              throw new Error(
-                `Insufficient inventory for ${product}: Required ${required}, Available ${available}`
-              );
-            }
-          }
-          throw new Error(serverMessage || 'Order cannot be assigned');
+      if (error.response?.data?.data) {
+        const { product, required, available, actually_free } = error.response.data.data;
+        const availableQty = available ?? actually_free;
+        if (product && required != null && availableQty != null) {
+          throw new Error(
+            `Insufficient inventory for ${product}: Required ${required}, Available ${availableQty}`
+          );
         }
       }
-    }
 
-    // If all variants fail, bubble up most useful server message.
-    throw new Error(
-      lastError?.response?.data?.message ||
-      lastError?.message ||
-      'Failed to assign order to store'
-    );
+      throw new Error(serverMessage || error?.message || 'Failed to assign order to store');
+    }
   }
 
   /**

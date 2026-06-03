@@ -306,6 +306,8 @@ export default function WarehouseFulfillmentPage() {
         const st = normalize(o.status);
         const fs = normalize(o.fulfillment_status);
         if (['completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
+        if (st === 'pending_assignment') return false;
+        if (!o.store_id && !o.assigned_store_id && !o.store?.id && !o.fulfillment_store_id) return false;
         if (st === 'confirmed' && fs !== 'pending_fulfillment') return false;
         if (fs && fs !== 'pending_fulfillment') return false;
         return true;

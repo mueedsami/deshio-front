@@ -3,7 +3,7 @@ import { X, RotateCcw, Calculator, Barcode, Trash2, AlertCircle, Info } from 'lu
 import storeService, { type Store } from '@/services/storeService';
 import productReturnService from '@/services/productReturnService';
 
-type ReturnReason = 'defective_product' | 'wrong_item' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
+type ReturnReason = 'defective_product' | 'wrong_item' | 'wrong_product' | 'wrong_customer' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
 type ReturnType = 'customer_return' | 'store_return' | 'warehouse_return';
 
 interface ReturnProductModalProps {
@@ -30,7 +30,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
 
   // Store selection
   const [stores, setStores] = useState<Store[]>([]);
-  const [receivedAtStoreId, setReceivedAtStoreId] = useState<number>(order.store?.id || 1);
+  const [receivedAtStoreId, setReceivedAtStoreId] = useState<number>(Number(order.store?.id || order.store_id || 0));
 
   // Refund states
   const [refundDetails, setRefundDetails] = useState({
@@ -55,7 +55,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
 
   const fetchStores = async () => {
     try {
-      const response = await storeService.getStores({ is_active: true });
+      const response = await storeService.getStores({ is_active: true, per_page: 100 });
       let storesData: Store[] = [];
       if (response?.success && response?.data) {
         storesData = Array.isArray(response.data.data) ? response.data.data : (Array.isArray(response.data) ? response.data : []);
@@ -63,6 +63,9 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
         storesData = response;
       }
       setStores(storesData);
+      if (!receivedAtStoreId && storesData.length > 0) {
+        setReceivedAtStoreId(Number(storesData[0].id));
+      }
     } catch (error) {
       console.error('Failed to fetch stores:', error);
     }
@@ -254,6 +257,11 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       return;
     }
 
+    if (!receivedAtStoreId) {
+      setError('Please select the store receiving this return');
+      return;
+    }
+
     if (refundOverpaid) {
       setError('Refund amount cannot exceed the refund due amount');
       return;
@@ -337,8 +345,9 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                       onChange={(e) => setReceivedAtStoreId(Number(e.target.value))}
                       className="w-full px-4 py-3 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl focus:border-blue-500 outline-none transition-all text-sm font-bold uppercase tracking-widest"
                     >
+                      <option value={0} disabled>Select store</option>
                       {stores.map(store => (
-                        <option key={store.id} value={store.id}>{store.name}</option>
+                        <option key={store.id} value={store.id}>{store.name}{store.is_warehouse ? ' (Warehouse)' : ''}</option>
                       ))}
                     </select>
                   </div>
@@ -351,6 +360,8 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                     >
                       <option value="defective_product">Defective Product</option>
                       <option value="wrong_item">Wrong Item</option>
+                      <option value="wrong_product">Wrong Product</option>
+                      <option value="wrong_customer">Wrong Customer</option>
                       <option value="size_issue">Size Issue</option>
                       <option value="quality_issue">Quality Issue</option>
                       <option value="changed_mind">Changed Mind</option>

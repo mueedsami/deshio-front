@@ -1,10 +1,18 @@
 const LOCAL_FRONTEND_PATH_PREFIXES = [
   '/placeholder',
-  '/images/',
   '/icons/',
   '/logos/',
   '/favicon',
   '/_next/',
+];
+
+const BACKEND_MEDIA_FOLDERS = [
+  'categories',
+  'category',
+  'products',
+  'product-images',
+  'collections',
+  'homepage',
 ];
 
 function trimTrailingSlash(value: string): string {
@@ -12,17 +20,18 @@ function trimTrailingSlash(value: string): string {
 }
 
 function stripApiSegment(value: string): string {
-  return value.replace(/\/api\/?$/, '');
+  return value.replace(/\/api(?:\/v\d+)?\/?$/i, '');
 }
 
 /**
  * Returns backend origin URL for serving media assets.
- * Priority: NEXT_PUBLIC_API_URL -> NEXT_PUBLIC_BASE_URL.
+ * Priority: NEXT_PUBLIC_API_URL -> NEXT_PUBLIC_BACKEND_URL -> NEXT_PUBLIC_BASE_URL.
  * If value ends with /api, it is removed.
  */
 export function getBackendOrigin(): string {
   const raw = String(
     process.env.NEXT_PUBLIC_API_URL ||
+      process.env.NEXT_PUBLIC_BACKEND_URL ||
       process.env.NEXT_PUBLIC_BASE_URL ||
       ''
   ).trim();
@@ -41,66 +50,66 @@ function hasProtocolRelativeUrl(value: string): boolean {
   return /^\/\//.test(value);
 }
 
+function isFrontendPlaceholder(value: string): boolean {
+  return /^\/(?:images\/)?placeholder-product\.(?:png|jpe?g|webp|svg)$/i.test(value) ||
+    /^\/placeholder-product\.(?:png|jpe?g|webp|svg)$/i.test(value) ||
+    /^\/placeholder\.(?:png|jpe?g|webp|svg)$/i.test(value);
+}
+
 function shouldKeepAsLocalFrontendPath(value: string): boolean {
-  return LOCAL_FRONTEND_PATH_PREFIXES.some((prefix) => value.startsWith(prefix));
+  return isFrontendPlaceholder(value) || LOCAL_FRONTEND_PATH_PREFIXES.some((prefix) => value.startsWith(prefix));
+}
+
+function encodePath(path: string): string {
+  return path.split('/').map((part) => {
+    try {
+      return encodeURIComponent(decodeURIComponent(part));
+    } catch {
+      return encodeURIComponent(part);
+    }
+  }).join('/');
 }
 
 /**
- * Normalizes legacy media paths for category images.
- *
- * We have seen these variants in API responses / DB:
- * - categories/xxx.jpg        (missing /storage)
- * - category/xxx.jpg          (legacy singular)
- * - /storage/category/xxx.jpg (wrong folder name)
- *
- * Correct public path should be:
- * - /storage/categories/xxx.jpg
+ * Converts legacy/public-storage media paths into the backend API media endpoint.
+ * This prevents Next/Vercel from trying to load backend uploads from the frontend
+ * public folder.
  */
-function normalizeLegacyAssetPath(inputPath: string): string {
-  let path = inputPath;
+function normalizeBackendMediaPath(inputPath: string): string {
+  let path = inputPath.replace(/^['"]|['"]$/g, '').trim();
+  if (!path) return '';
 
-  // If full URL was passed in, extract pathname only (we will rebuild later).
-  // This function is meant to work on raw paths too.
-  path = path.replace(/^['"]|['"]$/g, '');
+  path = path.replace(/^\/api\/storage\//i, '/storage/');
+  path = path.replace(/^api\/storage\//i, 'storage/');
 
-  // Convert singular folder to plural inside /storage
-  path = path.replace(/\/storage\/category\//gi, '/storage/categories/');
-
-  // categories/...  -> /storage/categories/...
-  if (/^\/?categories\//i.test(path) && !/\/storage\/categories\//i.test(path)) {
-    path = path.replace(/^\/?categories\//i, '/storage/categories/');
+  if (/^\/?api\/media\//i.test(path)) {
+    const mediaPath = path.replace(/^\/?api\/media\//i, '');
+    return `/api/media/${encodePath(mediaPath)}`;
   }
 
-  // category/... -> /storage/categories/...
-  if (/^\/?category\//i.test(path) && !/\/storage\/categories\//i.test(path)) {
-    path = path.replace(/^\/?category\//i, '/storage/categories/');
+  if (/^\/?storage\//i.test(path)) {
+    let mediaPath = path.replace(/^\/?storage\//i, '');
+    mediaPath = mediaPath.replace(/^category\//i, 'categories/');
+    return `/api/media/${encodePath(mediaPath)}`;
   }
 
-  return path;
+  const withoutLeadingSlash = path.replace(/^\/+/, '');
+  const firstSegment = withoutLeadingSlash.split('/')[0]?.toLowerCase();
+  if (BACKEND_MEDIA_FOLDERS.includes(firstSegment)) {
+    const mediaPath = withoutLeadingSlash.replace(/^category\//i, 'categories/');
+    return `/api/media/${encodePath(mediaPath)}`;
+  }
+
+  return path.startsWith('/') ? path : `/${path}`;
 }
 
 /**
- * Converts relative media path to absolute backend asset URL.
- * Leaves data/blob URLs and local frontend assets unchanged.
+ * Converts relative media paths to absolute backend URLs.
+ * Leaves data/blob URLs and known local frontend placeholders unchanged.
  */
 export function toAbsoluteAssetUrl(value?: string | null): string {
   const raw = String(value || '').trim();
   if (!raw) return '';
-
-  // Handle absolute URLs too (some APIs return full backend URLs).
-  if (isAbsoluteHttpUrl(raw)) {
-    try {
-      const u = new URL(raw);
-      const normalizedPath = normalizeLegacyAssetPath(u.pathname);
-      if (normalizedPath !== u.pathname) {
-        u.pathname = normalizedPath;
-        return u.toString();
-      }
-    } catch {
-      // fall through and return raw
-    }
-    return raw;
-  }
 
   if (raw.startsWith('data:') || raw.startsWith('blob:')) {
     return raw;
@@ -113,23 +122,27 @@ export function toAbsoluteAssetUrl(value?: string | null): string {
     return `https:${raw}`;
   }
 
+  const backendOrigin = getBackendOrigin();
+
+  if (isAbsoluteHttpUrl(raw)) {
+    try {
+      const url = new URL(raw);
+      const normalizedPath = normalizeBackendMediaPath(url.pathname);
+      if (/^\/api\/media\//i.test(normalizedPath)) {
+        return `${backendOrigin || url.origin}${normalizedPath}`;
+      }
+    } catch {
+      return raw;
+    }
+    return raw;
+  }
+
   if (shouldKeepAsLocalFrontendPath(raw)) {
     return raw;
   }
 
-  let path = normalizeLegacyAssetPath(raw);
+  const path = normalizeBackendMediaPath(raw);
 
-  // Some backends return /api/storage/... for files; strip /api for direct asset access.
-  if (/^\/?api\//i.test(path) && /\/storage\//i.test(path)) {
-    path = path.replace(/^\/?api\//i, '/');
-  }
-
-  if (!path.startsWith('/')) {
-    path = `/${path}`;
-  }
-
-  const backendOrigin = getBackendOrigin();
   if (!backendOrigin) return path;
-
-  return `${backendOrigin}${path}`;
+  return `${backendOrigin}${path.startsWith('/') ? path : `/${path}`}`;
 }

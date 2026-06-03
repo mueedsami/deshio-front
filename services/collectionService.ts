@@ -1,4 +1,5 @@
 import axiosInstance from "@/lib/axios";
+import { toAbsoluteAssetUrl } from "@/lib/assetUrl";
 
 export interface Collection {
   id: number;
@@ -22,22 +23,37 @@ export interface Collection {
   products_count?: number;
 }
 
+
+const normalizeCollection = (collection: Collection): Collection => ({
+  ...collection,
+  banner_url: toAbsoluteAssetUrl(collection.banner_url || collection.banner_image || undefined) || null,
+  thumbnail_url: toAbsoluteAssetUrl(collection.thumbnail_url || collection.thumbnail_image || undefined) || null,
+});
+
+const normalizeCollectionPayload = (payload: any) => {
+  if (Array.isArray(payload)) return payload.map(normalizeCollection);
+  if (payload?.data && Array.isArray(payload.data)) {
+    return { ...payload, data: payload.data.map(normalizeCollection) };
+  }
+  return payload;
+};
+
 const collectionService = {
   getAll: async (params?: any) => {
     const response = await axiosInstance.get('/collections', { params });
-    return response.data.data;
+    return normalizeCollectionPayload(response.data.data);
   },
 
   getById: async (id: number) => {
     const response = await axiosInstance.get(`/collections/${id}`);
-    return response.data.data;
+    return normalizeCollection(response.data.data);
   },
 
   create: async (formData: FormData) => {
     const response = await axiosInstance.post('/collections', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
-    return response.data;
+    return response.data?.data ? { ...response.data, data: normalizeCollection(response.data.data) } : response.data;
   },
 
   update: async (id: number, formData: FormData) => {
@@ -48,7 +64,7 @@ const collectionService = {
     const response = await axiosInstance.post(`/collections/${id}?_method=PUT`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
-    return response.data;
+    return response.data?.data ? { ...response.data, data: normalizeCollection(response.data.data) } : response.data;
   },
 
   delete: async (id: number) => {

@@ -703,12 +703,12 @@ export default function VendorPaymentPage() {
     }
   };
 
-  // Load stores (warehouses)
+  // Load active stores for purchase-order receiving location
   const loadStores = async () => {
     try {
       const response = await storeService.getStores({
-        is_warehouse: true,
         is_active: true,
+        per_page: 100,
       });
 
       if ((response as any).success && Array.isArray((response as any).data?.data)) {
@@ -722,7 +722,7 @@ export default function VendorPaymentPage() {
     } catch (error) {
       console.error('Failed to load stores:', error);
       setStores([]);
-      showAlert('error', 'Failed to load warehouses');
+      showAlert('error', 'Failed to load stores');
     }
   };
 
@@ -1567,21 +1567,19 @@ export default function VendorPaymentPage() {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Warehouse <span className="text-red-500">*</span>
+                Store <span className="text-red-500">*</span>
               </label>
               <select
                 value={purchaseForm.store_id}
                 onChange={(e) => setPurchaseForm({ ...purchaseForm, store_id: e.target.value })}
                 className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
               >
-                <option value="">Select warehouse</option>
-                {stores
-                  .filter((s: any) => s.is_warehouse)
-                  .map((s: any) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
+                <option value="">Select store</option>
+                {stores.map((s: any) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}{s.is_warehouse ? ' (Warehouse)' : ''}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

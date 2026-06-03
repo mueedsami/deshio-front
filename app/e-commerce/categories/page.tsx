@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Loader2, AlertCircle, ChevronRight } from 'lucide-react';
 import Navigation from '@/components/ecommerce/Navigation';
 import catalogService, { CatalogCategory } from '@/services/catalogService';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
 const slugify = (v: string) =>
   v.toLowerCase().trim().replace(/[^a-z0-9\s-]/g, '').replace(/\s+/g, '-');
@@ -17,32 +18,11 @@ const PALETTE = [
 
 /**
  * Build a usable image URL from whatever the API returns.
- * The API gives image_url as a relative path like /storage/categories/xxx.jpg
- * We route it through our own proxy to avoid backend CORS / domain issues.
+ * Backend uploads must be loaded from the backend media endpoint, never from
+ * the Next.js public folder.
  */
 function buildImgUrl(raw: string | null | undefined): string {
-  if (!raw) return '';
-
-  // Determine the backend origin from env vars
-  const backendBase = (
-    (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/api(\/v\d+)?$/i, '').replace(/\/$/, '') ||
-    (process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/$/, '') ||
-    ''
-  );
-
-  let absolute = raw;
-
-  if (/^https?:\/\//i.test(raw)) {
-    // Already absolute — use as-is for proxying
-    absolute = raw;
-  } else {
-    // Relative path — prepend backend origin
-    const path = raw.startsWith('/') ? raw : `/${raw}`;
-    if (!backendBase) return ''; // can't build a valid URL without base
-    absolute = `${backendBase}${path}`;
-  }
-
-  return `/api/proxy-image?url=${encodeURIComponent(absolute)}`;
+  return toAbsoluteAssetUrl(raw || '');
 }
 
 /** Image card with graceful gradient fallback */

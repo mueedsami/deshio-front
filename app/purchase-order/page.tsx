@@ -895,7 +895,7 @@ export default function PurchaseOrdersPage() {
                 <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg">
                   <p className="font-medium">Warning: This action cannot be undone.</p>
                   <p className="text-sm mt-1">
-                    Deleting this purchase order will also delete all related batches and barcodes from inventory.
+                    Deleting this purchase order will remove its related batches and the PO record. Barcodes will be preserved and marked as linked to a deleted PO for lookup/return/exchange safety.
                   </p>
                 </div>
                 <div>
@@ -1187,16 +1187,14 @@ export default function PurchaseOrdersPage() {
                           </button>
                         )}
                         {po.payment_status === 'unpaid' && (
-                          <AccessControl roles={['super-admin', 'admin']}>
-                            <button
-                              onClick={() => openDeleteModal(po)}
-                              className="flex items-center gap-1 px-3 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-600 dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 rounded-lg transition-colors"
-                              title="Delete PO"
-                            >
-                              <X className="w-4 h-4" />
-                              Delete
-                            </button>
-                          </AccessControl>
+                          <button
+                            onClick={() => openDeleteModal(po)}
+                            className="flex items-center gap-1 px-3 py-2 text-sm bg-red-100 hover:bg-red-200 text-red-600 dark:bg-red-900/30 dark:hover:bg-red-900/50 dark:text-red-400 rounded-lg transition-colors"
+                            title="Delete PO"
+                          >
+                            <X className="w-4 h-4" />
+                            Delete
+                          </button>
                         )}
                       </div>
                     </div>

@@ -7,10 +7,11 @@ interface ToastProps {
   message: string;
   type?: 'success' | 'error' | 'info' | 'warning';
   duration?: number;
+  floating?: boolean;
   onClose: () => void;
 }
 
-export default function Toast({ message, type = 'success', duration = 3000, onClose }: ToastProps) {
+export default function Toast({ message, type = 'success', duration = 3000, floating = true, onClose }: ToastProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
       onClose();
@@ -34,9 +35,9 @@ export default function Toast({ message, type = 'success', duration = 3000, onCl
   };
 
   return (
-    <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-xl border bg-[#121212]/95 backdrop-blur ${borderColors[type]} shadow-[0_12px_40px_rgba(0,0,0,0.45)] animate-slide-in max-w-md`}>
+    <div className={`${floating ? 'fixed top-4 right-4 z-50' : 'relative'} flex items-start gap-3 px-4 py-3 rounded-xl border bg-[#121212]/95 backdrop-blur ${borderColors[type]} shadow-[0_12px_40px_rgba(0,0,0,0.45)] animate-slide-in max-w-md`}>
       {icons[type]}
-      <p className="text-sm font-medium text-white/90 flex-1">
+      <p className="text-sm font-medium text-white/90 flex-1 whitespace-pre-line leading-relaxed">
         {message}
       </p>
       <button

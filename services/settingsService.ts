@@ -1,4 +1,5 @@
 import axiosInstance from '@/lib/axios';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
 export interface ShowcaseCategory {
   category_id: number;
@@ -61,17 +62,46 @@ export interface HomepageSettings {
   section_order?: string[];
 }
 
+
+const normalizeHomepageSettings = <T extends Partial<HomepageSettings>>(settings: T): T => {
+  if (Array.isArray(settings.hero?.images)) {
+    settings.hero.images = settings.hero.images.map((img: any) => ({
+      ...img,
+      url: toAbsoluteAssetUrl(img.url || img.path || ''),
+    }));
+  }
+
+  if (Array.isArray(settings.collections)) {
+    settings.collections = settings.collections.map((item: any) => ({
+      ...item,
+      image: toAbsoluteAssetUrl(item.image || ''),
+    }));
+  }
+
+  if (Array.isArray(settings.bannered_collections)) {
+    settings.bannered_collections = settings.bannered_collections.map((item: any) => ({
+      ...item,
+      image: toAbsoluteAssetUrl(item.image || ''),
+      override_image: item.override_image
+        ? { ...item.override_image, url: toAbsoluteAssetUrl(item.override_image.url || item.override_image.path || '') }
+        : null,
+    }));
+  }
+
+  return settings;
+};
+
 class SettingsService {
   async getHomepageSettings(group?: 'hero' | 'collections' | 'new_arrivals' | 'showcase' | 'bannered_collections' | 'instagram_reels'): Promise<Partial<HomepageSettings>> {
     const response = await axiosInstance.get('/catalog/homepage-settings', {
       params: group ? { group } : {}
     });
-    return response.data;
+    return normalizeHomepageSettings(response.data);
   }
 
   async getAdminHomepageSettings(): Promise<HomepageSettings> {
     const response = await axiosInstance.get('/settings/homepage');
-    return response.data;
+    return normalizeHomepageSettings(response.data);
   }
 
   async updateHomepageSettings(data: FormData): Promise<{ message: string }> {

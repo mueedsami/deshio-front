@@ -80,6 +80,24 @@ export interface InstallmentPaymentRequest {
 }
 
 
+
+export interface PathaoPaidCsvRowResult {
+  row: number;
+  order_number?: string | null;
+  success: boolean;
+  status: string;
+  message: string;
+  payment_id?: number | null;
+}
+
+export interface PathaoPaidCsvImportResult {
+  processed: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  rows: PathaoPaidCsvRowResult[];
+}
+
 export interface Payment {
   id: number;
   order_id: number;
@@ -344,6 +362,29 @@ class PaymentService {
   async process(orderId: number, paymentData: SimplePaymentRequest): Promise<Payment> {
     console.warn('⚠️ Using deprecated process() method. Use processSimple() instead.');
     return this.processSimple(orderId, paymentData);
+  }
+
+
+  /**
+   * Import Pathao paid invoice CSV using multipart/form-data.
+   * Axios must not force application/json for FormData uploads.
+   */
+  async importPathaoPaidInvoiceCsv(file: File): Promise<PathaoPaidCsvImportResult> {
+    try {
+      const formData = new FormData();
+      formData.append('csv', file);
+
+      const response = await axiosInstance.post('/payments/pathao-paid-invoice-csv', formData);
+
+      if (!response.data?.success) {
+        throw new Error(response.data?.message || 'Failed to import Pathao paid invoice CSV');
+      }
+
+      return response.data.data;
+    } catch (error: any) {
+      const message = error.response?.data?.message || error.message || 'Failed to import Pathao paid invoice CSV';
+      throw new Error(message);
+    }
   }
 
   /**

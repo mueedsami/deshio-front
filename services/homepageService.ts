@@ -1,4 +1,5 @@
 import api from '@/lib/axios';
+import { toAbsoluteAssetUrl } from '@/lib/assetUrl';
 
 export type HomepageSectionType =
   | 'hero_banner'
@@ -22,18 +23,6 @@ export interface HomepageSection {
   is_active: boolean;
 }
 
-const apiBase = (process.env.NEXT_PUBLIC_API_URL || '').replace(/\/api\/?$/i, '').replace(/\/$/, '');
-const appBase = (process.env.NEXT_PUBLIC_BASE_URL || '').replace(/\/$/, '');
-const assetBase = apiBase || appBase || '';
-
-const normalizeAsset = (value?: string | null) => {
-  if (!value) return value || null;
-  if (/^(https?:)?\/\//i.test(value) || /^data:/i.test(value) || /^blob:/i.test(value)) return value;
-  const path = value.startsWith('/') ? value : `/${value}`;
-  if (!assetBase) return path;
-  return `${assetBase}${path}`;
-};
-
 const normalizeSettings = (value: any) => {
   if (!value) return {};
   if (typeof value === 'string') {
@@ -52,7 +41,7 @@ const normalizeSection = (raw: any): HomepageSection => ({
   title: raw.title ?? '',
   subtitle: raw.subtitle ?? '',
   image: raw.image ?? null,
-  image_url: normalizeAsset(raw.image_url || raw.image || null),
+  image_url: toAbsoluteAssetUrl(raw.image_url || raw.image || null) || null,
   link_url: raw.link_url ?? '',
   button_text: raw.button_text ?? '',
   settings: normalizeSettings(raw.settings),

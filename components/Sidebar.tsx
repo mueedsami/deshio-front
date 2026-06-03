@@ -81,7 +81,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
       ],
     },
     { icon: Store, label: 'Store', href: '/store' },
-    { icon: Store, label: 'Store Assignment', href: '/store-assingment' },
+    { icon: Store, label: 'Store Assignment', href: '/store-assignment' },
     { icon: FolderTree, label: 'Category', href: '/category' },
     { icon: Tag, label: 'Collections', href: '/collections' },
     { icon: Image, label: 'Gallery', href: '/gallery' },

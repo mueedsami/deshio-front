@@ -38,10 +38,13 @@ import catalogService, {
 import cartService from '@/services/cartService';
 import { wishlistUtils } from '@/lib/wishlistUtils';
 import ProductImageGallery from '@/components/ecommerce/ProductImageGallery';
+import VariantImageScrollGallery from '@/components/ecommerce/VariantImageScrollGallery';
 import VariantSelector from '@/components/ecommerce/VariantSelector';
 import StickyAddToCart from '@/components/ecommerce/StickyAddToCart';
 
 // Types for product variations
+const LARGE_VARIANT_THRESHOLD = 15;
+
 export interface ProductVariant {
   id: number;
   name: string;
@@ -410,9 +413,9 @@ export default function ProductDetailPage() {
     }
   }, [product, selectedVariant]);
 
-  // 3.9 — Preload variant images for instant switching
+  // 3.9 — Preload variant images for instant switching on normal-sized SKUs only.
   useEffect(() => {
-    if (productVariants.length > 0) {
+    if (productVariants.length > 0 && productVariants.length <= LARGE_VARIANT_THRESHOLD) {
       const urls = new Set<string>();
       productVariants.forEach(v => {
         if (Array.isArray(v.images)) {
@@ -691,6 +694,8 @@ export default function ProductDetailPage() {
       });
   }, [productVariants]);
 
+  const isLargeVariantMode = productVariants.length > LARGE_VARIANT_THRESHOLD;
+
   // Listen for wishlist updates
   useEffect(() => {
     const updateWishlistStatus = () => {
@@ -717,6 +722,13 @@ export default function ProductDetailPage() {
 
     // 3.5 — No page reload
     window.history.replaceState(null, '', `/e-commerce/product/${variant.id}`);
+
+    const hasImages = Array.isArray(variant.images) && variant.images.length > 0;
+    const shouldFetchFullVariant = !isLargeVariantMode || !hasImages;
+
+    if (!shouldFetchFullVariant) {
+      return;
+    }
 
     // Background fetch for FULL details (including all images)
     try {
@@ -1036,12 +1048,23 @@ export default function ProductDetailPage() {
         <div className="grid lg:grid-cols-2 gap-8 lg:gap-16 items-start">
 
           {/* 3.1 — Image Gallery */}
-          <ProductImageGallery
-            images={safeImages}
-            productName={baseName}
-            discountPercent={discountPercent}
-            inStock={selectedVariant.in_stock}
-          />
+          {isLargeVariantMode ? (
+            <VariantImageScrollGallery
+              variants={productVariants}
+              selectedVariant={selectedVariant}
+              onVariantChange={handleVariantChange}
+              productName={baseName}
+              discountPercent={discountPercent}
+              inStock={selectedVariant.in_stock}
+            />
+          ) : (
+            <ProductImageGallery
+              images={safeImages}
+              productName={baseName}
+              discountPercent={discountPercent}
+              inStock={selectedVariant.in_stock}
+            />
+          )}
 
           {/* ── Buy Column ── */}
           <div className="lg:sticky lg:top-24 space-y-4 font-[var(--font-poppins)]">

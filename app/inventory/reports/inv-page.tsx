@@ -141,7 +141,6 @@ function parseCsvText(text: string, maxRows = 60): string[][] {
     rows.push(row);
   }
 
-  if (rows[0]?.[0]) rows[0][0] = rows[0][0].replace(/^\uFEFF/, '');
   return rows;
 }
 
@@ -185,8 +184,8 @@ export default function InventoryReportsPage() {
   // Dispatch Barcode CSV
   const [csvDispatchStoreId, setCsvDispatchStoreId] = useState('');
   const [csvDispatchStatus, setCsvDispatchStatus] = useState('');
-  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState(dateFrom);
-  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState(dateTo);
+  const [csvDispatchDateFrom, setCsvDispatchDateFrom] = useState('');
+  const [csvDispatchDateTo, setCsvDispatchDateTo] = useState('');
   const [csvDispatchBusy, setCsvDispatchBusy] = useState(false);
 
   // Installment CSV
