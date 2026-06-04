@@ -311,6 +311,12 @@ export default function AmountDetailsPage() {
   }
 
   const handlePlaceOrder = async () => {
+    // Store must already be selected in the first page
+    if (!orderData.store_id) {
+      displayToast('Store is missing. Please go back and select a store.', 'error');
+      return;
+    }
+
     // Validation: payment methods
     if (paymentOption === 'full' || paymentOption === 'partial' || paymentOption === 'installment') {
       if (!selectedPaymentMethod) {
@@ -372,6 +378,7 @@ export default function AmountDetailsPage() {
       const itemPayloads = (orderData.items || []).map((item: any) => ({
         id: item.id ?? null,
         product_id: item.product_id,
+        batch_id: item.batch_id ?? null,
         quantity: Number(item.quantity) || 1,
         unit_price: Number(item.unit_price) || 0,
         discount_amount: Number(item.discount_amount) || 0,
@@ -485,6 +492,8 @@ export default function AmountDetailsPage() {
         // 1) Create order (sanitize payload)
         const orderPayload: any = {
           order_type: orderData.order_type || 'social_commerce',
+          store_id: parseInt(String(orderData.store_id), 10),
+          store_assignment_mode: 'assign_now',
           ...(orderData.salesman_id ? { salesman_id: Number(orderData.salesman_id) } : {}),
           customer: {
             name: orderData.customer?.name,
@@ -495,6 +504,7 @@ export default function AmountDetailsPage() {
           delivery_address: shippingPayload,
           items: itemPayloads.map((item: any) => ({
             product_id: item.product_id,
+            batch_id: item.batch_id ?? null,
             quantity: item.quantity,
             unit_price: item.unit_price,
             discount_amount: item.discount_amount || 0,
@@ -763,7 +773,7 @@ export default function AmountDetailsPage() {
                     )}
                     <p className="text-xs text-gray-600 dark:text-gray-400">{orderData.customer?.phone}</p>
                     <p className="mt-2 text-[11px] text-gray-600 dark:text-gray-300">
-                      Store Assignment: <span className="font-semibold">Pending</span>
+                      Store ID: <span className="font-semibold">{String(orderData.store_id)}</span>
                     </p>
                   </div>
 
