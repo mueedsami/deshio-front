@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw, ChevronLeft, ChevronRight, ChevronDown } from 'lucide-react';
+import { Search, X, Globe, AlertCircle, Eye, FileText, RotateCcw, ChevronLeft, ChevronRight, ChevronDown, Truck, Store as StoreIcon } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import CustomerTagManager from '@/components/customers/CustomerTagManager';
@@ -44,6 +44,33 @@ interface CartProduct {
   serviceId?: number; // NEW: Service ID
   serviceCategory?: string; // NEW: Service category
 }
+
+interface StoreAvailabilityDetail {
+  product_id: number;
+  product_name: string;
+  product_sku?: string | null;
+  required_quantity: number;
+  available_quantity: number;
+  physical_quantity?: number;
+  assigned_quantity?: number;
+  free_physical_quantity?: number;
+  global_available?: number;
+  can_fulfill: boolean;
+}
+
+interface StoreAvailabilityRow {
+  store_id: number;
+  store_name: string;
+  store_code?: string | null;
+  store_address?: string | null;
+  fulfillment_percentage: number;
+  can_fulfill_entire_order: boolean;
+  total_required_quantity?: number;
+  fulfillable_quantity?: number;
+  inventory_details: StoreAvailabilityDetail[];
+}
+
+type StoreAssignmentMode = 'auto' | 'manual';
 
 const parseAmount = (value: any): number => {
   if (value === null || value === undefined || value === '') return 0;
@@ -154,6 +181,11 @@ export default function SocialCommercePage() {
 
   const [defectiveProduct, setDefectiveProduct] = useState<DefectItem | null>(null);
   const [selectedStore, setSelectedStore] = useState('');
+  const [storeAssignmentMode, setStoreAssignmentMode] = useState<StoreAssignmentMode>('auto');
+  const [storeAvailabilityRows, setStoreAvailabilityRows] = useState<StoreAvailabilityRow[]>([]);
+  const [isLoadingStoreAvailability, setIsLoadingStoreAvailability] = useState(false);
+  const [storeAvailabilityError, setStoreAvailabilityError] = useState('');
+  const storeAvailabilityReqRef = useRef(0);
   const [isLoadingData, setIsLoadingData] = useState(false);
 
   // Batches are loaded dynamically via search
@@ -328,6 +360,7 @@ export default function SocialCommercePage() {
         internationalPostalCode,
         deliveryAddress,
         selectedStore,
+        storeAssignmentMode,
         searchQuery,
         minPrice,
         maxPrice,
@@ -449,6 +482,9 @@ export default function SocialCommercePage() {
     setExactPrice('');
     setSearchResults([]);
     setSelectedProduct(null);
+    setStoreAssignmentMode('auto');
+    setStoreAvailabilityRows([]);
+    setStoreAvailabilityError('');
     setExistingCustomer(null);
     setRecentOrders([]);
     setLastOrderInfo(null);
@@ -520,6 +556,51 @@ export default function SocialCommercePage() {
       return `৳${Math.round(amt)}`;
     }
   };
+
+
+  const productItemsForStoreAssignment = useMemo(() => {
+    const required = new Map<number, { product_id: number; quantity: number }>();
+
+    cart
+      .filter((item) => !item.isService && Number(item.product_id || 0) > 0)
+      .forEach((item) => {
+        const productId = Number(item.product_id);
+        const quantity = Math.max(1, Number(item.quantity) || 1);
+        const existing = required.get(productId);
+        if (existing) {
+          existing.quantity += quantity;
+        } else {
+          required.set(productId, { product_id: productId, quantity });
+        }
+      });
+
+    return Array.from(required.values()).sort((a, b) => a.product_id - b.product_id);
+  }, [cart]);
+
+  const productItemsAvailabilitySignature = useMemo(
+    () => JSON.stringify(productItemsForStoreAssignment),
+    [productItemsForStoreAssignment]
+  );
+
+  const selectedStoreAvailability = useMemo(() => {
+    if (!selectedStore) return null;
+    return storeAvailabilityRows.find((row) => String(row.store_id) === String(selectedStore)) || null;
+  }, [selectedStore, storeAvailabilityRows]);
+
+  const fulfillableStoresCount = useMemo(
+    () => storeAvailabilityRows.filter((row) => row.can_fulfill_entire_order).length,
+    [storeAvailabilityRows]
+  );
+
+  const selectedStoreName = useMemo(() => {
+    return stores.find((store) => String(store.id) === String(selectedStore))?.name || '';
+  }, [stores, selectedStore]);
+
+  const manualStoreProblemMessage = useMemo(() => {
+    if (storeAssignmentMode !== 'manual' || productItemsForStoreAssignment.length === 0 || editOrderId) return '';
+    if (!selectedStore) return 'Select a store before confirming this order.';
+    return '';
+  }, [storeAssignmentMode, productItemsForStoreAssignment.length, editOrderId, selectedStore]);
 
   const getBaseUrl = () => {
     const api = typeof process !== 'undefined' ? process.env.NEXT_PUBLIC_API_URL || '' : '';
@@ -838,20 +919,16 @@ export default function SocialCommercePage() {
         storesData = (response as any).data;
       }
 
-      // Prefer "Office" as the fixed store
       const normalized = (s: any) => String(s ?? '').toLowerCase().trim();
-      const officeStore = storesData.find(
-        (s) => normalized(s?.name).includes('office')
-      );
+      const activeStores = storesData.filter((store) => store?.id);
+      const officeStore = activeStores.find((s) => normalized(s?.name).includes('office'));
+      const targetStore = officeStore || activeStores[0];
 
-      const targetStore = officeStore || storesData[0];
-
-      if (targetStore) {
-        setStores([targetStore]);
-        setSelectedStore(String(targetStore.id));
-      } else {
-        setStores([]);
-      }
+      setStores(activeStores);
+      setSelectedStore((prev) => {
+        if (prev && activeStores.some((store) => String(store.id) === String(prev))) return prev;
+        return targetStore ? String(targetStore.id) : '';
+      });
     } catch (error) {
       console.error('Error fetching stores:', error);
       setStores([]);
@@ -1343,6 +1420,7 @@ export default function SocialCommercePage() {
           if (ep.salesmanId !== undefined && ep.salesmanId !== null) setSelectedEmployee(String(ep.salesmanId));
           if (typeof ep.salesBy === 'string') setSalesBy(ep.salesBy);
           if (typeof ep.storeId === 'string') setSelectedStore(ep.storeId);
+          if (ep.storeAssignmentMode === 'manual' || ep.storeAssignmentMode === 'auto') setStoreAssignmentMode(ep.storeAssignmentMode);
           if (typeof ep.userName === 'string') setUserName(ep.userName);
           if (typeof ep.userPhone === 'string') setUserPhone(ep.userPhone);
           if (typeof ep.userEmail === 'string') setUserEmail(ep.userEmail);
@@ -1410,6 +1488,7 @@ export default function SocialCommercePage() {
         if (typeof d.internationalPostalCode === 'string') setInternationalPostalCode(d.internationalPostalCode);
         if (typeof d.deliveryAddress === 'string') setDeliveryAddress(d.deliveryAddress);
         if (typeof d.selectedStore === 'string') setSelectedStore(d.selectedStore);
+        if (d.storeAssignmentMode === 'manual' || d.storeAssignmentMode === 'auto') setStoreAssignmentMode(d.storeAssignmentMode);
         if (typeof d.searchQuery === 'string') setSearchQuery(d.searchQuery);
         if (typeof d.minPrice === 'string') setMinPrice(d.minPrice);
         if (typeof d.maxPrice === 'string') setMaxPrice(d.maxPrice);
@@ -1454,6 +1533,7 @@ export default function SocialCommercePage() {
     internationalPostalCode,
     deliveryAddress,
     selectedStore,
+    storeAssignmentMode,
     searchQuery,
     minPrice,
     maxPrice,
@@ -1675,6 +1755,9 @@ export default function SocialCommercePage() {
     setSelectedProduct(null);
     setSearchResults([]);
   }, [selectedStore]);
+
+
+
 
   // ✅ Load Pathao cities only when domestic + manual selection mode
   useEffect(() => {
@@ -2037,6 +2120,34 @@ export default function SocialCommercePage() {
       return;
     }
 
+    if (!editOrderId && productItemsForStoreAssignment.length > 0 && storeAssignmentMode === 'manual') {
+      setIsLoadingStoreAvailability(true);
+      try {
+        const response = await axios.post('/order-management/cart-store-availability', {
+          store_id: Number(selectedStore),
+          items: productItemsForStoreAssignment
+        });
+        const rows = response.data?.data?.stores || [];
+        const storeRow = rows.find((r: any) => String(r.store_id) === String(selectedStore));
+        
+        if (!storeRow || !storeRow.can_fulfill_entire_order) {
+          const missingItems = (storeRow?.inventory_details || [])
+            .filter((detail: any) => !detail.can_fulfill)
+            .map((detail: any) => detail.product_name)
+            .join(', ');
+          showToast(`Store ${selectedStoreName} can't fulfill this order, missing items ${missingItems || 'unknown'}.`, 'error');
+          setIsLoadingStoreAvailability(false);
+          return;
+        }
+      } catch (error: any) {
+        const errMsg = error?.response?.data?.message || error?.message || 'Could not verify store availability.';
+        showToast(`Verification failed: ${errMsg}`, 'error');
+        setIsLoadingStoreAvailability(false);
+        return;
+      }
+      setIsLoadingStoreAvailability(false);
+    }
+
     // ✅ Always delivery validation
     if (isInternational) {
       if (!country || !internationalCity || !deliveryAddress) {
@@ -2170,9 +2281,15 @@ export default function SocialCommercePage() {
 
       const orderData = {
         order_type: 'social_commerce',
+        ...(!effectiveEditOrderId
+          ? {
+              store_assignment_mode: storeAssignmentMode,
+              ...(storeAssignmentMode === 'manual' && selectedStore ? { store_id: Number(selectedStore) } : {}),
+              ...(storeAssignmentMode === 'manual' && selectedStoreName ? { selected_store_name: selectedStoreName } : {}),
+            }
+          : {}),
         ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
         ...(effectiveEditOrderNumber ? { editOrderNumber: effectiveEditOrderNumber } : {}),
-        store_id: parseInt(selectedStore),
         salesman_id: parseInt(selectedEmployee),
         customer: {
           name: userName,
@@ -2385,20 +2502,61 @@ export default function SocialCommercePage() {
                     className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   />
                 </div>
-                <div className="w-full sm:w-auto">
+                <div className="w-full sm:w-72">
                   <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                    Store
+                    Store to search / manually assign
                   </label>
-                  <input
-                    type="text"
-                    value={stores.length > 0 ? stores[0].name : 'Loading...'}
-                    readOnly
-                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
+                  <select
+                    value={selectedStore}
+                    onChange={(e) => setSelectedStore(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="">Select store</option>
+                    {stores.map((store) => (
+                      <option key={store.id} value={store.id}>
+                        {store.name}{store.is_online ? ' • online' : ''}
+                      </option>
+                    ))}
+                  </select>
                   {selectedStore && isLoadingData && <p className="mt-1 text-xs text-blue-600">Loading store info...</p>}
                   {selectedStore && !isLoadingData && typeof availableBatchCount === 'number' && (
-                    <p className="mt-1 text-xs text-green-600">{availableBatchCount} batches available</p>
+                    <p className="mt-1 text-xs text-green-600">{availableBatchCount} batches available in selected store</p>
                   )}
+                </div>
+
+                <div className="w-full sm:w-80">
+                  <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
+                    Fulfillment mode
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setStoreAssignmentMode('auto')}
+                      disabled={!!editOrderId}
+                      className={`px-3 py-1.5 rounded border text-xs font-semibold flex items-center justify-center gap-1.5 ${storeAssignmentMode === 'auto'
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600'} disabled:opacity-50`}
+                    >
+                      <Truck className="w-3.5 h-3.5" /> Auto-assign
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoreAssignmentMode('manual')}
+                      disabled={!!editOrderId || !selectedStore}
+                      className={`px-3 py-1.5 rounded border text-xs font-semibold flex items-center justify-center gap-1.5 ${storeAssignmentMode === 'manual'
+                        ? 'bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-600'} disabled:opacity-50`}
+                    >
+                      <StoreIcon className="w-3.5 h-3.5" /> Manual
+                    </button>
+                  </div>
+                  <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                    {editOrderId
+                      ? 'Existing order store assignment is preserved while editing.'
+                      : storeAssignmentMode === 'manual'
+                        ? 'Selected store must be able to fulfill this cart before Amount Details.'
+                        : 'Order will enter the assignment queue after Amount Details.'}
+                  </p>
                 </div>
               </div>
 
@@ -3197,11 +3355,47 @@ export default function SocialCommercePage() {
                             <span>International shipping rates will apply</span>
                           </div>
                         )}
+
+                        {productItemsForStoreAssignment.length > 0 && !editOrderId && (
+                          <div className={`mb-3 rounded border p-3 text-xs ${
+                            storeAssignmentMode === 'manual'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300'
+                              : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'}`}
+                          >
+                            <div className="flex items-start gap-2">
+                              {storeAssignmentMode === 'manual' ? <StoreIcon className="mt-0.5 h-4 w-4 shrink-0" /> : <Truck className="mt-0.5 h-4 w-4 shrink-0" />}
+                              <div className="min-w-0 flex-1">
+                                <p className="font-semibold">
+                                  {storeAssignmentMode === 'manual'
+                                    ? `Manual assignment${selectedStoreName ? ` — ${selectedStoreName}` : ''}`
+                                    : 'Auto-assignment'}
+                                </p>
+                                <p className="mt-1">
+                                  {storeAssignmentMode === 'manual'
+                                    ? 'This selected store will be sent to Amount Details and saved with the order.'
+                                    : 'The order will be created as pending_assignment and handled from Store Assignment/Bulk Store Assignment.'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
                         <button
                           onClick={handleConfirmOrder}
-                          className="w-full px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium rounded transition-colors"
+                          disabled={isLoadingStoreAvailability}
+                          className="w-full px-4 py-2.5 bg-teal-600 hover:bg-teal-700 disabled:bg-teal-400 text-white text-sm font-medium rounded transition-colors flex items-center justify-center gap-2"
                         >
-                          Confirm Order
+                          {isLoadingStoreAvailability ? (
+                            <>
+                              <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                              Verifying Store Availability...
+                            </>
+                          ) : (
+                            'Confirm Order'
+                          )}
                         </button>
                       </div>
                     )}

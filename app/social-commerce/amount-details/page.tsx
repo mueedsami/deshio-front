@@ -9,6 +9,7 @@ import defectIntegrationService from '@/services/defectIntegrationService';
 import Toast from '@/components/Toast';
 
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
+const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
 
 interface PaymentMethod {
   id: number;
@@ -19,6 +20,30 @@ interface PaymentMethod {
   requires_reference: boolean;
   fixed_fee?: number;
   percentage_fee?: number;
+}
+
+interface StoreAvailabilityDetail {
+  product_id: number;
+  product_name: string;
+  product_sku?: string | null;
+  required_quantity: number;
+  available_quantity: number;
+  physical_quantity?: number;
+  assigned_quantity?: number;
+  global_available?: number;
+  can_fulfill: boolean;
+}
+
+interface StoreAvailabilityRow {
+  store_id: number;
+  store_name: string;
+  store_code?: string | null;
+  store_address?: string | null;
+  fulfillment_percentage: number;
+  can_fulfill_entire_order: boolean;
+  total_required_quantity?: number;
+  fulfillable_quantity?: number;
+  inventory_details: StoreAvailabilityDetail[];
 }
 
 type PaymentOption = 'full' | 'partial' | 'none' | 'installment';
@@ -49,9 +74,12 @@ const normalizeShippingPayload = (addr: any) => {
   if (!addr || typeof addr !== 'object') return {};
   const normalized = { ...addr };
 
-  // 1. address_line1 is mandatory
+  // 1. address line is mandatory. Keep both frontend and Laravel snake-case aliases.
   if (!normalized.address_line1) {
     normalized.address_line1 = normalized.street || normalized.address || normalized.address_line_1 || '';
+  }
+  if (!normalized.address_line_1) {
+    normalized.address_line_1 = normalized.address_line1 || normalized.street || normalized.address || '';
   }
 
   // 2. city is mandatory
@@ -109,10 +137,49 @@ export default function AmountDetailsPage() {
   const [originalDiscountAmount, setOriginalDiscountAmount] = useState<number>(0);
   const [originalShippingAmount, setOriginalShippingAmount] = useState<number>(0);
 
+  // Store assignment choice for new social-commerce orders.
+  // Auto keeps the order in pending_assignment. Manual assigns it immediately if one store can fulfill the whole cart.
+  const [storeAssignmentMode, setStoreAssignmentMode] = useState<'auto' | 'manual'>('auto');
+  const [selectedStoreId, setSelectedStoreId] = useState('');
+  const [storeAvailabilityRows, setStoreAvailabilityRows] = useState<StoreAvailabilityRow[]>([]);
+  const [isLoadingStoreAvailability, setIsLoadingStoreAvailability] = useState(false);
+  const [storeAvailabilityError, setStoreAvailabilityError] = useState('');
+
   const displayToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
     setToastMessage(message);
     setToastType(type);
     setShowToast(true);
+  };
+
+  const handleBackToCartAndStore = () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const updatedPendingOrder = {
+        ...(orderData || {}),
+        shipping_amount: parseNumber(transportCost),
+        discount_amount: parseNumber(orderDiscountAmount),
+        original_shipping_amount: parseNumber(transportCost),
+        original_discount_amount: parseNumber(orderDiscountAmount),
+      };
+      sessionStorage.setItem('pendingOrder', JSON.stringify(updatedPendingOrder));
+
+      const existingDraft = JSON.parse(sessionStorage.getItem(SC_DRAFT_STORAGE_KEY) || '{}');
+      sessionStorage.setItem(
+        SC_DRAFT_STORAGE_KEY,
+        JSON.stringify({
+          ...existingDraft,
+          shippingAmountState: parseNumber(transportCost),
+          discountAmountState: parseNumber(orderDiscountAmount),
+          storeAssignmentMode,
+          ...(selectedStoreId ? { selectedStore: String(selectedStoreId) } : {}),
+        })
+      );
+    } catch {
+      // Even if storage is malformed, returning to the cart page is still the safest action.
+    }
+
+    window.location.href = '/social-commerce';
   };
 
   useEffect(() => {
@@ -182,6 +249,13 @@ export default function AmountDetailsPage() {
     parsedOrder.subtotal = itemSubtotal + serviceSubtotal;
 
     setOrderData(parsedOrder);
+    if (parsedOrder.store_assignment_mode === 'manual' && parsedOrder.store_id) {
+      setStoreAssignmentMode('manual');
+      setSelectedStoreId(String(parsedOrder.store_id));
+    } else {
+      setStoreAssignmentMode('auto');
+      setSelectedStoreId('');
+    }
     setTransportCost(String(parseNumber(parsedOrder.shipping_amount ?? parsedOrder.shippingAmount ?? 0)));
     setOrderDiscountAmount(String(parseNumber(parsedOrder.discount_amount ?? parsedOrder.orderDiscountAmount ?? parsedOrder.order_discount_amount ?? 0)));
 
@@ -302,6 +376,70 @@ export default function AmountDetailsPage() {
 
   const totalFees = useMemo(() => advanceFee + codFee, [advanceFee, codFee]);
 
+  const isEditingExistingOrder = useMemo(() => {
+    const contextId = Number(orderData?.editOrderId || 0) || 0;
+    return contextId > 0;
+  }, [orderData]);
+
+  const productItemsForStoreAssignment = useMemo(() => {
+    return (orderData?.items || [])
+      .filter((item: any) => Number(item?.product_id || 0) > 0)
+      .map((item: any) => ({
+        product_id: Number(item.product_id),
+        quantity: Math.max(1, Number(item.quantity) || 1),
+      }));
+  }, [orderData]);
+
+  const selectedStoreAvailability = useMemo(() => {
+    if (!selectedStoreId) return null;
+    return storeAvailabilityRows.find((row) => String(row.store_id) === String(selectedStoreId)) || null;
+  }, [selectedStoreId, storeAvailabilityRows]);
+
+  useEffect(() => {
+    if (!orderData) return;
+
+    const productItems = productItemsForStoreAssignment;
+
+    if (productItems.length === 0 || isEditingExistingOrder) {
+      setStoreAvailabilityRows([]);
+      setStoreAvailabilityError('');
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchStoreAvailability = async () => {
+      setIsLoadingStoreAvailability(true);
+      setStoreAvailabilityError('');
+      try {
+        const response = await axios.post('/order-management/cart-store-availability', { items: productItems });
+        const rows: StoreAvailabilityRow[] = response.data?.data?.stores || [];
+        if (cancelled) return;
+        setStoreAvailabilityRows(Array.isArray(rows) ? rows : []);
+
+        if (selectedStoreId) {
+          const selected = rows.find((row) => String(row.store_id) === String(selectedStoreId));
+          if (!selected?.can_fulfill_entire_order) {
+            setSelectedStoreId('');
+          }
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        console.error('Failed to load store availability:', err);
+        setStoreAvailabilityRows([]);
+        setStoreAvailabilityError(err?.response?.data?.message || err?.message || 'Could not load store availability. Auto assignment will still work.');
+      } finally {
+        if (!cancelled) setIsLoadingStoreAvailability(false);
+      }
+    };
+
+    fetchStoreAvailability();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderData, isEditingExistingOrder, productItemsForStoreAssignment, selectedStoreId]);
+
   if (!orderData) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50 dark:bg-gray-900">
@@ -311,12 +449,6 @@ export default function AmountDetailsPage() {
   }
 
   const handlePlaceOrder = async () => {
-    // Store must already be selected in the first page
-    if (!orderData.store_id) {
-      displayToast('Store is missing. Please go back and select a store.', 'error');
-      return;
-    }
-
     // Validation: payment methods
     if (paymentOption === 'full' || paymentOption === 'partial' || paymentOption === 'installment') {
       if (!selectedPaymentMethod) {
@@ -357,6 +489,18 @@ export default function AmountDetailsPage() {
       }
     }
 
+    if (!isEditingExistingOrder && productItemsForStoreAssignment.length > 0 && storeAssignmentMode === 'manual') {
+      if (!selectedStoreId) {
+        displayToast('Please select a store for manual assignment or use Auto-assign.', 'error');
+        return;
+      }
+
+      if (!selectedStoreAvailability?.can_fulfill_entire_order) {
+        displayToast('Selected store cannot fulfill the full cart. Use another store or Auto-assign.', 'error');
+        return;
+      }
+    }
+
     setIsProcessing(true);
 
     try {
@@ -378,7 +522,6 @@ export default function AmountDetailsPage() {
       const itemPayloads = (orderData.items || []).map((item: any) => ({
         id: item.id ?? null,
         product_id: item.product_id,
-        batch_id: item.batch_id ?? null,
         quantity: Number(item.quantity) || 1,
         unit_price: Number(item.unit_price) || 0,
         discount_amount: Number(item.discount_amount) || 0,
@@ -490,10 +633,23 @@ export default function AmountDetailsPage() {
         createdOrder = refreshedBody?.data ?? refreshedBody;
       } else {
         // 1) Create order (sanitize payload)
+        const requestedAssignmentMode = orderData.store_assignment_mode === 'manual' ? 'manual' : 'auto';
+        const requestedStoreId = Number(orderData.store_id || selectedStoreId || 0) || null;
+        const manualStoreAssignmentPayload = !isEditingExistingOrder
+          && requestedAssignmentMode === 'manual'
+          && requestedStoreId
+          && selectedStoreAvailability?.can_fulfill_entire_order
+          ? {
+              store_id: Number(requestedStoreId),
+              store_assignment_mode: 'manual',
+            }
+          : {
+              store_assignment_mode: 'auto',
+            };
+
         const orderPayload: any = {
           order_type: orderData.order_type || 'social_commerce',
-          store_id: parseInt(String(orderData.store_id), 10),
-          store_assignment_mode: 'assign_now',
+          ...manualStoreAssignmentPayload,
           ...(orderData.salesman_id ? { salesman_id: Number(orderData.salesman_id) } : {}),
           customer: {
             name: orderData.customer?.name,
@@ -504,7 +660,6 @@ export default function AmountDetailsPage() {
           delivery_address: shippingPayload,
           items: itemPayloads.map((item: any) => ({
             product_id: item.product_id,
-            batch_id: item.batch_id ?? null,
             quantity: item.quantity,
             unit_price: item.unit_price,
             discount_amount: item.discount_amount || 0,
@@ -773,7 +928,16 @@ export default function AmountDetailsPage() {
                     )}
                     <p className="text-xs text-gray-600 dark:text-gray-400">{orderData.customer?.phone}</p>
                     <p className="mt-2 text-[11px] text-gray-600 dark:text-gray-300">
-                      Store ID: <span className="font-semibold">{String(orderData.store_id)}</span>
+                      Store Assignment:{' '}
+                      <span className="font-semibold">
+                        {isEditingExistingOrder
+                          ? 'Existing order'
+                          : productItemsForStoreAssignment.length === 0
+                            ? 'Not required for service-only order'
+                            : storeAssignmentMode === 'manual'
+                              ? `Manual — ${selectedStoreAvailability?.store_name || orderData.selected_store_name || `Store #${selectedStoreId || orderData.store_id}`}`
+                              : 'Auto-assign / Store assignment queue'}
+                      </span>
                     </p>
                   </div>
 
@@ -818,6 +982,81 @@ export default function AmountDetailsPage() {
                       </>
                     )}
                   </div>
+
+                  {/* Store Assignment */}
+                  {!isEditingExistingOrder && productItemsForStoreAssignment.length > 0 && (
+                    <div className={`mb-4 p-3 rounded border ${storeAssignmentMode === 'manual'
+                      ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800'
+                      : 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800'}`}
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div className="min-w-0 flex-1">
+                          <p className={`text-xs font-medium mb-1 ${storeAssignmentMode === 'manual' ? 'text-emerald-800 dark:text-emerald-300' : 'text-blue-800 dark:text-blue-300'}`}>
+                            Store Assignment
+                          </p>
+                          <p className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {storeAssignmentMode === 'manual'
+                              ? `Manual — ${selectedStoreAvailability?.store_name || orderData.selected_store_name || `Store #${selectedStoreId || orderData.store_id}`}`
+                              : 'Auto-assign / Store assignment queue'}
+                          </p>
+                          <p className="mt-1 text-[11px] text-gray-700 dark:text-gray-300">
+                            {storeAssignmentMode === 'manual'
+                              ? 'This store was selected on the cart page. If it cannot fulfill after cart changes, go back and edit the cart/store there.'
+                              : 'This order will be created as pending_assignment and handled from Store Assignment/Bulk Store Assignment.'}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleBackToCartAndStore}
+                          disabled={isProcessing}
+                          className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                        >
+                          Edit cart / store
+                        </button>
+                      </div>
+
+                      {storeAssignmentMode === 'manual' && selectedStoreAvailability && (
+                        <div className={`mt-3 rounded border p-2 text-[11px] ${selectedStoreAvailability.can_fulfill_entire_order
+                          ? 'border-emerald-200 bg-white/70 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-300'
+                          : 'border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'}`}
+                        >
+                          <p className="font-semibold mb-1">
+                            {selectedStoreAvailability.can_fulfill_entire_order ? 'Still can fulfill this cart' : 'No longer enough stock for this cart'}
+                          </p>
+                          <div className="space-y-1">
+                            {selectedStoreAvailability.inventory_details.map((detail) => (
+                              <div key={detail.product_id} className="flex justify-between gap-3">
+                                <span className="truncate">{detail.product_name}</span>
+                                <span className="shrink-0">Need {detail.required_quantity}, free {detail.available_quantity}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {storeAssignmentMode === 'manual' && storeAvailabilityError && (
+                        <p className="mt-2 text-[11px] text-red-600 dark:text-red-400">{storeAvailabilityError}</p>
+                      )}
+                    </div>
+                  )}
+
+                  {isEditingExistingOrder && (
+                    <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-700/40 rounded border border-gray-200 dark:border-gray-700">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-[11px] text-gray-600 dark:text-gray-300">
+                          Store assignment is preserved while editing this existing order. Use the previous page to adjust the cart details.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleBackToCartAndStore}
+                          disabled={isProcessing}
+                          className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-semibold text-gray-800 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+                        >
+                          Edit cart
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Products */}
                   {Array.isArray(orderData.items) && orderData.items.length > 0 && (

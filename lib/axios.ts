@@ -44,6 +44,7 @@ const isPublicRoute = (url?: string): boolean => {
 // Helper function to check if route is for customer (e-commerce)
 const isCustomerRoute = (url?: string): boolean => {
   if (!url) return false;
+  if (url.includes('/order-management/')) return false;
   const customerPaths = ['/customer-auth', '/cart', '/wishlist', '/customer/', '/profile']; // ✅ add '/profile'
   return customerPaths.some(path => url.includes(path));
 };
