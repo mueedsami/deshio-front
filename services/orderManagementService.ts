@@ -76,12 +76,131 @@ export interface AvailableStoresResponse {
   recommendation: StoreRecommendation | null;
 }
 
+
+export interface BulkAssignmentStoreSummary {
+  store_id: number;
+  store_name: string;
+  store_address?: string;
+  store_code?: string;
+  store_type?: string;
+  is_warehouse?: boolean;
+  is_online?: boolean;
+  total_items_available: number;
+  total_items_required: number;
+  total_required_quantity?: number;
+  fulfillable_quantity?: number;
+  can_fulfill_entire_order: boolean;
+  fulfillment_percentage: number;
+  inventory_details?: StoreInventoryDetail[];
+}
+
+export interface BulkPendingAssignmentOrder extends PendingAssignmentOrder {
+  available_stores_summary?: BulkAssignmentStoreSummary[];
+  best_fulfillment_store?: StoreRecommendation | null;
+}
+
+export interface BulkAssignStorePendingPayload {
+  store_id: number;
+  order_ids: number[];
+  notes?: string;
+}
+
+export interface BulkAssignStorePendingResponse {
+  success: boolean;
+  partial_success?: boolean;
+  message: string;
+  data?: {
+    store?: { id: number; name: string };
+    results?: {
+      success: Array<{ order_id: number; order_number: string; store_id: number; store_name: string; new_status: string }>;
+      failed: Array<{ order_id: number; order_number?: string; reason: string; [key: string]: any }>;
+    };
+    assigned_count?: number;
+    failed_count?: number;
+  };
+}
+
 export interface AssignStorePayload {
   store_id: number;
   notes?: string;
 }
 
 class OrderManagementService {
+  /**
+   * Get bulk assignment page data: pending_assignment orders + store fulfillment matrix
+   */
+  async getBulkPendingAssignment(params?: { per_page?: number; sort_order?: 'asc' | 'desc' }): Promise<{
+    orders: BulkPendingAssignmentOrder[];
+    stores: Array<{
+      id: number;
+      name: string;
+      address?: string;
+      store_code?: string;
+      is_warehouse?: boolean;
+      is_online?: boolean;
+      is_active?: boolean;
+    }>;
+    pagination: {
+      current_page: number;
+      total_pages: number;
+      per_page: number;
+      total: number;
+    };
+  }> {
+    try {
+      const response = await axiosInstance.get('/order-management/bulk-pending-assignment', {
+        params: params || { per_page: 100, sort_order: 'asc' },
+      });
+
+      const payload = response.data?.data || {};
+      return {
+        orders: Array.isArray(payload.orders) ? payload.orders : [],
+        stores: Array.isArray(payload.stores) ? payload.stores : [],
+        pagination: payload.pagination || {
+          current_page: 1,
+          total_pages: 1,
+          per_page: 100,
+          total: 0,
+        },
+      };
+    } catch (error: any) {
+      console.error('❌ Failed to fetch bulk assignment data:', error);
+      throw new Error(error.response?.data?.message || 'Failed to fetch bulk assignment data');
+    }
+  }
+
+  /**
+   * Bulk assign selected pending_assignment orders to one store and move them to assigned_to_store
+   */
+  async bulkAssignOrdersToStorePending(payload: BulkAssignStorePendingPayload): Promise<BulkAssignStorePendingResponse> {
+    const normalizedStoreId = Number(payload?.store_id);
+    const normalizedOrderIds = Array.from(new Set((payload?.order_ids || []).map((id) => Number(id)).filter(Boolean)));
+
+    if (!normalizedStoreId) {
+      throw new Error('Please select a store before assigning orders');
+    }
+    if (!normalizedOrderIds.length) {
+      throw new Error('Please select at least one order');
+    }
+
+    try {
+      const response = await axiosInstance.post('/order-management/orders/bulk-assign-store-pending', {
+        store_id: normalizedStoreId,
+        order_ids: normalizedOrderIds,
+        notes: payload?.notes,
+      });
+      return response.data;
+    } catch (error: any) {
+      // The backend intentionally returns 422 when every selected order is rejected.
+      // Surface that structured response instead of losing the per-order failure details.
+      if (error.response?.data?.data?.results) {
+        return error.response.data;
+      }
+      console.error('❌ Failed to bulk assign orders:', error);
+      throw new Error(error.response?.data?.message || error?.message || 'Failed to bulk assign orders');
+    }
+  }
+
   /**
    * Get orders pending store assignment
    */
