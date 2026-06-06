@@ -148,6 +148,71 @@ export interface BulkBatchPriceUpdateData {
   }>;
 }
 
+
+export interface BulkDeleteBatchPreviewRequest {
+  product_id: number;
+  store_id: number;
+  quantity: number;
+  cost_price: number;
+  sell_price: number;
+}
+
+export interface BulkDeleteBatchPriceSource {
+  source: string;
+  source_batch_id: number | null;
+  source_batch_number: string | null;
+  cost_price: number;
+  sell_price: number;
+}
+
+export interface BulkDeleteBatchPreviewData {
+  product: { id: number; name: string; sku?: string };
+  target_store: { id: number; name: string; type?: string };
+  new_stock_count: number;
+  existing_batches: number;
+  existing_units: number;
+  barcodes_to_block: number;
+  old_batches: Array<{
+    id: number;
+    batch_number: string;
+    store_id: number;
+    store_name?: string;
+    quantity: number;
+    cost_price: number;
+    sell_price: number;
+    created_at?: string;
+  }>;
+  new_batch: {
+    store_id: number;
+    store_name: string;
+    quantity: number;
+    cost_price: number;
+    sell_price: number;
+  };
+  price_source: BulkDeleteBatchPriceSource;
+  warnings: string[];
+}
+
+export interface BulkDeleteBatchConfirmData {
+  product: { id: number; name: string; sku?: string };
+  store: { id: number; name: string };
+  deleted_batches: number;
+  deleted_units: number;
+  blocked_barcodes: number;
+  deleted_batch_details: Array<{
+    deleted_batch_id: number;
+    deleted_batch_number: string;
+    store_id: number;
+    store_name?: string;
+    quantity: number;
+    barcodes_logged: number;
+  }>;
+  created_batch: Batch;
+  barcodes_generated: number;
+  all_barcodes: Array<{ id: number; barcode: string; type: string; is_primary: boolean }>;
+  price_source: BulkDeleteBatchPriceSource;
+}
+
 class BatchService {
   /**
    * Get all batches with filters (returns full paginated response)
@@ -325,6 +390,25 @@ class BatchService {
   }>> {
     const response = await axios.get('/batches/statistics', {
       params: { store_id: storeId }
+    });
+    return response.data;
+  }
+
+  /**
+   * Preview destructive stock reset for Inventory > Delete Bulk Batch.
+   */
+  async previewBulkDeleteBatch(data: BulkDeleteBatchPreviewRequest): Promise<ApiResponse<BulkDeleteBatchPreviewData>> {
+    const response = await axios.post('/batches/delete-bulk-batch/preview', data);
+    return response.data;
+  }
+
+  /**
+   * Confirm stock reset: delete old batches, block old barcodes, create fresh batch.
+   */
+  async confirmBulkDeleteBatch(data: BulkDeleteBatchPreviewRequest): Promise<ApiResponse<BulkDeleteBatchConfirmData>> {
+    const response = await axios.post('/batches/delete-bulk-batch/confirm', {
+      ...data,
+      barcode_type: 'CODE128',
     });
     return response.data;
   }

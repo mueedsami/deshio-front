@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Box,
@@ -24,6 +24,9 @@ import { productService, type Product } from '@/services/productService';
 import { useTheme } from '@/contexts/ThemeContext';
 
 type ToastState = { message: string; type: 'success' | 'error' | 'warning' | 'info' } | null;
+
+const PRODUCT_SEARCH_PAGE_SIZE = 60;
+const PRODUCT_SEARCH_DEBOUNCE_MS = 1000;
 
 type SelectableProduct = {
   id: number;
@@ -117,6 +120,7 @@ function selectedProductQuantity(order: Order, productId: number): number {
 export default function FreeReserveProductsPage() {
   const { darkMode, setDarkMode } = useTheme();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const productFetchIdRef = useRef(0);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -134,7 +138,7 @@ export default function FreeReserveProductsPage() {
   const [toast, setToast] = useState<ToastState>(null);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), 650);
+    const timer = window.setTimeout(() => setDebouncedSearch(searchQuery.trim()), PRODUCT_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
@@ -153,25 +157,33 @@ export default function FreeReserveProductsPage() {
   }, [productResults]);
 
   const loadProducts = useCallback(async () => {
+    const currentFetchId = ++productFetchIdRef.current;
     setProductLoading(true);
     try {
       const res = await productService.getAll({
         page: 1,
-        per_page: 12,
+        per_page: PRODUCT_SEARCH_PAGE_SIZE,
         search: debouncedSearch || undefined,
         group_by_sku: true,
         sort_by: 'created_at',
         sort_direction: 'desc',
       });
+
+      if (currentFetchId !== productFetchIdRef.current) return;
+
       setProductResults(res.data || []);
     } catch (err: any) {
+      if (currentFetchId !== productFetchIdRef.current) return;
+
       setProductResults([]);
       setToast({
         type: 'error',
         message: err?.response?.data?.message || err?.message || 'Could not search products. Try again.',
       });
     } finally {
-      setProductLoading(false);
+      if (currentFetchId === productFetchIdRef.current) {
+        setProductLoading(false);
+      }
     }
   }, [debouncedSearch]);
 
@@ -322,7 +334,7 @@ export default function FreeReserveProductsPage() {
                         <Search className="w-4 h-4" /> Product Search
                       </h2>
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        Choose the exact product variant. SKU groups are shown, but selection is variant-specific.
+                        Choose the exact product variant. Uses the Product List search endpoint and loads up to 60 SKU groups per search.
                       </p>
                     </div>
 

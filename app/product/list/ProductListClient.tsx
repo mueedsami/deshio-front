@@ -70,6 +70,17 @@ export default function ProductPage() {
   const SERVER_PAGE_SIZE = 60;
   const SEARCH_DEBOUNCE_MS = 1000;
 
+  const getSocialCommerceStoreId = () => {
+    const fromUrl = searchParams.get('store_id');
+    if (fromUrl) return fromUrl;
+    if (typeof window === 'undefined') return '';
+    return String(
+      localStorage.getItem('socialCommerceSelectedStoreV1') ||
+      localStorage.getItem('socialCommerceSelectedStore') ||
+      ''
+    ).trim();
+  };
+
 
   const updateQueryParams = useCallback(
     (
@@ -778,7 +789,8 @@ export default function ProductPage() {
             unit_price: price,
             discount_amount: 0,
             amount: price,
-            image: variant.image
+            image: variant.image,
+            store_id: getSocialCommerceStoreId()
           };
           
           setQueueItems(prev => [...prev, newItem]);

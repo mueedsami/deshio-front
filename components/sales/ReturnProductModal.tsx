@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { X, RotateCcw, Calculator, Barcode, Trash2, AlertCircle, Info } from 'lucide-react';
 import storeService, { type Store } from '@/services/storeService';
 import productReturnService from '@/services/productReturnService';
+import axiosInstance from '@/lib/axios';
 
 type ReturnReason = 'defective_product' | 'wrong_item' | 'wrong_product' | 'wrong_customer' | 'not_as_described' | 'customer_dissatisfaction' | 'size_issue' | 'color_issue' | 'quality_issue' | 'late_delivery' | 'changed_mind' | 'duplicate_order' | 'other';
 type ReturnType = 'customer_return' | 'store_return' | 'warehouse_return';
@@ -124,6 +125,73 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     return null;
   };
 
+  const toNumberId = (value: any): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+
+  const sameId = (left: any, right: any) => {
+    const l = toNumberId(left);
+    const r = toNumberId(right);
+    return Boolean(l && r && l === r);
+  };
+
+  const extractLookupBarcode = (lookupData: any, fallbackCode: string) => {
+    const barcodeData = typeof lookupData?.barcode === 'object' ? lookupData.barcode : {};
+    const directBarcode = typeof lookupData?.barcode === 'string' ? lookupData.barcode : null;
+
+    return {
+      code: barcodeData?.barcode || lookupData?.barcode_number || directBarcode || fallbackCode,
+      id: toNumberId(barcodeData?.id ?? lookupData?.barcode_id ?? lookupData?.product_barcode_id ?? lookupData?.id),
+      productId: toNumberId(barcodeData?.product_id ?? lookupData?.product?.id ?? lookupData?.product_id),
+      batchId: toNumberId(barcodeData?.batch_id ?? lookupData?.batch?.id ?? lookupData?.current_batch?.id ?? lookupData?.current_location?.batch?.id),
+    };
+  };
+
+  const findOrderItemByQuickLookup = (code: string, lookupData: any) => {
+    const lookupBarcode = extractLookupBarcode(lookupData, code);
+    const normalizedLookupCode = normalizeBarcode(lookupBarcode.code);
+
+    for (const item of order.items || []) {
+      const itemBarcodes = collectItemBarcodes(item);
+      const itemBarcodeId = item?.product_barcode_id ?? item?.barcode_id ?? item?.productBarcodeId ?? item?.barcodeId ?? item?.product_barcode?.id ?? item?.barcode?.id ?? item?.scanned_barcode?.id;
+
+      if (lookupBarcode.id && (sameId(itemBarcodeId, lookupBarcode.id) || itemBarcodes.some(barcode => sameId(barcode.id, lookupBarcode.id)))) {
+        const matched = itemBarcodes.find(barcode => sameId(barcode.id, lookupBarcode.id)) || { code: lookupBarcode.code, id: lookupBarcode.id };
+        return { orderItem: item, matchedBarcode: matched };
+      }
+
+      const matchedByCode = itemBarcodes.find(barcode => normalizeBarcode(barcode.code) === normalizedLookupCode);
+      if (matchedByCode) return { orderItem: item, matchedBarcode: matchedByCode };
+    }
+
+    const productMatches = (order.items || []).filter((item: any) => {
+      const itemProductId = item?.product_id ?? item?.product?.id;
+      const itemBatchId = item?.product_batch_id ?? item?.batch_id ?? item?.batch?.id;
+      if (!sameId(itemProductId, lookupBarcode.productId)) return false;
+      if (lookupBarcode.batchId && itemBatchId && !sameId(itemBatchId, lookupBarcode.batchId)) return false;
+      return true;
+    });
+
+    if (productMatches.length === 1) {
+      return {
+        orderItem: productMatches[0],
+        matchedBarcode: { code: lookupBarcode.code, id: lookupBarcode.id ?? undefined },
+      };
+    }
+
+    return null;
+  };
+
+  const resolveScannedReturnItem = async (code: string) => {
+    const localMatch = findOrderItemByBarcode(code);
+    if (localMatch) return localMatch;
+
+    const response = await axiosInstance.get('/lookup/product', { params: { barcode: code, quick: 1 } });
+    const lookupData = response.data?.data || response.data || {};
+    return findOrderItemByQuickLookup(code, lookupData);
+  };
+
   const asNumber = (value: any, fallback = 0) => {
     const parsed = parseFloat(String(value ?? ''));
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -148,7 +216,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     } : item));
   };
 
-  const handleBarcodeScan = (e?: React.FormEvent) => {
+  const handleBarcodeScan = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const code = barcodeInput.trim();
     if (!code) return;
@@ -166,7 +234,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
         return;
       }
 
-      const found = findOrderItemByBarcode(code);
+      const found = await resolveScannedReturnItem(code);
 
       if (!found) {
         setError('Barcode not found in this order');
@@ -200,6 +268,9 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       setReturnedItems(prev => [...prev, newItem]);
       setBarcodeInput('');
       window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Failed to quickly verify the scanned barcode');
+      setBarcodeInput('');
     } finally {
       barcodeScanInFlightRef.current = false;
     }
@@ -207,12 +278,12 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
 
   useEffect(() => {
     const code = barcodeInput.trim();
-    if (!code || !findOrderItemByBarcode(code)) return;
+    if (code.length < 6) return;
 
     if (barcodeScanTimerRef.current) window.clearTimeout(barcodeScanTimerRef.current);
     barcodeScanTimerRef.current = window.setTimeout(() => {
       handleBarcodeScan();
-    }, 70);
+    }, 120);
 
     return () => {
       if (barcodeScanTimerRef.current) window.clearTimeout(barcodeScanTimerRef.current);

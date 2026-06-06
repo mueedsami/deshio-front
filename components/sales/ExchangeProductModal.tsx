@@ -125,6 +125,73 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     return null;
   };
 
+  const toNumberId = (value: any): number | null => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+
+  const sameId = (left: any, right: any) => {
+    const l = toNumberId(left);
+    const r = toNumberId(right);
+    return Boolean(l && r && l === r);
+  };
+
+  const extractLookupBarcode = (lookupData: any, fallbackCode: string) => {
+    const barcodeData = typeof lookupData?.barcode === 'object' ? lookupData.barcode : {};
+    const directBarcode = typeof lookupData?.barcode === 'string' ? lookupData.barcode : null;
+
+    return {
+      code: barcodeData?.barcode || lookupData?.barcode_number || directBarcode || fallbackCode,
+      id: toNumberId(barcodeData?.id ?? lookupData?.barcode_id ?? lookupData?.product_barcode_id ?? lookupData?.id),
+      productId: toNumberId(barcodeData?.product_id ?? lookupData?.product?.id ?? lookupData?.product_id),
+      batchId: toNumberId(barcodeData?.batch_id ?? lookupData?.batch?.id ?? lookupData?.current_batch?.id ?? lookupData?.current_location?.batch?.id),
+    };
+  };
+
+  const findOrderItemByQuickLookup = (code: string, lookupData: any) => {
+    const lookupBarcode = extractLookupBarcode(lookupData, code);
+    const normalizedLookupCode = normalizeBarcode(lookupBarcode.code);
+
+    for (const item of order.items || []) {
+      const itemBarcodes = collectItemBarcodes(item);
+      const itemBarcodeId = item?.product_barcode_id ?? item?.barcode_id ?? item?.productBarcodeId ?? item?.barcodeId ?? item?.product_barcode?.id ?? item?.barcode?.id ?? item?.scanned_barcode?.id;
+
+      if (lookupBarcode.id && (sameId(itemBarcodeId, lookupBarcode.id) || itemBarcodes.some(barcode => sameId(barcode.id, lookupBarcode.id)))) {
+        const matched = itemBarcodes.find(barcode => sameId(barcode.id, lookupBarcode.id)) || { code: lookupBarcode.code, id: lookupBarcode.id };
+        return { orderItem: item, matchedBarcode: matched };
+      }
+
+      const matchedByCode = itemBarcodes.find(barcode => normalizeBarcode(barcode.code) === normalizedLookupCode);
+      if (matchedByCode) return { orderItem: item, matchedBarcode: matchedByCode };
+    }
+
+    const productMatches = (order.items || []).filter((item: any) => {
+      const itemProductId = item?.product_id ?? item?.product?.id;
+      const itemBatchId = item?.product_batch_id ?? item?.batch_id ?? item?.batch?.id;
+      if (!sameId(itemProductId, lookupBarcode.productId)) return false;
+      if (lookupBarcode.batchId && itemBatchId && !sameId(itemBatchId, lookupBarcode.batchId)) return false;
+      return true;
+    });
+
+    if (productMatches.length === 1) {
+      return {
+        orderItem: productMatches[0],
+        matchedBarcode: { code: lookupBarcode.code, id: lookupBarcode.id ?? undefined },
+      };
+    }
+
+    return null;
+  };
+
+  const resolveScannedReturnItem = async (code: string) => {
+    const localMatch = findOrderItemByBarcode(code);
+    if (localMatch) return localMatch;
+
+    const response = await axiosInstance.get('/lookup/product', { params: { barcode: code, quick: 1 } });
+    const lookupData = response.data?.data || response.data || {};
+    return findOrderItemByQuickLookup(code, lookupData);
+  };
+
   const asNumber = (value: any, fallback = 0) => {
     const parsed = parseFloat(String(value ?? ''));
     return Number.isFinite(parsed) ? parsed : fallback;
@@ -167,7 +234,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         return;
       }
 
-      const found = findOrderItemByBarcode(code);
+      const found = await resolveScannedReturnItem(code);
     
       if (!found) {
         setError('This barcode does not belong to the current order');
@@ -203,6 +270,9 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
       setRemovedItems(prev => [...prev, newItem]);
       setBarcodeInput('');
       window.setTimeout(() => replacementInputRef.current?.focus(), 0);
+    } catch (err: any) {
+      setError(err?.response?.data?.message || 'Failed to quickly verify the scanned return barcode');
+      setBarcodeInput('');
     } finally {
       returnScanInFlightRef.current = false;
     }
@@ -225,7 +295,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         return;
       }
 
-      const response = await axiosInstance.get('/lookup/product', { params: { barcode: code } });
+      const response = await axiosInstance.get('/lookup/product', { params: { barcode: code, quick: 1 } });
       const lookupData = response.data?.data || response.data || {};
       const barcodeData = lookupData?.barcode || {};
       const productData = lookupData?.product || barcodeData.product || {};
@@ -238,13 +308,19 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         return;
       }
 
-      const status = String(barcodeData.current_status || lookupData.current_status || '').toLowerCase();
-      if (!['available', 'in_warehouse', 'in_shop', 'on_display'].includes(status)) {
-        setError(`Barcode status is ${status}. Cannot sell.`);
+      const saleBlockReason = lookupData.sale_block_reason || lookupData.unavailable_reason || barcodeData.sale_block_reason;
+      if (saleBlockReason || lookupData.is_available === false || lookupData.is_available_for_sale === false) {
+        setError(saleBlockReason || 'This barcode is not available for exchange replacement.');
         return;
       }
 
-      const batch = lookupData.batch || barcodeData.batch || lookupData.current_location?.batch;
+      const status = String(barcodeData.current_status || lookupData.current_status || '').toLowerCase();
+      if (!['available', 'in_warehouse', 'in_shop', 'on_display'].includes(status)) {
+        setError(`Barcode status is ${status || 'unknown'}. Cannot sell.`);
+        return;
+      }
+
+      const batch = lookupData.batch || lookupData.current_batch || barcodeData.batch || lookupData.current_location?.batch;
       if (!batch) {
         setError('Batch information not found for this barcode');
         return;
@@ -256,7 +332,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
         batch_id: batch.id || barcodeData.batch_id,
         name: productData.name || 'Unknown Product',
         barcode: barcodeCode,
-        barcode_id: barcodeData.id || lookupData.id,
+        barcode_id: barcodeData.id || lookupData.barcode_id || lookupData.product_barcode_id || lookupData.id,
         unit_price: unitPrice,
         quantity: 1,
         total_price: unitPrice,
@@ -275,12 +351,12 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
 
   useEffect(() => {
     const code = barcodeInput.trim();
-    if (!code || !findOrderItemByBarcode(code)) return;
+    if (code.length < 6) return;
 
     if (returnScanTimerRef.current) window.clearTimeout(returnScanTimerRef.current);
     returnScanTimerRef.current = window.setTimeout(() => {
       handleReturnScan();
-    }, 70);
+    }, 120);
 
     return () => {
       if (returnScanTimerRef.current) window.clearTimeout(returnScanTimerRef.current);

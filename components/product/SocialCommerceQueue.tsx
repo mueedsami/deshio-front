@@ -13,6 +13,7 @@ export interface QueuedProduct {
   discount_amount: number;
   amount: number;
   image?: string | null;
+  store_id?: string | number | null;
 }
 
 interface SocialCommerceQueueProps {
