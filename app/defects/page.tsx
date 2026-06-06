@@ -107,7 +107,9 @@ export default function DefectsPage() {
 
   const fetchDefects = async () => {
     try {
-      const filters: any = {};
+      const filters: any = {
+        per_page: -1
+      };
       if (selectedStore !== 'all') {
         filters.store_id = parseInt(selectedStore);
       }

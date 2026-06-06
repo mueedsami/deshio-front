@@ -185,7 +185,7 @@ export default function GroupedBatchCard({ group }: { group: BatchSkuGroup }) {
             )}
           </div>
         </div>
-
+      </div>
         <div className="flex flex-col items-end gap-2 flex-shrink-0">
           <GroupedAllBarcodesPrinter
             sources={printableAllBarcodeSources}

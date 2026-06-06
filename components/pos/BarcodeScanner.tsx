@@ -149,7 +149,13 @@ export default function BarcodeScanner({
 
       // Validate product availability
       if (!scanResult.is_available || scanResult.quantity_available <= 0) {
-        onError(`Product "${scanResult.product.name}" is not available in stock`);
+        const reason =
+          scanResult.sale_block_reason ||
+          scanResult.unavailable_reason ||
+          (scanResult.deleted_batch
+            ? 'This barcode belongs to a deleted batch. It cannot be sold in POS. Use Lookup return/exchange first.'
+            : `Product "${scanResult.product.name}" is not available in stock`);
+        onError(reason);
         setIsScanning(false);
         return;
       }

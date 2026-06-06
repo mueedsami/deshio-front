@@ -23,7 +23,6 @@ interface VariantImageItem {
   imageIndex: number;
 }
 
-const VARIANT_WINDOW_RADIUS = 3;
 const PLACEHOLDER_IMAGE: ProductImage = {
   id: 0,
   url: '/placeholder-product.png',
@@ -51,9 +50,11 @@ const LoadedVariantImage = ({ src, alt }: { src: string; alt: string }) => {
   }, [src]);
 
   useEffect(() => {
+    const imgEl = imgRef.current;
     return () => {
-      if (imgRef.current) {
-        imgRef.current.removeAttribute('src');
+      if (imgEl) {
+        imgEl.src = '';
+        imgEl.removeAttribute('src');
       }
     };
   }, []);
@@ -67,7 +68,7 @@ const LoadedVariantImage = ({ src, alt }: { src: string; alt: string }) => {
       )}
       <img
         ref={imgRef}
-        src={src}
+        src={src || '/placeholder-product.png'}
         alt={alt}
         loading="lazy"
         decoding="async"
@@ -76,6 +77,7 @@ const LoadedVariantImage = ({ src, alt }: { src: string; alt: string }) => {
           if (!e.currentTarget.src.includes('/placeholder-product.png')) {
             e.currentTarget.src = '/placeholder-product.png';
           }
+          setLoaded(true);
         }}
         className={`h-full w-full object-contain transition-opacity duration-500 ${loaded ? 'opacity-100' : 'opacity-0'}`}
       />
@@ -91,9 +93,6 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
   discountPercent = 0,
   inStock = true,
 }) => {
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const rafRef = useRef<number | null>(null);
-
   const imageItems = useMemo<VariantImageItem[]>(() => {
     return variants.flatMap((variant, variantIndex) => {
       return getImagesForVariant(variant).map((image, imageIndex) => ({
@@ -118,20 +117,13 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
   useEffect(() => {
     if (lastSelectedVariantIdRef.current === selectedVariant.id) return;
     lastSelectedVariantIdRef.current = selectedVariant.id;
-
-    const activeItem = imageItems[activeIndex];
-    if (activeItem?.variant.id === selectedVariant.id) return;
     setActiveIndex(firstSelectedImageIndex);
-  }, [activeIndex, firstSelectedImageIndex, imageItems, selectedVariant.id]);
+  }, [firstSelectedImageIndex, selectedVariant.id]);
 
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container || totalImages === 0) return;
-
-    container.scrollTo({
-      left: activeIndex * container.offsetWidth,
-      behavior: 'smooth',
-    });
+    if (activeIndex > totalImages - 1) {
+      setActiveIndex(0);
+    }
   }, [activeIndex, totalImages]);
 
   useEffect(() => {
@@ -140,6 +132,13 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
     onVariantChange(activeItem.variant);
   }, [activeIndex, imageItems, onVariantChange, selectedVariant.id]);
 
+  const scrollToIndex = (index: number) => {
+    setActiveIndex(clampIndex(index, totalImages));
+  };
+
+  const goPrevious = () => scrollToIndex(activeIndex === 0 ? totalImages - 1 : activeIndex - 1);
+  const goNext = () => scrollToIndex(activeIndex === totalImages - 1 ? 0 : activeIndex + 1);
+
   const selectedVariantIndex = Math.max(
     0,
     variants.findIndex((variant) => variant.id === selectedVariant.id)
@@ -147,78 +146,29 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
   const activeItem = imageItems[activeIndex] || imageItems[firstSelectedImageIndex] || imageItems[0];
   const activeVariantIndex = activeItem?.variantIndex ?? selectedVariantIndex;
 
-  const firstVisibleVariantIndex = Math.max(0, activeVariantIndex - VARIANT_WINDOW_RADIUS);
-  const lastVisibleVariantIndex = Math.min(variants.length - 1, activeVariantIndex + VARIANT_WINDOW_RADIUS);
-
-  const visibleItems = imageItems.filter(
-    (item) => item.variantIndex >= firstVisibleVariantIndex && item.variantIndex <= lastVisibleVariantIndex
-  );
-  const firstVisibleImageIndex = visibleItems.length > 0 ? imageItems.findIndex((item) => item.key === visibleItems[0].key) : 0;
-  const trailingCount = Math.max(0, totalImages - firstVisibleImageIndex - visibleItems.length);
-
-  const scrollToIndex = (index: number) => {
-    setActiveIndex(clampIndex(index, totalImages));
-  };
-
-  const handleScroll = () => {
-    const container = scrollRef.current;
-    if (!container || totalImages === 0) return;
-
-    if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
-    rafRef.current = window.requestAnimationFrame(() => {
-      const nextIndex = clampIndex(Math.round(container.scrollLeft / container.offsetWidth), totalImages);
-      setActiveIndex((current) => (current === nextIndex ? current : nextIndex));
-    });
-  };
-
-  useEffect(() => {
-    return () => {
-      if (rafRef.current) window.cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
-
   const activeVariantImageCount = imageItems.filter((item) => item.variant.id === activeItem?.variant.id).length;
   const activeVariantImagePosition = activeItem
     ? imageItems.filter((item) => item.variant.id === activeItem.variant.id).findIndex((item) => item.key === activeItem.key) + 1
     : 1;
 
-  if (totalImages === 0) {
+  if (totalImages === 0 || !activeItem) {
     return null;
   }
 
   return (
-    <div className="relative group">
+    <div className="relative group min-w-0">
       <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="relative overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar rounded-lg md:rounded-2xl bg-white"
-        style={{ aspectRatio: '4/5', maxWidth: '100%' }}
+        className="relative overflow-hidden rounded-xl md:rounded-2xl bg-white border border-gray-100"
+        style={{ aspectRatio: '4/5', maxWidth: '100%', maxHeight: '72vh' }}
         aria-label="Variation image gallery"
       >
-        <div className="flex h-full" style={{ width: `${totalImages * 100}%` }}>
-          {firstVisibleImageIndex > 0 && (
-            <div style={{ flex: `0 0 ${(firstVisibleImageIndex / totalImages) * 100}%` }} />
-          )}
+        <LoadedVariantImage
+          key={activeItem.key}
+          src={activeItem.image.url || '/placeholder-product.png'}
+          alt={activeItem.image.alt_text || `${productName} variation ${activeVariantIndex + 1}`}
+        />
 
-          {visibleItems.map((item) => (
-            <div
-              key={item.key}
-              className="snap-start h-full flex-shrink-0"
-              style={{ flex: `0 0 ${100 / totalImages}%` }}
-            >
-              <LoadedVariantImage
-                src={item.image.url || '/placeholder-product.png'}
-                alt={item.image.alt_text || `${productName} variation ${item.variantIndex + 1}`}
-              />
-            </div>
-          ))}
-
-          {trailingCount > 0 && (
-            <div style={{ flex: `0 0 ${(trailingCount / totalImages) * 100}%` }} />
-          )}
-        </div>
-
-        <div className="absolute top-0 left-0 flex flex-col gap-2 z-20">
+        <div className="absolute top-2 left-2 flex flex-col gap-2 z-20 sm:top-3 sm:left-3">
           {!inStock && (
             <span className="bg-black text-white px-2 py-1 rounded-sm text-[8px] font-bold tracking-widest uppercase shadow-sm">
               Out of Stock
@@ -232,23 +182,25 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
         </div>
 
         {totalImages > 1 && (
-          <div className="absolute inset-y-0 left-0 right-0 hidden md:flex items-center justify-between px-4 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-30">
+          <div className="absolute inset-y-0 left-0 right-0 flex items-center justify-between px-2 sm:px-4 pointer-events-none z-30">
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                scrollToIndex(activeIndex === 0 ? totalImages - 1 : activeIndex - 1);
+                goPrevious();
               }}
-              className="pointer-events-auto h-10 w-10 flex items-center justify-center rounded-full bg-white/80 border border-gray-100 shadow-sm text-gray-900 hover:bg-white transition-all"
+              className="pointer-events-auto h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-full bg-white/90 border border-gray-100 shadow-sm text-gray-900 hover:bg-white active:scale-95 transition-all"
               aria-label="Previous variation image"
             >
               <ChevronLeft size={20} />
             </button>
             <button
+              type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                scrollToIndex(activeIndex === totalImages - 1 ? 0 : activeIndex + 1);
+                goNext();
               }}
-              className="pointer-events-auto h-10 w-10 flex items-center justify-center rounded-full bg-white/80 border border-gray-100 shadow-sm text-gray-900 hover:bg-white transition-all"
+              className="pointer-events-auto h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-full bg-white/90 border border-gray-100 shadow-sm text-gray-900 hover:bg-white active:scale-95 transition-all"
               aria-label="Next variation image"
             >
               <ChevronRight size={20} />
@@ -257,7 +209,7 @@ const VariantImageScrollGallery: React.FC<VariantImageScrollGalleryProps> = memo
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-[10px] font-bold uppercase tracking-widest text-gray-500">
         <span>
           Image {activeIndex + 1} / {totalImages}
         </span>

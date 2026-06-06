@@ -296,20 +296,26 @@ export default function WarehouseFulfillmentPage() {
       ]);
 
       const allOrders = [...(socialCommerceResponse.data || []), ...(ecommerceResponse.data || [])];
+      const uniqueOrders = Array.from(new Map(allOrders.map((order: any) => [Number(order?.id), order])).values());
 
-      // Sort by date, newest first
-      allOrders.sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
+      // Sort by most recent update first, so newly assigned orders appear immediately.
+      uniqueOrders.sort((a, b) => {
+        const bTime = new Date(b.updated_at || b.order_date || b.created_at || 0).getTime();
+        const aTime = new Date(a.updated_at || a.order_date || a.created_at || 0).getTime();
+        return bTime - aTime;
+      });
 
       // Extra client-side safety: completed/delivered/cancelled orders should not stay in packing.
-      // A confirmed order is still shown only when editing added new pending units.
-      const filtered = allOrders.filter((o: any) => {
+      // Backend packing_queue also includes legacy assigned_to_store rows whose fulfillment_status is empty.
+      const filtered = uniqueOrders.filter((o: any) => {
         const st = normalize(o.status);
         const fs = normalize(o.fulfillment_status);
-        if (['completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
+        const hasAssignedStore = Boolean(o.store_id || o.assigned_store_id || o.store?.id || o.fulfillment_store_id);
+        if (['completed', 'delivered', 'cancelled', 'canceled', 'refunded', 'draft', 'service_only'].includes(st)) return false;
         if (st === 'pending_assignment') return false;
-        if (!o.store_id && !o.assigned_store_id && !o.store?.id && !o.fulfillment_store_id) return false;
-        if (st === 'confirmed' && fs !== 'pending_fulfillment') return false;
+        if (!hasAssignedStore) return false;
         if (fs && fs !== 'pending_fulfillment') return false;
+        if (!fs && !['assigned_to_store', 'picking'].includes(st)) return false;
         return true;
       });
 
@@ -458,8 +464,14 @@ export default function WarehouseFulfillmentPage() {
 
       // Check if product is available (not sold/defective)
       if (!isAvailable) {
-        displayToast('❌ This barcode is not available (already sold or inactive)', 'error');
-        addToScanHistory(barcode, 'error', `${scannedProduct.name} - Not available`);
+        const reason =
+          scanResult.data.sale_block_reason ||
+          scanResult.data.unavailable_reason ||
+          (scanResult.data.deleted_batch
+            ? 'This barcode belongs to a deleted batch. It cannot be packed/sold. Use Lookup return/exchange first.'
+            : 'This barcode is not available. It may already be sold, inactive, defective, or outside sellable stock.');
+        displayToast(`❌ ${reason}`, 'error');
+        addToScanHistory(barcode, 'error', `${scannedProduct.name} - ${reason}`);
         playErrorSound();
         return;
       }

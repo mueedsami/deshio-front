@@ -57,6 +57,17 @@ export interface MovementInfo {
   quantity: number;
 }
 
+export interface DeletedBatchInfo {
+  deleted: boolean;
+  deleted_product_batch_id?: number | null;
+  deleted_batch_number?: string | null;
+  purchase_order_id?: number | null;
+  purchase_order_number?: string | null;
+  store_id?: number | null;
+  store_name?: string | null;
+  deleted_at?: string | null;
+}
+
 export interface ScanResult {
   barcode: string;
   barcode_type: string;
@@ -65,6 +76,10 @@ export interface ScanResult {
   current_batch: BatchInfo | null;
   is_available: boolean;
   quantity_available: number;
+  sale_block_reason?: string | null;
+  unavailable_reason?: string | null;
+  deleted_batch?: DeletedBatchInfo | null;
+  deleted_purchase_order?: any | null;
   last_movement: MovementInfo | null;
 }
 

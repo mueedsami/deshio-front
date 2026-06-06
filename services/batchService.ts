@@ -332,7 +332,7 @@ class BatchService {
   /**
    * Delete/deactivate batch
    */
-  async deleteBatch(id: number): Promise<ApiResponse<{ message: string }>> {
+  async deleteBatch(id: number): Promise<ApiResponse<{ deleted_batch_id?: number; deleted_batch_number?: string; barcodes_logged?: number }>> {
     const response = await axios.delete(`/batches/${id}`);
     return response.data;
   }

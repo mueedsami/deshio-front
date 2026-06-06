@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useEffect, memo } from 'react';
 import Image from 'next/image';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
@@ -18,14 +18,20 @@ interface ProductImageGalleryProps {
   inStock?: boolean;
 }
 
+const PLACEHOLDER_IMAGE: ProductImage = {
+  id: 0,
+  url: '/placeholder-product.png',
+  is_primary: true,
+  alt_text: 'Product',
+};
 
 const PixelScaffold = () => {
   return (
     <div className="absolute inset-0 bg-gray-50 flex flex-wrap overflow-hidden z-[5]">
       {Array.from({ length: 64 }).map((_, i) => (
-        <div 
-          key={i} 
-          className="w-[12.5%] h-[12.5%] bg-gray-100 border-[0.5px] border-white/40 animate-pulse" 
+        <div
+          key={i}
+          className="w-[12.5%] h-[12.5%] bg-gray-100 border-[0.5px] border-white/40 animate-pulse"
           style={{ animationDelay: `${(i % 8) * 40 + Math.floor(i / 8) * 40}ms` }}
         />
       ))}
@@ -39,17 +45,27 @@ const PixelScaffold = () => {
 const ImageWithScaffold = ({ src, alt, fill, sizes, className, priority, objectFit = 'contain' }: any) => {
   const [isLoaded, setIsLoaded] = useState(false);
 
+  useEffect(() => {
+    setIsLoaded(false);
+  }, [src]);
+
   return (
     <div className="relative w-full h-full overflow-hidden">
       {!isLoaded && <PixelScaffold />}
       <Image
-        src={src}
+        src={src || '/placeholder-product.png'}
         alt={alt}
         fill={fill}
         sizes={sizes}
-        className={`${className} transition-opacity duration-700 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
+        className={`${className} transition-opacity duration-500 ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
         priority={priority}
         onLoad={() => setIsLoaded(true)}
+        onError={(e) => {
+          if (!e.currentTarget.src.includes('/placeholder-product.png')) {
+            e.currentTarget.src = '/placeholder-product.png';
+          }
+          setIsLoaded(true);
+        }}
         style={{ objectFit }}
       />
     </div>
@@ -60,77 +76,53 @@ const ProductImageGallery: React.FC<ProductImageGalleryProps> = memo(({
   images,
   productName,
   discountPercent = 0,
-  inStock = true
+  inStock = true,
 }) => {
+  const safeImages = Array.isArray(images) && images.length > 0 ? images : [PLACEHOLDER_IMAGE];
   const [activeIndex, setActiveIndex] = useState(0);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // 1. Reset gallery when images change
   useEffect(() => {
     setActiveIndex(0);
-    if (scrollContainerRef.current) {
-      scrollContainerRef.current.scrollLeft = 0;
-    }
   }, [images]);
 
-  const safeImages = images.length > 0
-    ? images
-    : [{ id: 0, url: '/placeholder-product.png', is_primary: true }];
-
-  // Sync scroll position for mobile carousel
-  const handleScroll = () => {
-    if (!scrollContainerRef.current) return;
-    const { scrollLeft, offsetWidth } = scrollContainerRef.current;
-    if (offsetWidth === 0) return;
-    const index = Math.round(scrollLeft / offsetWidth);
-    if (index !== activeIndex && index < safeImages.length) {
-      setActiveIndex(index);
+  useEffect(() => {
+    if (activeIndex > safeImages.length - 1) {
+      setActiveIndex(0);
     }
+  }, [activeIndex, safeImages.length]);
+
+  const goToImage = (index: number) => {
+    if (safeImages.length <= 0) return;
+    const nextIndex = ((index % safeImages.length) + safeImages.length) % safeImages.length;
+    setActiveIndex(nextIndex);
   };
 
-  const scrollToImage = (index: number) => {
-    setActiveIndex(index);
-    if (!scrollContainerRef.current) return;
-    const { offsetWidth } = scrollContainerRef.current;
-    const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-
-    scrollContainerRef.current.scrollTo({
-      left: index * offsetWidth,
-      behavior: isMobile ? 'smooth' : 'instant' as any
-    });
-  };
-
-  const prevImage = () => {
-    const nextIdx = activeIndex === 0 ? safeImages.length - 1 : activeIndex - 1;
-    scrollToImage(nextIdx);
-  };
-
-  const nextImage = () => {
-    const nextIdx = activeIndex === safeImages.length - 1 ? 0 : activeIndex + 1;
-    scrollToImage(nextIdx);
-  };
+  const prevImage = () => goToImage(activeIndex - 1);
+  const nextImage = () => goToImage(activeIndex + 1);
+  const activeImage = safeImages[activeIndex] || safeImages[0];
 
   return (
-    <div className="flex flex-col md:flex-row gap-4 md:gap-6">
+    <div className="flex w-full flex-col gap-3 md:flex-row md:gap-6">
       {/* Vertical Thumbnails (Desktop) */}
       {safeImages.length > 1 && (
-        <div className="hidden md:flex md:flex-col gap-3 w-16 lg:w-20 flex-shrink-0">
+        <div className="hidden md:flex md:w-16 lg:w-20 md:flex-col gap-3 flex-shrink-0">
           {safeImages.map((img, index) => (
             <button
-              key={img.id || index}
-              onMouseEnter={() => scrollToImage(index)}
-              onClick={() => scrollToImage(index)}
-              className={`relative overflow-hidden rounded-md bg-transparent border transition-all duration-200 ${
+              key={img.id || `${img.url}-${index}`}
+              type="button"
+              onClick={() => goToImage(index)}
+              className={`relative overflow-hidden rounded-md bg-white border transition-all duration-200 ${
                 activeIndex === index ? 'border-gray-900 ring-1 ring-gray-900' : 'border-gray-200 hover:border-gray-400'
               }`}
               style={{ aspectRatio: '1/1' }}
+              aria-label={`Show image ${index + 1}`}
             >
-              <ImageWithScaffold 
-                src={img.url} 
+              <ImageWithScaffold
+                src={img.url}
                 alt={`${productName} thumbnail ${index + 1}`}
                 fill
                 sizes="80px"
-                className="object-cover" 
+                className="object-cover"
                 objectFit="cover"
               />
             </button>
@@ -138,37 +130,25 @@ const ProductImageGallery: React.FC<ProductImageGalleryProps> = memo(({
         </div>
       )}
 
-      {/* Main Container */}
-      <div className="flex-1 relative group">
+      {/* Main Image: button navigation only, no horizontal scroll/snap */}
+      <div className="relative group min-w-0 flex-1">
         <div
-          ref={scrollContainerRef}
-          onScroll={handleScroll}
-          className="relative overflow-x-auto snap-x snap-mandatory scroll-smooth no-scrollbar md:overflow-hidden rounded-lg md:rounded-2xl border-none bg-transparent"
-          style={{ aspectRatio: '4/5', maxWidth: '100%' }}
+          className="relative w-full overflow-hidden rounded-xl md:rounded-2xl bg-white border border-gray-100"
+          style={{ aspectRatio: '4/5', maxWidth: '100%', maxHeight: '72vh' }}
         >
-          <div className="flex h-full md:block">
-            {safeImages.map((img, index) => (
-              <div
-                key={img.id || index}
-                className={`snap-start flex-shrink-0 w-full h-full md:absolute md:inset-0 transition-opacity duration-500 ${
-                  index === activeIndex ? 'md:opacity-100 z-10' : 'md:opacity-0 z-0'
-                }`}
-              >
-                <ImageWithScaffold
-                  src={img.url}
-                  alt={`${productName} view ${index + 1}`}
-                  fill
-                  sizes="(max-width: 768px) 100vw, 50vw"
-                  className="object-contain bg-white"
-                  priority={index === 0}
-                  objectFit="contain"
-                />
-              </div>
-            ))}
-          </div>
+          <ImageWithScaffold
+            key={activeImage.id || activeImage.url || activeIndex}
+            src={activeImage.url}
+            alt={activeImage.alt_text || `${productName} view ${activeIndex + 1}`}
+            fill
+            sizes="(max-width: 768px) 100vw, 50vw"
+            className="object-contain bg-white"
+            priority={activeIndex === 0}
+            objectFit="contain"
+          />
 
           {/* Status Badges */}
-          <div className="absolute top-0 left-0 flex flex-col gap-2 z-20">
+          <div className="absolute top-2 left-2 flex flex-col gap-2 z-20 sm:top-3 sm:left-3">
             {!inStock && (
               <span className="bg-black text-white px-2 py-1 rounded-sm text-[8px] font-bold tracking-widest uppercase shadow-sm">
                 Out of Stock
@@ -181,18 +161,22 @@ const ProductImageGallery: React.FC<ProductImageGalleryProps> = memo(({
             )}
           </div>
 
-          {/* Navigation Arrows */}
+          {/* Navigation Arrows - visible on mobile too */}
           {safeImages.length > 1 && (
-            <div className="absolute inset-y-0 left-0 right-0 hidden md:flex items-center justify-between px-4 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-30">
+            <div className="absolute inset-y-0 left-0 right-0 flex items-center justify-between px-2 sm:px-4 pointer-events-none z-30">
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); prevImage(); }}
-                className="pointer-events-auto h-10 w-10 flex items-center justify-center rounded-full bg-white/80 border border-gray-100 shadow-sm text-gray-900 hover:bg-white transition-all"
+                className="pointer-events-auto h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-full bg-white/90 border border-gray-100 shadow-sm text-gray-900 hover:bg-white active:scale-95 transition-all"
+                aria-label="Previous product image"
               >
                 <ChevronLeft size={20} />
               </button>
               <button
+                type="button"
                 onClick={(e) => { e.stopPropagation(); nextImage(); }}
-                className="pointer-events-auto h-10 w-10 flex items-center justify-center rounded-full bg-white/80 border border-gray-100 shadow-sm text-gray-900 hover:bg-white transition-all"
+                className="pointer-events-auto h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-full bg-white/90 border border-gray-100 shadow-sm text-gray-900 hover:bg-white active:scale-95 transition-all"
+                aria-label="Next product image"
               >
                 <ChevronRight size={20} />
               </button>
@@ -200,30 +184,34 @@ const ProductImageGallery: React.FC<ProductImageGalleryProps> = memo(({
           )}
         </div>
 
-        {/* Mobile Thumbnail Strip */}
+        {/* Mobile thumbnails are wrapped buttons, not a scrolling strip */}
         {safeImages.length > 1 && (
-          <div className="flex md:hidden flex-wrap gap-2 py-4 z-30 justify-start">
+          <div className="flex md:hidden flex-wrap gap-2 py-3 z-30 justify-center">
             {safeImages.map((img, index) => (
               <button
-                key={img.id || index}
-                onClick={() => scrollToImage(index)}
-                className={`w-14 h-14 sm:w-16 sm:h-16 flex-shrink-0 relative rounded-md overflow-hidden border-2 transition-all ${
+                key={img.id || `${img.url}-${index}`}
+                type="button"
+                onClick={() => goToImage(index)}
+                className={`w-12 h-12 sm:w-14 sm:h-14 relative rounded-md overflow-hidden border-2 transition-all ${
                   activeIndex === index ? 'border-gray-900' : 'border-gray-200'
                 }`}
+                aria-label={`Show image ${index + 1}`}
               >
-                <ImageWithScaffold src={img.url} fill sizes="64px" className="object-cover" alt="" objectFit="cover" />
+                <ImageWithScaffold src={img.url} fill sizes="56px" className="object-cover" alt="" objectFit="cover" />
               </button>
             ))}
           </div>
         )}
 
-        {/* Desktop Progress Bars */}
         {safeImages.length > 1 && (
-          <div className="hidden md:flex justify-center gap-2 mt-4">
+          <div className="flex justify-center gap-2 mt-3">
             {safeImages.map((_, i) => (
-              <div 
-                key={i} 
-                className={`h-1 rounded-full transition-all duration-300 ${
+              <button
+                key={i}
+                type="button"
+                aria-label={`Show image ${i + 1}`}
+                onClick={() => goToImage(i)}
+                className={`h-1.5 rounded-full transition-all duration-300 ${
                   i === activeIndex ? 'w-8 bg-gray-900' : 'w-2 bg-gray-200'
                 }`}
               />

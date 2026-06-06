@@ -100,6 +100,8 @@ interface Order {
   }>;
   subtotal: number;
   discount: number;
+  itemDiscount?: number;
+  totalDiscount?: number;
   shipping: number;
   amounts: {
     total: number;
@@ -344,30 +346,53 @@ export default function OrdersDashboard() {
 
   const [isExportingBulk, setIsExportingBulk] = useState(false);
   const [stores, setStores] = useState<Store[]>([]);
-  const [storeFilter, setStoreFilter] = useState<number | 'All Stores'>('All Stores');
+  const [storeFilter, setStoreFilterRaw] = useState<number | 'All Stores'>('All Stores');
 
-  const [search, setSearch] = useState('');
+  const [search, setSearchRaw] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const [dateFilter, setDateFilter] = useState(() => getTodayFilterValue());
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [dateFilterType, setDateFilterType] = useState<'order_date' | 'updated_at'>('order_date');
+  const [dateFilter, setDateFilterRaw] = useState(() => getTodayFilterValue());
+  const [startDate, setStartDateRaw] = useState('');
+  const [endDate, setEndDateRaw] = useState('');
+  const [dateFilterType, setDateFilterTypeRaw] = useState<'order_date' | 'updated_at'>('order_date');
 
   // ✅ NEW: Order type filter (All / Social / E-Com)
-  const [orderTypeFilter, setOrderTypeFilter] = useState('All Types');
+  const [orderTypeFilter, setOrderTypeFilterRaw] = useState('All Types');
 
   // ✅ Separate filters
-  const [orderStatusFilter, setOrderStatusFilter] = useState('pending');
+  const [orderStatusFilter, setOrderStatusFilterRaw] = useState('pending');
 
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState('All Payment Status');
+  const [paymentStatusFilter, setPaymentStatusFilterRaw] = useState('All Payment Status');
 
   // Courier marker filters / edit
-  const [courierFilter, setCourierFilter] = useState('All Couriers');
+  const [courierFilter, setCourierFilterRaw] = useState('All Couriers');
   const [availableCouriers, setAvailableCouriers] = useState<string[]>([]);
   const [showCourierModal, setShowCourierModal] = useState(false);
   const [courierModalOrder, setCourierModalOrder] = useState<Order | null>(null);
   const [courierModalValue, setCourierModalValue] = useState<string>('');
   const [isSavingCourier, setIsSavingCourier] = useState(false);
+
+  // ✅ Pagination states
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(25);
+  const [totalOrdersCount, setTotalOrdersCount] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
+  // Clear selections when page changes
+  useEffect(() => {
+    setSelectedOrders(new Set());
+  }, [page]);
+
+  // Wrapper setters to reset page on any filter update
+  const setStoreFilter = (val: typeof storeFilter) => { setStoreFilterRaw(val); setPage(1); };
+  const setSearch = (val: typeof search) => { setSearchRaw(val); setPage(1); };
+  const setDateFilter = (val: typeof dateFilter) => { setDateFilterRaw(val); setPage(1); };
+  const setStartDate = (val: typeof startDate) => { setStartDateRaw(val); setPage(1); };
+  const setEndDate = (val: typeof endDate) => { setEndDateRaw(val); setPage(1); };
+  const setDateFilterType = (val: typeof dateFilterType) => { setDateFilterTypeRaw(val); setPage(1); };
+  const setOrderTypeFilter = (val: typeof orderTypeFilter) => { setOrderTypeFilterRaw(val); setPage(1); };
+  const setOrderStatusFilter = (val: typeof orderStatusFilter) => { setOrderStatusFilterRaw(val); setPage(1); };
+  const setPaymentStatusFilter = (val: typeof paymentStatusFilter) => { setPaymentStatusFilterRaw(val); setPage(1); };
+  const setCourierFilter = (val: typeof courierFilter) => { setCourierFilterRaw(val); setPage(1); };
 
   const searchParams = useSearchParams();
   const initialViewMode = useMemo(() => {
@@ -375,7 +400,8 @@ export default function OrdersDashboard() {
     return v === 'installments' || v === 'emi' ? 'installments' : 'online';
   }, [searchParams]);
 
-  const [viewMode, setViewMode] = useState<'online' | 'installments'>(() => initialViewMode);
+  const [viewMode, setViewModeRaw] = useState<'online' | 'installments'>(() => initialViewMode);
+  const setViewMode = (val: typeof viewMode) => { setViewModeRaw(val); setPage(1); };
 
   // Keep in sync if query changes (e.g., sidebar click while already on /orders)
   useEffect(() => {
@@ -648,7 +674,21 @@ export default function OrdersDashboard() {
     }
     checkPrinterStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, storeFilter, dateFilterType, dateFilter, startDate, endDate, debouncedSearch]);
+  }, [
+    viewMode,
+    storeFilter,
+    dateFilterType,
+    dateFilter,
+    startDate,
+    endDate,
+    debouncedSearch,
+    orderTypeFilter,
+    orderStatusFilter,
+    paymentStatusFilter,
+    courierFilter,
+    page,
+    perPage
+  ]);
 
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
@@ -1063,7 +1103,7 @@ export default function OrdersDashboard() {
 
       salesBy: order.salesman?.name || userName || 'N/A',
       store: order.store?.name || '',
-      storeId: order.store?.id,
+      storeId: order.store?.id ?? order.store_id ?? order.storeId,
       notes: order.notes || '',
       shipping_address: order.shipping_address ?? null,
 
@@ -1240,12 +1280,17 @@ export default function OrdersDashboard() {
         store_id: storeFilter === 'All Stores' ? undefined : storeFilter,
         sort_by: dateFilterType === 'updated_at' ? 'updated_at' : 'created_at',
         sort_order: 'desc',
-        per_page: 1000,
+        per_page: perPage,
+        page: page,
         date_filter_type: dateFilterType,
         search: isSearching ? activeSearch : undefined,
         order_number: exactOrderNumber,
         date_from: isSearching ? undefined : (startDate || dateFilter || undefined),
         date_to: isSearching ? undefined : (endDate || dateFilter || undefined),
+        // Filters applied in the backend before pagination
+        status: orderStatusFilter === 'All Order Status' ? undefined : orderStatusFilter,
+        payment_status: paymentStatusFilter === 'All Payment Status' ? undefined : paymentStatusFilter,
+        intended_courier: courierFilter === 'All Couriers' ? undefined : courierFilter,
       };
 
       if (viewMode === 'installments') {
@@ -1256,27 +1301,23 @@ export default function OrdersDashboard() {
         });
 
         allOrders = inst.data || [];
+        setTotalOrdersCount(inst.total || 0);
+        setTotalPages(inst.last_page || 1);
       } else {
-        const [social, ecommerce] = await Promise.all([
-          orderService.getAll({
-            ...commonParams,
-            order_type: 'social_commerce',
-          }),
-          orderService.getAll({
-            ...commonParams,
-            order_type: 'ecommerce',
-          }),
-        ]);
+        const params: any = { ...commonParams };
+        if (orderTypeFilter === 'All Types') {
+          params.order_types = ['social_commerce', 'ecommerce'];
+        } else {
+          params.order_type = orderTypeFilter;
+        }
 
-        allOrders = [...(social.data || []), ...(ecommerce.data || [])];
+        const res = await orderService.getAll(params);
+        allOrders = res.data || [];
+        setTotalOrdersCount(res.total || 0);
+        setTotalPages(res.last_page || 1);
       }
 
-      allOrders.sort((a: any, b: any) => {
-        const dateA = dateFilterType === 'updated_at' ? (a.updated_at || a.created_at) : a.created_at;
-        const dateB = dateFilterType === 'updated_at' ? (b.updated_at || b.created_at) : b.created_at;
-        return new Date(dateB).getTime() - new Date(dateA).getTime();
-      });
-
+      // No client sorting necessary since backend returns sorted records based on query
       const transformedOrders = allOrders.map((o: any) => transformOrder(o));
       const hydrated = await hydrateCouriersFromDB(transformedOrders);
 
@@ -1288,6 +1329,141 @@ export default function OrdersDashboard() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const renderPaginationNavbar = () => {
+    if (totalOrdersCount === 0) return null;
+
+    const fromVal = (page - 1) * perPage + 1;
+    const toVal = Math.min(page * perPage, totalOrdersCount);
+
+    // Calculate dynamic page numbers to display
+    const pageNumbers: number[] = [];
+    const maxVisible = 5;
+    let startPage = Math.max(1, page - Math.floor(maxVisible / 2));
+    let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+    if (endPage - startPage + 1 < maxVisible) {
+      startPage = Math.max(1, endPage - maxVisible + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pageNumbers.push(i);
+    }
+
+    return (
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-4 py-3 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl my-3">
+        <div className="text-xs text-gray-500 dark:text-gray-400">
+          Showing <span className="font-semibold text-black dark:text-white">{fromVal}</span> to{' '}
+          <span className="font-semibold text-black dark:text-white">{toVal}</span> of{' '}
+          <span className="font-semibold text-black dark:text-white">{totalOrdersCount}</span> orders
+        </div>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Per Page Selector */}
+          <div className="flex items-center gap-1.5 mr-2">
+            <span className="text-[10px] text-gray-400 dark:text-gray-500 uppercase">Show</span>
+            <select
+              value={perPage}
+              onChange={(e) => {
+                setPerPage(Number(e.target.value));
+                setPage(1);
+              }}
+              disabled={isLoading}
+              className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none disabled:opacity-50"
+            >
+              {[10, 25, 50, 100].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {/* First Page */}
+            <button
+              onClick={() => setPage(1)}
+              disabled={isLoading || page === 1}
+              className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white font-medium disabled:cursor-not-allowed"
+              title="First Page"
+            >
+              &laquo;
+            </button>
+
+            {/* Prev Page */}
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={isLoading || page === 1}
+              className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white font-medium disabled:cursor-not-allowed"
+            >
+              Prev
+            </button>
+
+            {/* Page Numbers */}
+            {startPage > 1 && (
+              <>
+                <button
+                  onClick={() => setPage(1)}
+                  disabled={isLoading}
+                  className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white disabled:opacity-50"
+                >
+                  1
+                </button>
+                {startPage > 2 && <span className="text-xs text-gray-400 px-1">...</span>}
+              </>
+            )}
+
+            {pageNumbers.map((num) => (
+              <button
+                key={num}
+                onClick={() => setPage(num)}
+                disabled={isLoading}
+                className={`px-2.5 py-1 text-xs border rounded transition-colors font-medium disabled:opacity-50 ${
+                  page === num
+                    ? 'bg-black text-white border-black dark:bg-white dark:text-black dark:border-white shadow-sm'
+                    : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-black dark:text-white'
+                }`}
+              >
+                {num}
+              </button>
+            ))}
+
+            {endPage < totalPages && (
+              <>
+                {endPage < totalPages - 1 && <span className="text-xs text-gray-400 px-1">...</span>}
+                <button
+                  onClick={() => setPage(totalPages)}
+                  disabled={isLoading}
+                  className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white disabled:opacity-50"
+                >
+                  {totalPages}
+                </button>
+              </>
+            )}
+
+            {/* Next Page */}
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={isLoading || page === totalPages}
+              className="px-2.5 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white font-medium disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+
+            {/* Last Page */}
+            <button
+              onClick={() => setPage(totalPages)}
+              disabled={isLoading || page === totalPages}
+              className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-700 rounded disabled:opacity-40 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white font-medium disabled:cursor-not-allowed"
+              title="Last Page"
+            >
+              &raquo;
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   // ✅ QZ Tray status / printers
@@ -1344,50 +1520,9 @@ export default function OrdersDashboard() {
 
 
   useEffect(() => {
-    let filtered = orders;
-    const isServerSearchActive = debouncedSearch.trim().length > 0;
-
-    if (search.trim() && !isServerSearchActive) {
-      const q = search.trim().toLowerCase();
-      filtered = filtered.filter(
-        (o) =>
-          o.id.toString().includes(q) ||
-          o.orderNumber?.toLowerCase().includes(q) ||
-          o.customer.name.toLowerCase().includes(q) ||
-          o.customer.phone.includes(search.trim())
-      );
-    }
-
-    // Date filters are sent to the backend in loadOrders(). Do not run a second
-    // client-side date pass here; it can hide correct Last Updated results while
-    // the API response is already scoped by created_at/updated_at.
-
-    if (!isServerSearchActive) {
-      // ✅ NEW: order type filter
-      if (orderTypeFilter !== 'All Types') {
-        const target = normalize(orderTypeFilter);
-        filtered = filtered.filter((o) => normalize(o.orderType) === target);
-      }
-
-      if (orderStatusFilter !== 'All Order Status') {
-        const target = normalize(orderStatusFilter);
-        filtered = filtered.filter((o) => normalize(o.status) === target);
-      }
-
-      if (paymentStatusFilter !== 'All Payment Status') {
-        const target = normalize(paymentStatusFilter);
-        filtered = filtered.filter((o) => normalize(o.paymentStatus) === target);
-      }
-
-      // ✅ Courier marker filter
-      if (courierFilter !== 'All Couriers') {
-        const target = normalizeCourier(courierFilter);
-        filtered = filtered.filter((o) => normalizeCourier(o.intendedCourier) === target);
-      }
-    }
-
-    setFilteredOrders(filtered);
-  }, [search, debouncedSearch, dateFilter, startDate, endDate, dateFilterType, orderTypeFilter, orderStatusFilter, paymentStatusFilter, courierFilter, orders]);
+    // All filtering, sorting, and pagination are performed on the backend.
+    setFilteredOrders(orders);
+  }, [orders]);
 
   // 🧾 Bulk lookup Pathao status for displayed orders
   const filteredOrderNumbers = useMemo(() => {
@@ -4122,6 +4257,7 @@ export default function OrdersDashboard() {
 
             {/* Orders Table */}
             <div className="max-w-7xl mx-auto px-4 pb-4">
+              {renderPaginationNavbar()}
               {isLoading ? (
                 <div className="bg-white dark:bg-gray-900 rounded-xl p-12 text-center border border-gray-200 dark:border-gray-800">
                   <Loader className="animate-spin h-12 w-12 text-black dark:text-white mx-auto" />
@@ -4370,6 +4506,7 @@ export default function OrdersDashboard() {
                   </div>
                 </div>
               )}
+              {renderPaginationNavbar()}
             </div>
           </main>
         </div>
@@ -4635,26 +4772,24 @@ export default function OrdersDashboard() {
             );
           })()}
 
-          <button
-              onClick={(e) => {
-                e.stopPropagation();
-                const order = filteredOrders.find((o) => o.id === activeMenu);
-                if (order) handleRevertAssignment(order.id);
-              }}
-              disabled={(() => {
-                const order = filteredOrders.find((o) => o.id === activeMenu);
-                return order ? isSingleLoading(order.id, 'revert') : false;
-              })()}
-              className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
-            >
-              <RotateCcw className="h-5 w-5 flex-shrink-0" />
-              <span>
-                {(() => {
-                  const order = filteredOrders.find((o) => o.id === activeMenu);
-                  return order && isSingleLoading(order.id, 'revert') ? 'Reverting...' : 'Revert Assignment';
-                })()}
-              </span>
-            </button>
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order || order.status !== 'assigned_to_store' || !order.storeId) return null;
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRevertAssignment(order.id);
+                }}
+                disabled={isSingleLoading(order.id, 'revert')}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+              >
+                <RotateCcw className="h-5 w-5 flex-shrink-0" />
+                <span>{isSingleLoading(order.id, 'revert') ? 'Reverting...' : 'Revert Assignment'}</span>
+              </button>
+            );
+          })()}
 
           {(() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
@@ -4926,10 +5061,10 @@ export default function OrdersDashboard() {
                           <span className="text-gray-500">Subtotal</span>
                           <span className="font-medium text-black dark:text-white">৳{selectedOrder.subtotal.toFixed(2)}</span>
                         </div>
-                        {selectedOrder.totalDiscount > 0 && (
+                        {(selectedOrder.totalDiscount ?? 0) > 0 && (
                           <div className="flex justify-between items-center text-xs">
                             <span className="text-gray-500">Total Discount</span>
-                            <span className="font-bold text-red-500">-৳{selectedOrder.totalDiscount.toFixed(2)}</span>
+                            <span className="font-bold text-red-500">-৳{(selectedOrder.totalDiscount ?? 0).toFixed(2)}</span>
                           </div>
                         )}
                         <div className="flex justify-between items-center text-xs">

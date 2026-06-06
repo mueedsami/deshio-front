@@ -210,6 +210,18 @@ export default function PurchaseOrdersPage() {
     return out;
   }, [selectedPO]);
 
+  const poDeletedBatchItems = useMemo(() => {
+    const items = (selectedPO?.items ?? []) as any[];
+    if (!Array.isArray(items) || items.length === 0) return [];
+
+    return items.filter((it) => {
+      const received = Number(it?.quantity_received ?? 0) || 0;
+      const pb = it?.productBatch || it?.product_batch || it?.batch || it?.product_batch_data;
+      const batchId = Number(pb?.id ?? it?.product_batch_id ?? 0) || 0;
+      return received > 0 && !batchId && Boolean(it?.batch_number);
+    });
+  }, [selectedPO]);
+
   // ─────────────────────────────────────────────────────────
   // PDF quick access / print layout (restored from old PO page)
   // ─────────────────────────────────────────────────────────
@@ -1410,11 +1422,14 @@ export default function PurchaseOrdersPage() {
                   </p>
                   {poBarcodeSources.length === 0 ? (
                     <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                      No received batches found for this PO yet. Receive the PO first to generate batches/barcodes.
+                      {poDeletedBatchItems.length > 0
+                        ? `${poDeletedBatchItems.length} received batch(es) from this PO were deleted from Product > Batch. Barcode printing is disabled for those deleted batches; their barcodes are preserved and blocked from sale.`
+                        : 'No received batches found for this PO yet. Receive the PO first to generate batches/barcodes.'}
                     </p>
                   ) : (
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                      Found {poBarcodeSources.length} received batch(es) linked to this PO.
+                      Found {poBarcodeSources.length} active received batch(es) linked to this PO.
+                      {poDeletedBatchItems.length > 0 ? ` ${poDeletedBatchItems.length} received batch(es) were deleted and skipped safely.` : ''}
                     </p>
                   )}
                 </div>
@@ -1517,6 +1532,22 @@ export default function PurchaseOrdersPage() {
                   })}
                 </div>
               ) : null}
+
+              {poDeletedBatchItems.length > 0 ? (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+                  <div className="font-semibold mb-1">Deleted batch notice</div>
+                  <div>
+                    These received PO item batch(es) were deleted from Product &gt; Batch. They are kept visible here for history, but barcode printing is skipped because the batch no longer exists.
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {poDeletedBatchItems.map((it: any, i: number) => (
+                      <div key={`${it?.id || i}-${it?.batch_number || 'deleted'}`}>
+                        {it?.product_name || it?.product?.name || 'Product'} • Batch: {it?.batch_number} • Received: {it?.quantity_received || 0}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
             <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
               <h4 className="font-semibold text-gray-900 dark:text-gray-100 mb-4 text-2xl">Items</h4>
@@ -1551,6 +1582,11 @@ export default function PurchaseOrdersPage() {
                           <p className="text-xl font-semibold text-gray-900 dark:text-gray-100 leading-tight">
                             {item.product_name}
                           </p>
+                          {Number(item?.quantity_received ?? 0) > 0 && !(item?.productBatch?.id || item?.product_batch?.id || item?.batch?.id || item?.product_batch_data?.id || item?.product_batch_id) && item?.batch_number ? (
+                            <div className="mt-2 inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+                              Batch deleted: {item.batch_number}
+                            </div>
+                          ) : null}
                           <div className="md:hidden mt-2 space-y-1">
                             <p className="text-lg font-semibold">Qty: {item.quantity_ordered}</p>
                             <AccessControl roles={['super-admin', 'admin']}>

@@ -14,16 +14,9 @@ interface VariantSelectorProps {
 const LARGE_VARIANT_THRESHOLD = 15;
 
 const formatVariantLabelForCard = (v: ProductVariant) => {
-  // Use variation_suffix as the primary source of truth
-  let source = v.variation_suffix || v.name || '';
-
-  // Strip only leading dashes as requested
-  let clean = source.trim();
-  while (clean.startsWith('-')) {
-    clean = clean.substring(1).trim();
-  }
-  
-  return clean || 'Standard';
+  // Product detail page now shows the full product_name for every variation card.
+  const productName = String(v.name || '').trim();
+  return productName || 'Standard';
 };
 
 const VariantCard = ({
@@ -44,7 +37,7 @@ const VariantCard = ({
       onClick={onSelect}
       aria-disabled={!onSelect}
       tabIndex={!onSelect ? -1 : 0}
-      className={`group relative flex items-center justify-center h-11 min-w-[44px] px-4 rounded-lg border text-[11px] font-bold uppercase tracking-wider transition-all duration-300 active:scale-95 whitespace-nowrap flex-shrink-0 ${
+      className={`group relative flex items-center justify-center min-h-11 min-w-[44px] max-w-full px-3 sm:px-4 py-2 rounded-lg border text-[10px] sm:text-[11px] font-bold uppercase tracking-wider transition-all duration-300 active:scale-95 whitespace-normal text-center leading-snug flex-shrink-0 ${
         selected
           ? 'bg-black border-black text-white shadow-md'
           : isAvailable
@@ -52,7 +45,7 @@ const VariantCard = ({
             : 'bg-gray-50 border-gray-100 text-gray-300 cursor-not-allowed'
       } ${!onSelect ? 'cursor-default' : ''}`}
     >
-      <span className="relative z-10">{displayLabel}</span>
+      <span className="relative z-10 line-clamp-2">{displayLabel}</span>
       {!isAvailable && (
         <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none opacity-50">
           <div className="w-[150%] h-[1px] bg-current -rotate-45" />
@@ -73,7 +66,7 @@ const VariantSelector: React.FC<VariantSelectorProps> = ({
   
   // Check if variants are primarily numeric sizes to adjust label
   const isSizeSet = variants.some(v => {
-    const l = formatVariantLabelForCard(v).toLowerCase();
+    const l = `${v.variation_suffix || ''} ${v.size || ''}`.toLowerCase();
     return /\d/.test(l) || l.includes('us') || l.includes('eu') || l.includes('uk');
   });
 

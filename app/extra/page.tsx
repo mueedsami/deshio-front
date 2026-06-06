@@ -125,7 +125,9 @@ export default function DefectsPage() {
 
   const fetchDefects = async () => {
     try {
-      const filters: any = {};
+      const filters: any = {
+        per_page: -1
+      };
       if (selectedStore !== 'all') {
         filters.store_id = parseInt(selectedStore);
       }
@@ -840,7 +842,7 @@ export default function DefectsPage() {
                       </div>
                     </div>
 
-                    <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                    <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
                       {pendingDefects.length === 0 ? (
                         <div className="p-8 text-center">
                           <Package className="w-12 h-12 mx-auto mb-2 text-gray-400" />
@@ -1070,7 +1072,7 @@ export default function DefectsPage() {
                         </h3>
                       </div>
 
-                      <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                      <div className="divide-y divide-gray-200 dark:divide-gray-700 max-h-[400px] overflow-y-auto">
                         {returnedDefects.map((defect) => (
                           <div key={defect.id} className="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50">
                             <div className="flex items-center justify-between gap-4">

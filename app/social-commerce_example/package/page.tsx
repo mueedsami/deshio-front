@@ -290,17 +290,26 @@ export default function WarehouseFulfillmentPage() {
       ]);
 
       const allOrders = [...(socialCommerceResponse.data || []), ...(ecommerceResponse.data || [])];
+      const uniqueOrders = Array.from(new Map(allOrders.map((order: any) => [Number(order?.id), order])).values());
 
-      // Sort by date, newest first
-      allOrders.sort((a, b) => new Date(b.order_date).getTime() - new Date(a.order_date).getTime());
+      // Sort by most recent update first, so newly assigned orders appear immediately.
+      uniqueOrders.sort((a, b) => {
+        const bTime = new Date(b.updated_at || b.order_date || b.created_at || 0).getTime();
+        const aTime = new Date(a.updated_at || a.order_date || a.created_at || 0).getTime();
+        return bTime - aTime;
+      });
 
-      // Extra client-side safety: if an order is already confirmed/completed/delivered
-      // it should not stay in the warehouse packing queue even if the API returns it.
-      const filtered = allOrders.filter((o: any) => {
+      // Extra client-side safety: completed/delivered/cancelled orders should not stay in packing.
+      // Backend packing_queue also includes legacy assigned_to_store rows whose fulfillment_status is empty.
+      const filtered = uniqueOrders.filter((o: any) => {
         const st = normalize(o.status);
-        if (['confirmed', 'completed', 'delivered', 'cancelled', 'canceled', 'refunded'].includes(st)) return false;
         const fs = normalize(o.fulfillment_status);
+        const hasAssignedStore = Boolean(o.store_id || o.assigned_store_id || o.store?.id || o.fulfillment_store_id);
+        if (['completed', 'delivered', 'cancelled', 'canceled', 'refunded', 'draft', 'service_only'].includes(st)) return false;
+        if (st === 'pending_assignment') return false;
+        if (!hasAssignedStore) return false;
         if (fs && fs !== 'pending_fulfillment') return false;
+        if (!fs && !['assigned_to_store', 'picking'].includes(st)) return false;
         return true;
       });
 

@@ -354,9 +354,14 @@ export default function BatchPage() {
 
   const handleDeleteBatch = async (batchId: number) => {
     try {
-      await batchService.deleteBatch(batchId);
+      const response = await batchService.deleteBatch(batchId);
       setBatches((prev) => prev.filter((b) => b.id !== batchId));
-      showToast('Batch deactivated successfully', 'success');
+      const logged = response?.data?.barcodes_logged;
+      showToast(
+        response?.message ||
+          `Batch deleted. ${typeof logged === 'number' ? `${logged} barcode(s) logged and blocked from sale.` : 'Barcodes logged and blocked from sale.'}`,
+        'success'
+      );
     } catch (err: any) {
       console.error('Failed to delete batch:', err);
       const errorMsg = err.response?.data?.message || 'Failed to delete batch';

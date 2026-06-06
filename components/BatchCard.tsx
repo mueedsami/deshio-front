@@ -57,7 +57,7 @@ export default function BatchCard({ batch, onDelete, onEdit }: BatchCardProps) {
   };
 
   const handleDelete = async () => {
-    if (!confirm('Are you sure you want to delete this batch? This will also deactivate all associated barcodes.')) {
+    if (!confirm('Delete this batch? The batch will be removed. Its barcodes will be logged as deleted-batch barcodes and blocked from POS/online packing sale, but Lookup return/exchange will still work.')) {
       return;
     }
     
