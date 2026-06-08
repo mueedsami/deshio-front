@@ -331,6 +331,8 @@ type BatchLookupData = {
     active: number;
     available_for_sale: number;
     saleable_barcode_identities?: number;
+    reserved?: number;
+    reserved_barcode_identities?: number;
     sold: number;
     defective: number;
     open_replacement_barcodes?: number;
@@ -347,6 +349,8 @@ type BatchLookupData = {
     is_active: boolean;
     is_defective: boolean;
     is_available_for_sale: boolean;
+    is_reserved?: boolean;
+    reserved_quantity?: number;
     is_replacement?: boolean;
     replacement_status?: string | null;
     relabel_reason?: string | null;
@@ -906,6 +910,7 @@ export default function LookupPage() {
     const k = normalizeStatusKey(key);
     const map: Record<string, string> = {
       sold: 'Sold',
+      with_customer: 'Sold - With Customer',
       in_warehouse: 'In Warehouse',
       inwarehouse: 'In Warehouse',
       warehouse: 'In Warehouse',
@@ -2271,11 +2276,16 @@ export default function LookupPage() {
       bd?.summary?.total_units ??
       list.length
     ) || 0;
-    const sold = list.filter((b) => normalizeStatusKey(b.current_status) === 'sold' || String(b.status_label || '').toLowerCase().includes('sold')).length;
+
+    const sold = list.filter((b) => isSoldBarcodeRow(b)).length;
     const defective = list.filter((b) => b.is_defective).length;
-    const saleableIdentities = list.filter((b) => b.is_available_for_sale && normalizeStatusKey(b.current_status) !== 'sold').length;
-    const available = Math.min(physicalStock, saleableIdentities);
-    const active = list.filter((b) => b.is_active && normalizeStatusKey(b.current_status) !== 'sold').length;
+    const reserved = Number(
+      bd?.summary?.reserved ??
+      list.reduce((sum, b) => sum + Number(b.reserved_quantity || 0), 0)
+    ) || 0;
+    const saleableIdentities = list.filter((b) => b.is_available_for_sale && !isSoldBarcodeRow(b)).length;
+    const available = Math.max(0, Math.min(physicalStock, saleableIdentities) - reserved);
+    const active = list.filter((b) => b.is_active && !isSoldBarcodeRow(b)).length;
 
     return {
       total_units: physicalStock,
@@ -2284,14 +2294,19 @@ export default function LookupPage() {
       active,
       available_for_sale: available,
       saleable_barcode_identities: bd?.summary?.saleable_barcode_identities ?? saleableIdentities,
+      reserved,
+      reserved_barcode_identities: bd?.summary?.reserved_barcode_identities ?? list.filter((b) => b.is_reserved).length,
       sold,
       defective,
       open_replacement_barcodes: bd?.summary?.open_replacement_barcodes ?? list.filter((b) => b.is_replacement && b.replacement_status === 'open').length,
     };
   };
 
-  const isSoldBarcodeRow = (b: any) =>
-    normalizeStatusKey(b?.current_status) === 'sold' || String(b?.status_label || '').toLowerCase().includes('sold');
+  const isSoldBarcodeRow = (b: any) => {
+    const key = normalizeStatusKey(b?.current_status);
+    const label = String(b?.status_label || '').toLowerCase();
+    return key === 'sold' || key === 'with_customer' || label.includes('sold');
+  };
 
   const getBatchRowStatusLabel = (b: any) => {
     if (isSoldBarcodeRow(b)) return 'Sold';
@@ -2302,7 +2317,7 @@ export default function LookupPage() {
 
   const getStatusPill = (label: string) => {
     const k = normalizeStatusKey(label);
-    if (k === 'sold') {
+    if (k === 'sold' || k.includes('sold')) {
       return <span className="text-[9px] px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">sold</span>;
     }
     if (k.includes('warehouse')) {
@@ -3447,7 +3462,7 @@ export default function LookupPage() {
                         {(() => {
                           const computed = computeBatchSummary(batchData);
                           return (
-                            <div className="mt-3 grid grid-cols-2 md:grid-cols-5 gap-2">
+                            <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                                 <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Physical Stock</p>
                                 <p className="text-xs font-semibold text-black dark:text-white">{computed.total_units}</p>
@@ -3459,6 +3474,10 @@ export default function LookupPage() {
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                                 <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Available</p>
                                 <p className="text-xs font-semibold text-black dark:text-white">{computed.available_for_sale}</p>
+                              </div>
+                              <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
+                                <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Reserved</p>
+                                <p className="text-xs font-semibold text-black dark:text-white">{computed.reserved}</p>
                               </div>
                               <div className="border border-gray-200 dark:border-gray-800 rounded p-2">
                                 <p className="text-[9px] text-gray-500 uppercase font-medium mb-1">Sold</p>
@@ -3499,7 +3518,7 @@ export default function LookupPage() {
                           };
 
                           const activeCodes = (batchData.barcodes || [])
-                            .filter((b) => b.is_active)
+                            .filter((b) => b.is_available_for_sale && !isSoldBarcodeRow(b) && !b.is_reserved)
                             .map((b) => b.barcode);
 
                           return (
@@ -3561,6 +3580,10 @@ export default function LookupPage() {
 
                                         {b.is_replacement && (
                                           <span className="text-[9px] px-2 py-0.5 rounded bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300">relabel {b.replacement_status || ''}</span>
+                                        )}
+
+                                        {!sold && b.is_reserved && (
+                                          <span className="text-[9px] px-2 py-0.5 rounded bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300">reserved {b.reserved_quantity || ''}</span>
                                         )}
 
                                         {/* sale means available for sale */}
