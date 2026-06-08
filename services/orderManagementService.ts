@@ -315,6 +315,21 @@ class OrderManagementService {
   }
 
   /**
+   * Move a mistakenly plain pending online order back to pending_assignment.
+   */
+  async markAsPendingAssignment(orderId: number): Promise<any> {
+    try {
+      console.log('🔁 Moving order to pending_assignment:', orderId);
+      const response = await axiosInstance.post(`/order-management/orders/${orderId}/mark-pending-assignment`);
+      console.log('✅ Order moved to pending_assignment successfully');
+      return response.data;
+    } catch (error: any) {
+      console.error('❌ Failed to move order to pending_assignment:', error);
+      throw new Error(error.response?.data?.message || 'Failed to move order to pending_assignment');
+    }
+  }
+
+  /**
    * Mark order as delivered manually
    */
   async markAsDelivered(orderId: number): Promise<any> {

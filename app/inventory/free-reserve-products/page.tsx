@@ -112,6 +112,11 @@ const orderTypeBadge = (type: string) => {
 };
 
 function selectedProductQuantity(order: Order, productId: number): number {
+  const backendReservedQty = Number((order as any).requested_product_reserved_quantity);
+  if (Number.isFinite(backendReservedQty) && backendReservedQty >= 0) {
+    return backendReservedQty;
+  }
+
   return (order.items || [])
     .filter((item) => Number(item.product_id) === Number(productId))
     .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
@@ -131,6 +136,7 @@ export default function FreeReserveProductsPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersTotal, setOrdersTotal] = useState(0);
+  const [reservedUnitsTotal, setReservedUnitsTotal] = useState(0);
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersLastPage, setOrdersLastPage] = useState(1);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
@@ -195,6 +201,7 @@ export default function FreeReserveProductsPage() {
     if (!selectedProduct) {
       setOrders([]);
       setOrdersTotal(0);
+      setReservedUnitsTotal(0);
       setOrdersPage(1);
       setOrdersLastPage(1);
       return;
@@ -204,7 +211,7 @@ export default function FreeReserveProductsPage() {
     try {
       const res = await orderService.getAll({
         product_id: selectedProduct.id,
-        statuses: ['pending', 'pending_assignment'],
+        reserved_product_orders: true,
         per_page: 20,
         page,
         sort_by: 'updated_at',
@@ -213,11 +220,13 @@ export default function FreeReserveProductsPage() {
       });
       setOrders(res.data || []);
       setOrdersTotal(Number(res.total || 0));
+      setReservedUnitsTotal(Number(res.reservation_summary?.reserved_quantity_total ?? 0));
       setOrdersPage(Number(res.current_page || page));
       setOrdersLastPage(Math.max(1, Number(res.last_page || 1)));
     } catch (err: any) {
       setOrders([]);
       setOrdersTotal(0);
+      setReservedUnitsTotal(0);
       setOrdersLastPage(1);
       setToast({
         type: 'error',
@@ -235,24 +244,27 @@ export default function FreeReserveProductsPage() {
 
   const totals = useMemo(() => {
     if (!selectedProduct) return { units: 0, pending: 0, pendingAssignment: 0 };
-    return orders.reduce(
+    const pageTotals = orders.reduce(
       (acc, order) => {
-        const qty = selectedProductQuantity(order, selectedProduct.id);
-        acc.units += qty;
         if (order.status === 'pending_assignment') acc.pendingAssignment += 1;
         if (order.status === 'pending') acc.pending += 1;
         return acc;
       },
       { units: 0, pending: 0, pendingAssignment: 0 }
     );
-  }, [orders, selectedProduct]);
+
+    return {
+      ...pageTotals,
+      units: reservedUnitsTotal,
+    };
+  }, [orders, reservedUnitsTotal, selectedProduct]);
 
   const selectProduct = (product: SelectableProduct) => {
     setSelectedProduct(product);
     setSelectedOrder(null);
     setToast({
       type: 'info',
-      message: `Selected ${product.name}. Showing only pending and pending-assignment orders that contain this exact product.`,
+      message: `Selected ${product.name}. Showing every live order still reserving this exact product.`,
     });
   };
 
@@ -437,7 +449,7 @@ export default function FreeReserveProductsPage() {
                         <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{ordersTotal}</p>
                       </div>
                       <div className="bg-white dark:bg-gray-900 rounded-xl p-4 border border-gray-200 dark:border-gray-800">
-                        <p className="text-xs text-gray-500 dark:text-gray-400 font-semibold">Reserved Units Shown</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 font-semibold">Reserved Units Total</p>
                         <p className="text-2xl font-bold text-gray-900 dark:text-white mt-1">{totals.units}</p>
                       </div>
                       <div className="bg-white dark:bg-gray-900 rounded-xl p-4 border border-gray-200 dark:border-gray-800">
@@ -455,7 +467,7 @@ export default function FreeReserveProductsPage() {
                         <div>
                           <h2 className="text-sm font-bold text-gray-900 dark:text-white">Orders Holding This Product</h2>
                           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                            Only <b>pending</b> and <b>pending_assignment</b> orders are shown. Actions are intentionally limited to View and Cancel.
+                            All live reservation-holding statuses are shown, using the same backend rule as Product List reserved qty. Actions are intentionally limited to View and Cancel.
                           </p>
                         </div>
                         {selectedProduct && (
@@ -488,7 +500,7 @@ export default function FreeReserveProductsPage() {
                           <Package className="w-12 h-12 mx-auto text-gray-400 mb-3" />
                           <p className="font-semibold text-gray-900 dark:text-white">No reserved pending orders found</p>
                           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                            This exact product does not appear in pending or pending-assignment orders.
+                            This exact product does not appear in any live reservation-holding order.
                           </p>
                         </div>
                       ) : (

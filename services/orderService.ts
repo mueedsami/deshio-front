@@ -148,6 +148,8 @@ export interface Order {
   payments?: OrderPayment[];
   notes?: string;
   shipping_address?: any;
+  requested_product_id?: number;
+  requested_product_reserved_quantity?: number;
 }
 
 export interface AvailableCourier {
@@ -182,6 +184,9 @@ export interface OrderFilters {
   page?: number;
   skipStoreScope?: boolean;
   intended_courier?: string;
+  reservation_holders?: boolean;
+  reserved_product_orders?: boolean;
+  live_reservations?: boolean;
 }
 
 export interface OrderStatistics {
@@ -236,6 +241,13 @@ const orderService = {
     total: number;
     current_page: number;
     last_page: number;
+    reservation_summary?: {
+      product_id: number;
+      reserved_quantity_total: number;
+      total_inventory?: number;
+      available_inventory?: number;
+      statuses?: string[];
+    } | null;
   }> {
     try {
       const { skipStoreScope, ...params } = paramsObj || {};
@@ -251,10 +263,11 @@ const orderService = {
           total: result.data.total || 0,
           current_page: result.data.current_page || 1,
           last_page: result.data.last_page || 1,
+          reservation_summary: result.data.reservation_summary || null,
         };
       }
 
-      return { data: [], total: 0, current_page: 1, last_page: 1 };
+      return { data: [], total: 0, current_page: 1, last_page: 1, reservation_summary: null };
     } catch (error: any) {
       console.error('Get orders error:', error);
       throw new Error(error.response?.data?.message || 'Failed to fetch orders');

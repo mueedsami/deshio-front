@@ -1094,6 +1094,7 @@ export default function SocialCommercePage() {
       const imageUrl = getProductCardImage(prod);
 
       const sellPrice = parseSellPrice(b?.sell_price ?? b?.sellPrice ?? 0);
+      const batchStoreId = String(b?.store?.id ?? b?.store_id ?? selectedStore ?? '').trim();
       const qty = Math.max(0, Number(
         b?.store_available_quantity ??
         b?.store_sellable_quantity ??
@@ -1119,6 +1120,7 @@ export default function SocialCommercePage() {
             mainImage: imageUrl,
           },
           available: qty, // total stock across ALL batches (summed)
+          selected_store_id: batchStoreId,
           minPrice: sellPrice,
           maxPrice: sellPrice,
           batchesCount: 1,
@@ -1131,6 +1133,7 @@ export default function SocialCommercePage() {
       } else {
         existing.available += qty;
         existing.batchesCount += 1;
+        if (!existing.selected_store_id && batchStoreId) existing.selected_store_id = batchStoreId;
 
         if (sellPrice < existing.minPrice) {
           existing.minPrice = sellPrice;
@@ -2029,9 +2032,22 @@ export default function SocialCommercePage() {
     setAmount(clampedFinalAmount.toFixed(2));
   };
 
+  const selectedProductMatchesCurrentStore = (product: any): boolean => {
+    if (!product || product.isDefective) return true;
+    const productStoreId = String(product.selected_store_id ?? product.store_id ?? '').trim();
+    const currentStoreId = String(selectedStore || '').trim();
+    return !productStoreId || !currentStoreId || productStoreId === currentStoreId;
+  };
+
   const addToCart = () => {
     if (!selectedProduct || !quantity || parseInt(quantity) <= 0) {
       alert('Please select a product and enter quantity');
+      return;
+    }
+
+    if (!selectedProductMatchesCurrentStore(selectedProduct)) {
+      alert('Selected product was loaded for a different store. Please search again after the selected store finishes loading.');
+      setSelectedProduct(null);
       return;
     }
 
@@ -2086,6 +2102,13 @@ export default function SocialCommercePage() {
       alert('Please select a product and enter quantity');
       return;
     }
+
+    if (!selectedProductMatchesCurrentStore(selectedProduct)) {
+      alert('Selected product was loaded for a different store. Please search again after the selected store finishes loading.');
+      setSelectedProduct(null);
+      return;
+    }
+
     const price = Number(String(selectedProduct.attributes?.Price ?? '0').replace(/[^0-9.-]/g, ''));
     const qty = parseInt(quantity);
     const discPer = parseFloat(discountPercent) || 0;

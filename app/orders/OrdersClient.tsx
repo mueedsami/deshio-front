@@ -646,10 +646,10 @@ export default function OrdersDashboard() {
   // ✅ Single action loading (per-order)
   const [singleActionLoading, setSingleActionLoading] = useState<{
     orderId: number;
-    action: 'print' | 'pathao' | 'revert' | 'deliver';
+    action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment';
   } | null>(null);
 
-  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver') =>
+  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment') =>
     singleActionLoading?.orderId === orderId && singleActionLoading?.action === action;
 
   useEffect(() => {
@@ -2991,6 +2991,24 @@ export default function OrdersDashboard() {
     }
   };
 
+  const handleMarkPendingAssignment = async (orderId: number) => {
+    if (!confirm('Move this pending online order to Pending Assignment so it appears in Store Assignment?')) return;
+
+    setSingleActionLoading({ orderId, action: 'pending-assignment' });
+    setActiveMenu(null);
+
+    try {
+      await orderManagementService.markAsPendingAssignment(orderId);
+      alert('✅ Order moved to Pending Assignment. It is now available in Store Assignment.');
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Move to pending_assignment error:', error);
+      alert(`Failed to move order: ${error.message || 'Unknown error'}`);
+    } finally {
+      setSingleActionLoading(null);
+    }
+  };
+
   const handleMarkAsDelivered = async (orderId: number) => {
     if (!confirm('Are you sure you want to mark this order as delivered?')) return;
 
@@ -4787,6 +4805,26 @@ export default function OrdersDashboard() {
               >
                 <RotateCcw className="h-5 w-5 flex-shrink-0" />
                 <span>{isSingleLoading(order.id, 'revert') ? 'Reverting...' : 'Revert Assignment'}</span>
+              </button>
+            );
+          })()}
+
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            const onlineType = order?.orderType === 'social_commerce' || order?.orderType === 'ecommerce';
+            if (!order || order.status !== 'pending' || !onlineType || order.storeId) return null;
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleMarkPendingAssignment(order.id);
+                }}
+                disabled={isSingleLoading(order.id, 'pending-assignment')}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+              >
+                <RotateCcw className="h-5 w-5 flex-shrink-0" />
+                <span>{isSingleLoading(order.id, 'pending-assignment') ? 'Moving...' : 'Move to Pending Assignment'}</span>
               </button>
             );
           })()}
