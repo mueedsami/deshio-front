@@ -253,8 +253,8 @@ function posReceiptBody(order: any) {
     <div class="top-center">
       <div class="brand">DESHIO</div>
       <div class="tagline">Deshio-দেশীয়</div>
-      <div class="addr">House: 4, Road: 1, Dhaka Housing, Adabor, Mohammadpur, Dhaka-1207.</div>
-      <div class="hotline">Mobile: 01711-585400</div>
+      <div class="addr">1st floor, 18/3, Block-F, Ring Road, Mohammadpur; Dhaka-1207.</div>
+      <div class="hotline">Mobile: 01829-300206</div>
       <div class="hotline">BIN : 007243936-0402</div>
       <div class="underline"></div>
       <div class="order-no">Order No : ${escapeHtml(String(r.orderNo || r.id || '—'))}</div>
