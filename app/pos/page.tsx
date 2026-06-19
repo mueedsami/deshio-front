@@ -368,7 +368,7 @@ export default function POSPage() {
         price: defectItem.sellingPrice,
         discount: 0,
         amount: defectItem.sellingPrice,
-        availableQty: 1,
+        availableQty: Math.max(1, Number((defectItem as any).quantity || (defectItem as any).availableQty || 999)),
         barcode: defectItem.barcode,
         isDefective: true,
         defectId: defectItem.id,
@@ -486,13 +486,9 @@ export default function POSPage() {
     setCart((prev) =>
       prev.map((item) => {
         if (item.id === id) {
-          // ✅ Prevent quantity changes for defective items
-          if (item.isDefective) {
-            showToast('Cannot change quantity of defective items', 'error');
-            return item;
-          }
-
-          if (newQty <= item.availableQty) {
+          // Defective/used resale items come from Extra Panel, not normal sellable stock.
+          // Allow quantity edits when there are multiple used/defective units being sold together.
+          if (newQty <= item.availableQty || item.isDefective) {
             const baseAmount = item.price * newQty;
             const discountValue =
               item.discount > 0
@@ -734,8 +730,12 @@ export default function POSPage() {
               tax_amount: taxAmount, // VAT inclusive — no extra tax
             };
 
-            // ✅ CRITICAL: Only include barcode for NON-defective items
-            if (!item.isDefective && item.barcode) {
+            if (item.isDefective) {
+              itemPayload.is_defective = true;
+              itemPayload.defective_product_id = item.defectId;
+              itemPayload.source = 'defective_resale';
+              if (item.barcode) itemPayload.defective_barcode = item.barcode;
+            } else if (item.barcode) {
               itemPayload.barcode = item.barcode;
             }
 

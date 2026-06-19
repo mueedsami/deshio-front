@@ -268,8 +268,14 @@ export const productService = {
     per_page?: number;
     page?: number;
     enable_fuzzy?: boolean;
-    stock_status?: 'all' | 'in_stock' | 'not_in_stock';
+    stock_status?: 'all' | 'in_stock' | 'not_in_stock' | 'available_online';
     in_stock?: string;
+    is_archived?: boolean;
+    group_by_sku?: boolean;
+    min_price?: number;
+    max_price?: number;
+    sort_by?: string;
+    sort_direction?: 'asc' | 'desc';
   }): Promise<{ data: Product[]; total: number; current_page: number; last_page: number }> {
     try {
       const response = await axiosInstance.post('/products/advanced-search', params);

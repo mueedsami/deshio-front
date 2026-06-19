@@ -20,6 +20,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   const [error, setError] = useState<string | null>(null);
   const [allowPartialRefunds, setAllowPartialRefunds] = useState(false);
   const [scanningMode, setScanningMode] = useState<'return' | 'replacement'>('return');
+  const [isOnlineExchange, setIsOnlineExchange] = useState(false);
 
   const returnInputRef = useRef<HTMLInputElement>(null);
   const replacementInputRef = useRef<HTMLInputElement>(null);
@@ -216,6 +217,57 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     } : item));
   };
 
+  const buildReturnItem = (orderItem: any, matchedBarcode: { code: string; id?: number }) => {
+    const listedUnitPrice = getItemListedUnitPrice(orderItem);
+    const soldAtUnitPrice = getItemSoldAtUnitPrice(orderItem);
+    const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
+
+    return {
+      order_item_id: orderItem.id,
+      product_id: orderItem.product_id ?? orderItem.product?.id,
+      product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
+      product_name: orderItem.product_name || orderItem.product?.name || orderItem.name || 'Unknown Product',
+      barcode: matchedBarcode.code,
+      product_barcode_id: productBarcodeId,
+      barcode_id: productBarcodeId,
+      listed_unit_price: listedUnitPrice,
+      sold_at_unit_price: soldAtUnitPrice,
+      manual_sold_at_price: soldAtUnitPrice,
+      unit_price: soldAtUnitPrice,
+      item_discount_amount: asNumber(orderItem.discount_amount, 0),
+      order_discount_amount: asNumber(order.discount_amount || order.amounts?.discount, 0),
+      quantity: 1,
+      total_price: soldAtUnitPrice,
+      return_reason: 'exchange',
+      quality_check_passed: true
+    };
+  };
+
+  const addReturnItem = (orderItem: any, matchedBarcode: { code: string; id?: number }) => {
+    const barcodeKey = normalizeBarcode(matchedBarcode.code);
+    const alreadySelected = removedItems.some(item =>
+      normalizeBarcode(item.barcode) === barcodeKey || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
+    );
+    if (alreadySelected) {
+      setError('Item already selected for return');
+      return false;
+    }
+
+    setError(null);
+    setRemovedItems(prev => [...prev, buildReturnItem(orderItem, matchedBarcode)]);
+    setBarcodeInput('');
+    window.setTimeout(() => replacementInputRef.current?.focus(), 0);
+    return true;
+  };
+
+  const selectableReturnBarcodes = (order.items || []).flatMap((item: any) => {
+    const barcodes = collectItemBarcodes(item);
+    if (barcodes.length === 0) {
+      return [{ orderItem: item, matchedBarcode: { code: item.product_sku || item.sku || `ITEM-${item.id}`, id: item.product_barcode_id || item.barcode_id } }];
+    }
+    return barcodes.map((matchedBarcode) => ({ orderItem: item, matchedBarcode }));
+  }).filter((entry: any) => entry.matchedBarcode?.code);
+
   const handleReturnScan = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const code = barcodeInput.trim();
@@ -243,33 +295,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
       }
 
       const { orderItem, matchedBarcode } = found;
-      const listedUnitPrice = getItemListedUnitPrice(orderItem);
-      const soldAtUnitPrice = getItemSoldAtUnitPrice(orderItem);
-      const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
-
-      const newItem = {
-        order_item_id: orderItem.id,
-        product_id: orderItem.product_id ?? orderItem.product?.id,
-        product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
-        product_name: orderItem.product_name || orderItem.product?.name || orderItem.name || 'Unknown Product',
-        barcode: matchedBarcode.code,
-        product_barcode_id: productBarcodeId,
-        barcode_id: productBarcodeId,
-        listed_unit_price: listedUnitPrice,
-        sold_at_unit_price: soldAtUnitPrice,
-        manual_sold_at_price: soldAtUnitPrice,
-        unit_price: soldAtUnitPrice,
-        item_discount_amount: asNumber(orderItem.discount_amount, 0),
-        order_discount_amount: asNumber(order.discount_amount || order.amounts?.discount, 0),
-        quantity: 1,
-        total_price: soldAtUnitPrice,
-        return_reason: 'exchange',
-        quality_check_passed: true
-      };
-
-      setRemovedItems(prev => [...prev, newItem]);
-      setBarcodeInput('');
-      window.setTimeout(() => replacementInputRef.current?.focus(), 0);
+      addReturnItem(orderItem, matchedBarcode);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Failed to quickly verify the scanned return barcode');
       setBarcodeInput('');
@@ -457,7 +483,11 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
           ...paymentDetails,
           cash: effectiveCash,
           total: totalPaid
-        }
+        },
+        isOnlineExchange,
+        order_type: isOnlineExchange ? 'social_commerce' : 'counter',
+        intended_courier: isOnlineExchange ? 'pathao' : undefined,
+        shipping_address: order.shipping_address || order.customer?.shipping_address || undefined
       });
       onClose();
     } catch (err: any) {
@@ -521,6 +551,18 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                   ))}
                 </select>
                 <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2 ml-1">Items must be available at this location</p>
+                <label className="mt-4 flex items-start gap-3 p-3 rounded-xl bg-white dark:bg-gray-800 border border-orange-100 dark:border-orange-900/40 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isOnlineExchange}
+                    onChange={(e) => setIsOnlineExchange(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500"
+                  />
+                  <span>
+                    <span className="block text-xs font-black uppercase tracking-widest text-gray-900 dark:text-white">Online exchange / Pathao-ready</span>
+                    <span className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 mt-1">Creates the replacement as an online exchange order with Pathao intent instead of normal counter exchange.</span>
+                  </span>
+                </label>
               </div>
 
               {/* Return Section */}
@@ -564,6 +606,34 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                     </div>
                   )}
                 </form>
+
+                {selectableReturnBarcodes.length > 0 && (
+                  <div className="mb-5 p-3 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Selectable sold barcodes from this order</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectableReturnBarcodes.map(({ orderItem, matchedBarcode }: any, idx: number) => {
+                        const selected = removedItems.some(item =>
+                          normalizeBarcode(item.barcode) === normalizeBarcode(matchedBarcode.code) || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
+                        );
+                        return (
+                          <button
+                            key={`${matchedBarcode.code}-${idx}`}
+                            type="button"
+                            disabled={selected}
+                            onClick={() => addReturnItem(orderItem, matchedBarcode)}
+                            className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${selected
+                              ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                              : 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-300 border-red-100 dark:border-red-900/50 hover:bg-red-100 dark:hover:bg-red-900/20'
+                            }`}
+                            title={orderItem.product_name || orderItem.product?.name || orderItem.name}
+                          >
+                            {matchedBarcode.code}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-3 max-h-72 overflow-y-auto pr-2 scrollbar-thin">
                   {removedItems.map((item, index) => (

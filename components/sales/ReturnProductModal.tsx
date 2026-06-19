@@ -216,6 +216,53 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
     } : item));
   };
 
+  const buildReturnedItem = (orderItem: any, matchedBarcode: { code: string; id?: number }) => {
+    const listedUnitPrice = getItemListedUnitPrice(orderItem);
+    const soldAtUnitPrice = getItemSoldAtUnitPrice(orderItem);
+    const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
+
+    return {
+      order_item_id: orderItem.id,
+      product_id: orderItem.product_id ?? orderItem.product?.id,
+      product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
+      product_name: orderItem.product_name || orderItem.product?.name || orderItem.name || 'Unknown Product',
+      barcode: matchedBarcode.code,
+      product_barcode_id: productBarcodeId,
+      barcode_id: productBarcodeId,
+      listed_unit_price: listedUnitPrice,
+      sold_at_unit_price: soldAtUnitPrice,
+      manual_sold_at_price: soldAtUnitPrice,
+      unit_price: soldAtUnitPrice,
+      item_discount_amount: asNumber(orderItem.discount_amount, 0),
+      order_discount_amount: asNumber(order.discount_amount || order.amounts?.discount, 0),
+      quantity: 1,
+      total_price: soldAtUnitPrice
+    };
+  };
+
+  const addReturnedItem = (orderItem: any, matchedBarcode: { code: string; id?: number }) => {
+    const alreadySelected = returnedItems.some(item =>
+      normalizeBarcode(item.barcode) === normalizeBarcode(matchedBarcode.code) || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
+    );
+    if (alreadySelected) {
+      setError('Item already selected for return');
+      return false;
+    }
+    setError(null);
+    setReturnedItems(prev => [...prev, buildReturnedItem(orderItem, matchedBarcode)]);
+    setBarcodeInput('');
+    window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
+    return true;
+  };
+
+  const selectableReturnBarcodes = (order.items || []).flatMap((item: any) => {
+    const barcodes = collectItemBarcodes(item);
+    if (barcodes.length === 0) {
+      return [{ orderItem: item, matchedBarcode: { code: item.product_sku || item.sku || `ITEM-${item.id}`, id: item.product_barcode_id || item.barcode_id } }];
+    }
+    return barcodes.map((matchedBarcode) => ({ orderItem: item, matchedBarcode }));
+  }).filter((entry: any) => entry.matchedBarcode?.code);
+
   const handleBarcodeScan = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const code = barcodeInput.trim();
@@ -243,31 +290,7 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
       }
 
       const { orderItem, matchedBarcode } = found;
-      const listedUnitPrice = getItemListedUnitPrice(orderItem);
-      const soldAtUnitPrice = getItemSoldAtUnitPrice(orderItem);
-      const productBarcodeId = matchedBarcode.id || orderItem.product_barcode_id || orderItem.barcode_id || orderItem.product_barcode?.id || orderItem.barcode?.id;
-
-      const newItem = {
-        order_item_id: orderItem.id,
-        product_id: orderItem.product_id ?? orderItem.product?.id,
-        product_batch_id: orderItem.product_batch_id || orderItem.batch_id || orderItem.batch?.id,
-        product_name: orderItem.product_name || orderItem.product?.name || orderItem.name || 'Unknown Product',
-        barcode: matchedBarcode.code,
-        product_barcode_id: productBarcodeId,
-        barcode_id: productBarcodeId,
-        listed_unit_price: listedUnitPrice,
-        sold_at_unit_price: soldAtUnitPrice,
-        manual_sold_at_price: soldAtUnitPrice,
-        unit_price: soldAtUnitPrice,
-        item_discount_amount: asNumber(orderItem.discount_amount, 0),
-        order_discount_amount: asNumber(order.discount_amount || order.amounts?.discount, 0),
-        quantity: 1,
-        total_price: soldAtUnitPrice
-      };
-
-      setReturnedItems(prev => [...prev, newItem]);
-      setBarcodeInput('');
-      window.setTimeout(() => barcodeInputRef.current?.focus(), 0);
+      addReturnedItem(orderItem, matchedBarcode);
     } catch (err: any) {
       setError(err?.response?.data?.message || 'Failed to quickly verify the scanned barcode');
       setBarcodeInput('');
@@ -485,6 +508,34 @@ export default function ReturnProductModal({ order, onClose, onReturn }: ReturnP
                     className="w-full pl-12 pr-4 py-5 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-red-500 outline-none transition-all text-sm font-black placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
                   />
                 </form>
+
+                {selectableReturnBarcodes.length > 0 && (
+                  <div className="mb-5 p-3 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800">
+                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Selectable sold barcodes from this order</p>
+                    <div className="flex flex-wrap gap-2">
+                      {selectableReturnBarcodes.map(({ orderItem, matchedBarcode }: any, idx: number) => {
+                        const selected = returnedItems.some(item =>
+                          normalizeBarcode(item.barcode) === normalizeBarcode(matchedBarcode.code) || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
+                        );
+                        return (
+                          <button
+                            key={`${matchedBarcode.code}-${idx}`}
+                            type="button"
+                            disabled={selected}
+                            onClick={() => addReturnedItem(orderItem, matchedBarcode)}
+                            className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${selected
+                              ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                              : 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-300 border-red-100 dark:border-red-900/50 hover:bg-red-100 dark:hover:bg-red-900/20'
+                            }`}
+                            title={orderItem.product_name || orderItem.product?.name || orderItem.name}
+                          >
+                            {matchedBarcode.code}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-3 max-h-[40vh] overflow-y-auto pr-2 scrollbar-thin">
                   {returnedItems.map((item, index) => (

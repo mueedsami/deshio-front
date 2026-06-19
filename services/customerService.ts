@@ -175,7 +175,7 @@ const customerService = {
     try {
       // If phone is provided, format it
       if (params.phone) {
-        params.phone = params.phone.replace(/\D/g, ''); // Remove non-digits
+        params.phone = params.phone.replace(/[^0-9+]/g, ''); // Keep leading + for international numbers
       }
 
       console.log('Customer search params:', params);
@@ -211,7 +211,7 @@ const customerService = {
   /** Get customer by phone number (exact match) */
   async getByPhone(phone: string): Promise<Customer | null> {
     try {
-      const formattedPhone = phone.replace(/\D/g, ''); // Remove non-digits
+      const formattedPhone = phone.replace(/[^0-9+]/g, ''); // Keep leading + for international numbers
       const response = await axiosInstance.get('/customers/search', {
         params: { phone: formattedPhone, per_page: 1 }
       });
@@ -237,7 +237,7 @@ const customerService = {
    * Falls back to older GET /customers/by-phone and search-based lookup if needed.
    */
   async findByPhone(phone: string): Promise<Customer | null> {
-    const formattedPhone = phone.replace(/\D/g, '');
+    const formattedPhone = phone.replace(/[^0-9+]/g, '');
     if (!formattedPhone) return null;
 
     // 1) Try new endpoint

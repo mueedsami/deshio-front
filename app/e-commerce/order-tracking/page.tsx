@@ -11,9 +11,10 @@ function cleanPhone(input: string) {
   return input.replace(/[^0-9+]/g, '');
 }
 
-function isValidBDPhone(input: string) {
-  const cleaned = input.replace(/\D/g, '');
-  return /^(?:880|0)?1[3-9]\d{8}$/.test(cleaned);
+function isValidPhone(input: string) {
+  const cleaned = cleanPhone(input);
+  const digits = cleaned.replace(/\D/g, '');
+  return digits.length >= 7 && digits.length <= 20 && /^\+?[0-9]+$/.test(cleaned);
 }
 
 export default function OrderTrackingByPhonePage() {
@@ -27,8 +28,8 @@ export default function OrderTrackingByPhonePage() {
     e.preventDefault();
     setError(null);
 
-    if (!phone.trim() || !isValidBDPhone(phone)) {
-      setError('Please enter a valid Bangladesh phone number (e.g. 017xxxxxxxx)');
+    if (!phone.trim() || !isValidPhone(phone)) {
+      setError('Please enter a valid phone number, including country code for international orders');
       return;
     }
 
@@ -84,10 +85,10 @@ export default function OrderTrackingByPhonePage() {
               <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
               <input
                 type="tel"
-                inputMode="numeric"
+                inputMode="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="017XXXXXXXX"
+                placeholder="017XXXXXXXX or +1 555 123 4567"
                 className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:ring-2 focus:ring-neutral-200 focus:border-neutral-900"
               />
             </div>

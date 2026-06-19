@@ -59,8 +59,8 @@ export default function ProductPage() {
   const [maxPrice, setMaxPrice] = useState<string>('');
   const [debouncedMinPrice, setDebouncedMinPrice] = useState<string>('');
   const [debouncedMaxPrice, setDebouncedMaxPrice] = useState<string>('');
-  const [sortBy, setSortBy] = useState<string>('newest');
-  const [stockStatus, setStockStatus] = useState<'all' | 'in_stock' | 'not_in_stock'>('all');
+  const [sortBy, setSortBy] = useState<string>('default');
+  const [stockStatus, setStockStatus] = useState<'all' | 'in_stock' | 'not_in_stock' | 'available_online'>('all');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
@@ -150,7 +150,7 @@ export default function ProductPage() {
     const maxP = searchParams.get('maxPrice') ?? '';
     const pageRaw = Number(searchParams.get('page') ?? '1');
 
-    const sort = searchParams.get('sortBy') ?? 'newest';
+    const sort = searchParams.get('sortBy') ?? 'default';
     const inStockParam = searchParams.get('in_stock');
     const stockStatusParam = searchParams.get('stock_status');
     const stock = stockStatusParam === 'in_stock' || stockStatusParam === 'not_in_stock' || stockStatusParam === 'available_online' 
@@ -269,10 +269,14 @@ export default function ProductPage() {
 
       let response: { data: any[]; total: number; current_page: number; last_page: number };
 
-      let apiSortBy = 'created_at';
-      let apiSortDir: 'asc' | 'desc' = 'desc';
+      let apiSortBy: string | undefined;
+      let apiSortDir: 'asc' | 'desc' | undefined;
 
-      if (sortBy === 'oldest') {
+      if (sortBy === 'newest') {
+        apiSortBy = 'created_at';
+        apiSortDir = 'desc';
+      } else if (sortBy === 'oldest') {
+        apiSortBy = 'created_at';
         apiSortDir = 'asc';
       } else if (sortBy === 'price_asc') {
         apiSortBy = 'price';
@@ -856,7 +860,7 @@ export default function ProductPage() {
     setSelectedVendor('');
     setMinPrice('');
     setMaxPrice('');
-    setSortBy('newest');
+    setSortBy('default');
     setStockStatus('all');
     setCurrentPage(1);
     updateQueryParams({
@@ -871,7 +875,7 @@ export default function ProductPage() {
     });
   };
 
-  const hasActiveFilters = Boolean(searchQuery || selectedCategory || selectedVendor || minPrice || maxPrice || stockStatus !== 'all');
+  const hasActiveFilters = Boolean(searchQuery || selectedCategory || selectedVendor || minPrice || maxPrice || stockStatus !== 'all' || sortBy !== 'default');
 
   return (
     <div className={darkMode ? 'dark' : ''}>
@@ -1082,11 +1086,26 @@ export default function ProductPage() {
                     }}
                     className="px-4 py-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-900 dark:focus:ring-gray-500 transition-colors shadow-sm cursor-pointer"
                   >
-                    <option value="newest">Newest</option>
-                    <option value="oldest">Oldest</option>
+                    <option value="default">Default order</option>
                     <option value="price_asc">Price: Low to High</option>
                     <option value="price_desc">Price: High to Low</option>
-                  </select>
+                    </select>
+
+                  <button
+                    onClick={() => {
+                      const next = sortBy === 'newest' ? 'oldest' : 'newest';
+                      setSortBy(next);
+                      setCurrentPage(1);
+                      updateQueryParams({ sortBy: next, page: '1' });
+                    }}
+                    className={`px-4 py-3 border rounded-lg text-sm font-semibold transition-colors shadow-sm ${sortBy === 'newest' || sortBy === 'oldest'
+                      ? 'bg-gray-900 dark:bg-white text-white dark:text-gray-900 border-gray-900 dark:border-white'
+                      : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700'
+                    }`}
+                    title="Date sorting is now manual"
+                  >
+                    Date: {sortBy === 'oldest' ? 'Oldest' : sortBy === 'newest' ? 'Newest' : 'Off'}
+                  </button>
 
                   {/* Filter Toggle Button */}
                   <button
@@ -1100,7 +1119,7 @@ export default function ProductPage() {
                     <span className="font-medium">Filters</span>
                     {hasActiveFilters && (
                       <span className="px-2 py-0.5 text-xs bg-white dark:bg-gray-900 text-gray-900 dark:text-white rounded-full">
-                        {(searchQuery ? 1 : 0) + (selectedCategory ? 1 : 0) + (selectedVendor ? 1 : 0) + (minPrice || maxPrice ? 1 : 0) + (stockStatus !== 'all' ? 1 : 0) + (sortBy !== 'newest' ? 1 : 0)}
+                        {(searchQuery ? 1 : 0) + (selectedCategory ? 1 : 0) + (selectedVendor ? 1 : 0) + (minPrice || maxPrice ? 1 : 0) + (stockStatus !== 'all' ? 1 : 0) + (sortBy !== 'default' ? 1 : 0)}
                       </span>
                     )}
                   </button>

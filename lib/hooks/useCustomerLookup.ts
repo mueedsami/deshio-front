@@ -64,8 +64,9 @@ export function useCustomerLookup(opts?: {
 
   useEffect(() => {
     const raw = phone.trim();
-    const formatted = raw.replace(/\D/g, "");
-    if (formatted.length < minLength) {
+    const formatted = raw.replace(/[^0-9+]/g, "");
+    const digitsOnly = formatted.replace(/\D/g, "");
+    if (digitsOnly.length < minLength) {
       setCustomer(null);
       setLastOrder(null);
       setRecentOrders([]);
@@ -84,7 +85,7 @@ export function useCustomerLookup(opts?: {
 
         lastQueried.current = formatted;
 
-        // 1) lookup customer by phone
+        // 1) lookup customer by phone. Preserve leading + for international customers.
         let found: any = null;
         try {
           const res = await axiosInstance.post('/customers/find-by-phone', { phone: formatted });

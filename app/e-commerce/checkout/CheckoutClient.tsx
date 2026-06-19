@@ -92,18 +92,46 @@ export default function CheckoutClient() {
 
   const cleanPhone = (input: string) => input.replace(/[^0-9+]/g, '');
 
-  const formatBDPhone = (input: string) => {
-    const cleaned = input.replace(/[^0-9+]/g, '');
-    if (cleaned.startsWith('+880')) return cleaned;
-    if (cleaned.startsWith('880')) return '+880' + cleaned.slice(3);
-    if (cleaned.startsWith('0')) return cleaned;
-    if (/^1[3-9]\d{8}$/.test(cleaned)) return '0' + cleaned;
+  const isBangladeshCountry = (country?: string) => {
+    const normalized = String(country || 'Bangladesh').trim().toLowerCase();
+    return !normalized || ['bangladesh', 'bd', 'বাংলাদেশ'].includes(normalized);
+  };
+
+  const normalizePhoneByCountry = (input: string, country?: string) => {
+    const raw = String(input || '').trim();
+    const cleaned = cleanPhone(raw);
+
+    // A non-BD +country code is already an international number. Do not rewrite it.
+    if (cleaned.startsWith('+') && !cleaned.startsWith('+880')) return cleaned;
+
+    // Keep existing Bangladesh convenience formatting for local shoppers only.
+    if (isBangladeshCountry(country)) {
+      if (cleaned.startsWith('+880')) return cleaned;
+      if (cleaned.startsWith('880')) return '+880' + cleaned.slice(3);
+      if (cleaned.startsWith('0')) return cleaned;
+      if (/^1[3-9]\d{8}$/.test(cleaned)) return '0' + cleaned;
+    }
+
+    // International numbers are country-code dependent, so do not force 11 digits.
     return cleaned;
   };
 
-  const isValidBDPhone = (phone: string) => {
-    const cleaned = phone.replace(/\D/g, '');
-    return /^(?:880|0)?1[3-9]\d{8}$/.test(cleaned);
+  const isValidPhoneForCountry = (phone: string, country?: string) => {
+    const cleaned = cleanPhone(phone);
+    const digits = cleaned.replace(/\D/g, '');
+    if (!digits) return false;
+
+    // If the user typed a +country-code number, treat it as international even before
+    // they choose the country field lower in the checkout form.
+    if (cleaned.startsWith('+') && !cleaned.startsWith('+880')) {
+      return digits.length >= 7 && digits.length <= 20 && /^\+?[0-9]+$/.test(cleaned);
+    }
+
+    if (isBangladeshCountry(country)) {
+      return /^(?:880|0)?1[3-9]\d{8}$/.test(digits);
+    }
+
+    return digits.length >= 7 && digits.length <= 20 && /^\+?[0-9]+$/.test(cleaned);
   };
 
   // ✅ NEW: Handle payment errors from URL
@@ -331,8 +359,8 @@ export default function CheckoutClient() {
       return;
     }
 
-    if (!addressForm.phone.trim() || addressForm.phone.length !== 11) {
-      setError('Valid 11-digit phone number is required');
+    if (!addressForm.phone.trim() || !isValidPhoneForCountry(addressForm.phone, addressForm.country)) {
+      setError('Please enter a valid phone number for the selected country');
       return;
     }
 
@@ -496,8 +524,8 @@ export default function CheckoutClient() {
       return;
     }
 
-    if (!guestPhone.trim() || !isValidBDPhone(guestPhone)) {
-      setError('Please enter a valid Bangladesh phone number (e.g. 017xxxxxxxx)');
+    if (!guestPhone.trim() || !isValidPhoneForCountry(guestPhone, guestAddress.country)) {
+      setError('Please enter a valid phone number for the selected country');
       return;
     }
 
@@ -521,7 +549,7 @@ export default function CheckoutClient() {
     setIsProcessing(true);
     try {
       const payload = {
-        phone: cleanPhone(formatBDPhone(guestPhone)),
+        phone: normalizePhoneByCountry(guestPhone, guestAddress.country),
         items: selectedItems.map((it) => ({
           product_id: it.product_id,
           quantity: it.quantity,
@@ -532,7 +560,7 @@ export default function CheckoutClient() {
         store_id: null,
         delivery_address: {
           full_name: guestAddress.full_name,
-          ...(guestAddress.phone?.trim() ? { phone: cleanPhone(guestAddress.phone) } : {}),
+          ...(guestAddress.phone?.trim() ? { phone: normalizePhoneByCountry(guestAddress.phone, guestAddress.country) } : {}),
           address_line_1: guestAddress.address_line_1,
           ...(guestAddress.address_line_2?.trim() ? { address_line_2: guestAddress.address_line_2 } : {}),
           city: guestAddress.city,
@@ -565,7 +593,7 @@ export default function CheckoutClient() {
                 shipping_charge: shippingCharge,
                 discount: couponDiscount,
                 created_at: Date.now(),
-                customer: { phone: cleanPhone(formatBDPhone(guestPhone)), name: guestName || undefined, email: guestEmail || undefined },
+                customer: { phone: normalizePhoneByCountry(guestPhone, guestAddress.country), name: guestName || undefined, email: guestEmail || undefined },
                 items: selectedItems.map((it) => ({
                   name: it.name,
                   quantity: it.quantity,
@@ -616,7 +644,7 @@ export default function CheckoutClient() {
             shipping_charge: shippingCharge,
             discount: couponDiscount,
             created_at: Date.now(),
-            customer: { phone: cleanPhone(formatBDPhone(guestPhone)), name: guestName || undefined, email: guestEmail || undefined },
+            customer: { phone: normalizePhoneByCountry(guestPhone, guestAddress.country), name: guestName || undefined, email: guestEmail || undefined },
             items: selectedItems.map((it) => ({
               product_name: it.name,
               quantity: it.quantity,
@@ -871,14 +899,14 @@ export default function CheckoutClient() {
                       type="tel"
                       inputMode="tel"
                       autoComplete="tel"
-                      placeholder="017XXXXXXXX"
+                      placeholder="017XXXXXXXX or +1 555 123 4567"
                       value={guestPhone}
                       onChange={(e) => setGuestPhone(e.target.value)}
                       className="ec-input"
-                      aria-invalid={!isValidBDPhone(guestPhone) && guestPhone !== ''}
+                      aria-invalid={!isValidPhoneForCountry(guestPhone, guestAddress.country) && guestPhone !== ''}
                     />
-                    {!isValidBDPhone(guestPhone) && guestPhone !== '' && (
-                      <p className="text-xs text-rose-500 mt-1">Please enter a valid 11-digit phone</p>
+                    {!isValidPhoneForCountry(guestPhone, guestAddress.country) && guestPhone !== '' && (
+                      <p className="text-xs text-rose-500 mt-1">Please enter a valid phone number</p>
                     )}
                   </div>
 
@@ -1324,15 +1352,13 @@ export default function CheckoutClient() {
                               autoComplete="tel"
                               value={addressForm.phone}
                               onChange={(e) => {
-                                const value = e.target.value.replace(/\D/g, '');
-                                setAddressForm({ ...addressForm, phone: value });
+                                setAddressForm({ ...addressForm, phone: e.target.value });
                               }}
-                              placeholder="01712345678"
-                              maxLength={11}
+                              placeholder="01712345678 or +1 555 123 4567"
                               className="ec-input"
-                              aria-invalid={(!addressForm.phone || addressForm.phone.length !== 11) && isProcessing}
+                              aria-invalid={(!addressForm.phone || !isValidPhoneForCountry(addressForm.phone, addressForm.country)) && isProcessing}
                             />
-                            {(!addressForm.phone || addressForm.phone.length !== 11) && isProcessing && <p className="text-xs text-rose-500 mt-1">11-digit phone required</p>}
+                            {(!addressForm.phone || !isValidPhoneForCountry(addressForm.phone, addressForm.country)) && isProcessing && <p className="text-xs text-rose-500 mt-1">Valid country-wise phone required</p>}
                           </div>
                         </div>
 
