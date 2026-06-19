@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, ChevronUp, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer, Edit } from 'lucide-react';
+import { Search, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Trash2, MoreVertical, ArrowRightLeft, RotateCcw, Printer, Edit } from 'lucide-react';
 import { computeMenuPosition } from '@/lib/menuPosition';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
@@ -86,6 +86,17 @@ interface Store {
   location: string;
 }
 
+interface PaginationMeta {
+  total: number;
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  from: number;
+  to: number;
+}
+
+const PURCHASE_HISTORY_PER_PAGE = 50;
+
 export default function PurchaseHistoryPage() {
   const { user, scopedStoreId, canSelectStore } = useAuth();
   const { darkMode, setDarkMode } = useTheme();
@@ -100,6 +111,15 @@ export default function PurchaseHistoryPage() {
   const [loadingDetails, setLoadingDetails] = useState<number | null>(null);
   const [errorDetails, setErrorDetails] = useState<{ [key: number]: string }>({});
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState<PaginationMeta>({
+    total: 0,
+    current_page: 1,
+    last_page: 1,
+    per_page: PURCHASE_HISTORY_PER_PAGE,
+    from: 0,
+    to: 0,
+  });
   // Legacy state kept for minimal refactor
   const [userRole, setUserRole] = useState<string>('');
   const [userStoreId, setUserStoreId] = useState<string>('');
@@ -131,17 +151,18 @@ export default function PurchaseHistoryPage() {
     fetchStores();
   }, [user?.id, scopedStoreId]);
 
-  // Fetch orders when relevant filters change
+  // Fetch orders when relevant filters/page changes
   useEffect(() => {
-    fetchOrders();
-  }, [selectedStore, startDate, endDate, searchTerm]);
+    fetchOrders(currentPage);
+  }, [selectedStore, startDate, endDate, searchTerm, currentPage]);
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (page = currentPage) => {
     try {
       setLoading(true);
       const filters: OrderFilters = {
         order_type: 'counter',
-        per_page: 50,
+        per_page: PURCHASE_HISTORY_PER_PAGE,
+        page,
       };
 
       // Security: Always prioritize scopedStoreId (enforced for non-admins)
@@ -157,11 +178,30 @@ export default function PurchaseHistoryPage() {
       if (endDate) filters.date_to = endDate;
 
       const result = await orderService.getAll(filters);
+      const pageFrom = result.total === 0 ? 0 : ((result.current_page - 1) * PURCHASE_HISTORY_PER_PAGE) + 1;
+      const pageTo = result.total === 0 ? 0 : Math.min(result.total, pageFrom + result.data.length - 1);
+
       setOrders(result.data);
+      setPagination({
+        total: result.total,
+        current_page: result.current_page,
+        last_page: result.last_page,
+        per_page: PURCHASE_HISTORY_PER_PAGE,
+        from: pageFrom,
+        to: pageTo,
+      });
 
     } catch (error) {
       console.error('❌ Failed to fetch orders:', error);
       setOrders([]);
+      setPagination({
+        total: 0,
+        current_page: 1,
+        last_page: 1,
+        per_page: PURCHASE_HISTORY_PER_PAGE,
+        from: 0,
+        to: 0,
+      });
     } finally {
       setLoading(false);
     }
@@ -215,6 +255,39 @@ export default function PurchaseHistoryPage() {
       console.error('Failed to fetch stores:', error);
       setStores([]);
     }
+  };
+
+  const resetToFirstPage = () => {
+    setCurrentPage(1);
+    setExpandedOrder(null);
+    setActiveMenu(null);
+  };
+
+  const handlePageChange = (page: number) => {
+    const safePage = Math.max(1, Math.min(page, pagination.last_page || 1));
+    if (safePage === pagination.current_page || loading) return;
+
+    setCurrentPage(safePage);
+    setExpandedOrder(null);
+    setActiveMenu(null);
+
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const getVisiblePageNumbers = () => {
+    const lastPage = pagination.last_page || 1;
+    const current = pagination.current_page || 1;
+    const maxVisible = 5;
+    let start = Math.max(1, current - Math.floor(maxVisible / 2));
+    const end = Math.min(lastPage, start + maxVisible - 1);
+
+    if (end - start + 1 < maxVisible) {
+      start = Math.max(1, end - maxVisible + 1);
+    }
+
+    return Array.from({ length: end - start + 1 }, (_, index) => start + index);
   };
 
   const handleExpandOrder = async (orderId: number) => {
@@ -581,7 +654,7 @@ export default function PurchaseHistoryPage() {
     return sum + (isNaN(amount) ? 0 : amount);
   }, 0);
 
-  const totalOrders = filteredOrders.length;
+  const totalOrders = pagination.total || filteredOrders.length;
 
   const totalDue = filteredOrders.reduce((sum, order) => {
     const amount = parseFloat(order.outstanding_amount.replace(/,/g, ''));
@@ -635,7 +708,10 @@ export default function PurchaseHistoryPage() {
                       type="text"
                       placeholder="Search by order#, customer, phone..."
                       value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
+                      onChange={(e) => {
+                          setSearchTerm(e.target.value);
+                          resetToFirstPage();
+                        }}
                       className="w-full pl-10 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                   </div>
@@ -656,7 +732,10 @@ export default function PurchaseHistoryPage() {
                   ) : (
                     <select
                       value={selectedStore}
-                      onChange={(e) => setSelectedStore(e.target.value)}
+                      onChange={(e) => {
+                        setSelectedStore(e.target.value);
+                        resetToFirstPage();
+                      }}
                       className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
                     >
                       <option value="">All Stores</option>
@@ -671,14 +750,20 @@ export default function PurchaseHistoryPage() {
                   <input
                     type="date"
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      resetToFirstPage();
+                    }}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
 
                   <input
                     type="date"
                     value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    onChange={(e) => {
+                      setEndDate(e.target.value);
+                      resetToFirstPage();
+                    }}
                     className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                 </div>
@@ -1002,6 +1087,60 @@ export default function PurchaseHistoryPage() {
                       )}
                     </div>
                   ))}
+
+                  {pagination.last_page > 1 && (
+                    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+                      <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div className="text-sm text-gray-600 dark:text-gray-400">
+                          Showing <span className="font-medium text-gray-900 dark:text-white">{pagination.from}</span>–<span className="font-medium text-gray-900 dark:text-white">{pagination.to}</span> of{' '}
+                          <span className="font-medium text-gray-900 dark:text-white">{pagination.total}</span> orders
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handlePageChange(pagination.current_page - 1)}
+                            disabled={loading || pagination.current_page <= 1}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                            Previous
+                          </button>
+
+                          <div className="hidden sm:flex items-center gap-1">
+                            {getVisiblePageNumbers().map((pageNumber) => (
+                              <button
+                                key={pageNumber}
+                                type="button"
+                                onClick={() => handlePageChange(pageNumber)}
+                                disabled={loading}
+                                className={`min-w-10 px-3 py-2 rounded-md border text-sm font-medium ${pagination.current_page === pageNumber
+                                  ? 'border-blue-600 bg-blue-600 text-white'
+                                  : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600'
+                                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                              >
+                                {pageNumber}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="sm:hidden text-sm font-medium text-gray-700 dark:text-gray-200 px-2">
+                            Page {pagination.current_page} / {pagination.last_page}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handlePageChange(pagination.current_page + 1)}
+                            disabled={loading || pagination.current_page >= pagination.last_page}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-700 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            Next
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
