@@ -157,6 +157,10 @@ export interface AssignmentBlockerProduct extends StoreInventoryDetail {
   blocking_quantity?: number;
   unbarcoded_blocking_quantity?: number;
   barcoded_blocking_quantity?: number;
+  related_open_order_count?: number;
+  related_open_order_quantity?: number;
+  related_unbarcoded_open_quantity?: number;
+  related_barcoded_open_quantity?: number;
   blocking_orders?: AssignmentBlockingOrder[];
 }
 
@@ -184,6 +188,7 @@ export interface AssignmentBlockerResponse {
   summary: {
     stores_checked: number;
     blocked_products: number;
+    blocked_store_products?: number;
     blocking_orders: number;
     can_any_store_fulfill: boolean;
   };

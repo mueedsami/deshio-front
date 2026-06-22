@@ -293,10 +293,16 @@ export default function AssignmentBlockersPage() {
                     <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
                       <p className="text-sm text-gray-500 dark:text-gray-400">Blocked Products</p>
                       <p className="text-3xl font-bold text-red-600 mt-1">{diagnostic.summary.blocked_products}</p>
+                      {typeof diagnostic.summary.blocked_store_products === 'number' && diagnostic.summary.blocked_store_products !== diagnostic.summary.blocked_products && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          {diagnostic.summary.blocked_store_products} store-product rows
+                        </p>
+                      )}
                     </div>
                     <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
-                      <p className="text-sm text-gray-500 dark:text-gray-400">Blocking Orders</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Actually Blocking Orders</p>
                       <p className="text-3xl font-bold text-amber-600 mt-1">{diagnostic.summary.blocking_orders}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Only rows reducing assignable stock</p>
                     </div>
                   </div>
 
@@ -304,7 +310,7 @@ export default function AssignmentBlockersPage() {
                     <div>
                       <h2 className="text-lg font-bold text-gray-900 dark:text-white">Store-wise diagnosis</h2>
                       <p className="text-sm text-gray-500 dark:text-gray-400">
-                        Free stock = physical/sellable stock minus open store-assigned order holds.
+                        Free stock = physical/sellable stock minus effective open holds. Barcoded shipped rows are not shown as blockers.
                       </p>
                     </div>
                     <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
@@ -415,6 +421,12 @@ export default function AssignmentBlockersPage() {
                                       ))}
                                     </div>
                                   </div>
+
+                                  {detail.related_open_order_count && detail.related_open_order_count > (detail.blocking_order_count || 0) && (
+                                    <div className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                                      {detail.related_open_order_count} related open rows exist for this product/store, but only {(detail.blocking_order_count || 0)} are actual assignment blockers.
+                                    </div>
+                                  )}
 
                                   {(detail.blocking_orders || []).length > 0 && (
                                     <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
