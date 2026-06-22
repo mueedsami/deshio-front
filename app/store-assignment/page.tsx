@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useTheme } from "@/contexts/ThemeContext";
 import {
   Package,
@@ -598,6 +599,13 @@ export default function StoreAssignmentPage() {
                       </select>
                       <ChevronDown className="absolute right-3 top-2.5 h-4 w-4 text-gray-400 pointer-events-none" />
                     </div>
+                    <Link
+                      href="/assignment-blockers"
+                      className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors shadow-sm"
+                    >
+                      <AlertTriangle className="h-4 w-4" />
+                      Blocker Panel
+                    </Link>
                     <button
                       onClick={fetchPendingOrders}
                       disabled={isLoadingOrders}
@@ -1036,9 +1044,18 @@ export default function StoreAssignmentPage() {
                       </button>
 
                       {!selectedStoreData.can_fulfill_entire_order && (
-                        <p className="text-sm text-center text-red-600 dark:text-red-400">
-                          ⚠️ This store cannot fulfill the entire order. Please select a different store or consider restocking.
-                        </p>
+                        <div className="text-center space-y-2">
+                          <p className="text-sm text-red-600 dark:text-red-400">
+                            ⚠️ This store cannot fulfill the entire order. Open the blocker panel to see which existing orders are holding the products.
+                          </p>
+                          <Link
+                            href={`/assignment-blockers?order=${encodeURIComponent(selectedOrder?.order_number || String(selectedOrderId || ''))}&store_id=${selectedStoreId || ''}`}
+                            className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold"
+                          >
+                            <AlertTriangle className="h-4 w-4" />
+                            View blocking orders
+                          </Link>
+                        </div>
                       )}
                     </div>
                   ) : (

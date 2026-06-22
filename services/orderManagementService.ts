@@ -120,6 +120,75 @@ export interface BulkAssignStorePendingResponse {
   };
 }
 
+
+export interface AssignmentBlockingOrder {
+  order_id: number;
+  order_number: string;
+  status: string;
+  order_type?: string;
+  payment_status?: string;
+  customer_name?: string;
+  customer_phone?: string;
+  order_item_id: number;
+  quantity: number;
+  has_locked_barcode: boolean;
+  locked_barcode?: string | null;
+  product_barcode_id?: number | null;
+  product_batch_id?: number | null;
+  is_inventory_deducted?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AssignmentBlockerProduct extends StoreInventoryDetail {
+  physical_quantity?: number;
+  batch_physical_quantity?: number;
+  sellable_barcode_quantity?: number;
+  stock_source?: string;
+  assigned_quantity?: number;
+  unbarcoded_assigned_quantity?: number;
+  assigned_quantity_subtracted?: number;
+  free_physical_quantity?: number;
+  global_available?: number;
+  shortage_quantity?: number;
+  issue_type?: string;
+  issue_message?: string;
+  blocking_order_count?: number;
+  blocking_quantity?: number;
+  unbarcoded_blocking_quantity?: number;
+  barcoded_blocking_quantity?: number;
+  blocking_orders?: AssignmentBlockingOrder[];
+}
+
+export interface AssignmentBlockerStore extends AvailableStore {
+  inventory_details: AssignmentBlockerProduct[];
+  blocked_product_count?: number;
+  blocking_order_count?: number;
+  primary_issue?: string;
+}
+
+export interface AssignmentBlockerResponse {
+  order: {
+    id: number;
+    order_number: string;
+    status: string;
+    order_type?: string;
+    store_id?: number | null;
+    customer_name?: string;
+    customer_phone?: string;
+    total_amount?: string | number;
+    created_at?: string;
+  };
+  released_statuses: string[];
+  stores: AssignmentBlockerStore[];
+  summary: {
+    stores_checked: number;
+    blocked_products: number;
+    blocking_orders: number;
+    can_any_store_fulfill: boolean;
+  };
+}
+
 export interface AssignStorePayload {
   store_id: number;
   notes?: string;
@@ -252,6 +321,37 @@ class OrderManagementService {
     } catch (error: any) {
       console.error('❌ Failed to fetch available stores:', error);
       throw new Error(error.response?.data?.message || 'Failed to fetch available stores');
+    }
+  }
+
+
+  /**
+   * Assignment blocker diagnostics: explains why an order cannot be assigned.
+   * Accepts an order id or order number like ORD-S-7474.
+   */
+  async getAssignmentBlockers(order: string | number, storeId?: number | null): Promise<AssignmentBlockerResponse> {
+    const orderValue = String(order || '').trim();
+    if (!orderValue) {
+      throw new Error('Please enter an order number or order ID');
+    }
+
+    try {
+      const response = await axiosInstance.get('/order-management/assignment-blockers', {
+        params: {
+          order: orderValue,
+          ...(storeId ? { store_id: storeId } : {}),
+        },
+      });
+
+      return response.data?.data;
+    } catch (error: any) {
+      console.error('❌ Failed to load assignment blockers:', error?.response?.data || error);
+      throw new Error(
+        error.response?.data?.message ||
+          error.response?.data?.error ||
+          error?.message ||
+          'Failed to load assignment blocker diagnostics'
+      );
     }
   }
 
