@@ -23,6 +23,7 @@ import orderManagementService, {
   AssignmentBlockerResponse,
   AssignmentBlockerStore,
   PendingAssignmentOrder,
+  ProductAssignmentDiagnosticsResponse,
 } from '@/services/orderManagementService';
 import storeService from '@/services/storeService';
 
@@ -65,7 +66,10 @@ export default function AssignmentBlockersPage() {
   const [stores, setStores] = useState<any[]>([]);
   const [pendingOrders, setPendingOrders] = useState<PendingAssignmentOrder[]>([]);
   const [diagnostic, setDiagnostic] = useState<AssignmentBlockerResponse | null>(null);
+  const [productQuery, setProductQuery] = useState('');
+  const [productDiagnostic, setProductDiagnostic] = useState<ProductAssignmentDiagnosticsResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isProductLoading, setIsProductLoading] = useState(false);
   const [isBootLoading, setIsBootLoading] = useState(true);
   const [showOnlyBlocked, setShowOnlyBlocked] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
@@ -148,6 +152,30 @@ export default function AssignmentBlockersPage() {
       showToast(error?.message || 'Failed to load diagnostics.', 'error');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const runProductDiagnostics = async (productValue = productQuery) => {
+    const cleaned = String(productValue || '').trim();
+    if (!cleaned) {
+      showToast('Enter a product ID, SKU, or product name.', 'warning');
+      return;
+    }
+
+    setIsProductLoading(true);
+    try {
+      const data = await orderManagementService.getProductAssignmentDiagnostics(
+        cleaned,
+        selectedStoreId === '' ? null : Number(selectedStoreId)
+      );
+      setProductDiagnostic(data);
+      setProductQuery(data?.search || cleaned);
+      showToast('Product diagnostics loaded.', 'success');
+    } catch (error: any) {
+      setProductDiagnostic(null);
+      showToast(error?.message || 'Failed to load product diagnostics.', 'error');
+    } finally {
+      setIsProductLoading(false);
     }
   };
 
@@ -275,6 +303,197 @@ export default function AssignmentBlockersPage() {
                   )}
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/70 dark:bg-blue-900/10 p-4 md:p-5 shadow-sm">
+                <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                      <Package className="h-5 w-5 text-blue-600" />
+                      Product Diagnostic Search
+                    </h2>
+                    <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                      Search a product to see reserved_products values, store availability, and open orders that still have no barcode.
+                    </p>
+                  </div>
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 w-fit">
+                    Uses same availability math as assignment
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                  <div className="lg:col-span-9">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-1">
+                      Product ID / SKU / name
+                    </label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+                      <input
+                        value={productQuery}
+                        onChange={(e) => setProductQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') runProductDiagnostics();
+                        }}
+                        placeholder="Example: 4527, DF-3PS-A4-1150, or DESHIO BLOCK"
+                        className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+                  </div>
+                  <div className="lg:col-span-3 flex items-end">
+                    <button
+                      onClick={() => runProductDiagnostics()}
+                      disabled={isProductLoading}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {isProductLoading ? <Loader className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                      Search Product
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {productDiagnostic && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Product Matches</p>
+                      <p className="text-3xl font-bold text-gray-900 dark:text-white mt-1">{productDiagnostic.summary.product_matches}</p>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Stores Checked</p>
+                      <p className="text-3xl font-bold text-gray-900 dark:text-white mt-1">{productDiagnostic.summary.stores_checked}</p>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">No-barcode Open Orders</p>
+                      <p className="text-3xl font-bold text-amber-600 mt-1">{productDiagnostic.summary.open_no_barcode_orders}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Qty {productDiagnostic.summary.open_no_barcode_quantity}</p>
+                    </div>
+                    <div className="rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 p-4">
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Shipped No Barcode</p>
+                      <p className="text-3xl font-bold text-red-600 mt-1">{productDiagnostic.summary.shipped_without_barcode_orders}</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Invalid state to fix</p>
+                    </div>
+                  </div>
+
+                  {productDiagnostic.products.map((productRow) => (
+                    <div key={productRow.product.id} className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm overflow-hidden">
+                      <div className="p-4 md:p-5 border-b border-gray-200 dark:border-gray-700 flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900 dark:text-white">{productRow.product.name}</h3>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                            Product ID: {productRow.product.id} • SKU: {productRow.product.sku || '—'} {productRow.product.is_archived ? '• Archived' : ''}
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 min-w-full lg:min-w-[420px]">
+                          {[
+                            ['Reserved total', productRow.reserved_product.total_inventory],
+                            ['Reserved held', productRow.reserved_product.reserved_inventory],
+                            ['Reserved free', productRow.reserved_product.available_inventory],
+                          ].map(([label, value]) => (
+                            <div key={String(label)} className="rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-2 py-2 text-center">
+                              <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</p>
+                              <p className="text-lg font-bold text-gray-900 dark:text-white">{String(value)}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="p-4 md:p-5 space-y-4">
+                        <div className="grid grid-cols-2 md:grid-cols-6 gap-2">
+                          {[
+                            ['Total orders', productRow.order_summary.total_order_count],
+                            ['Total qty ordered', productRow.order_summary.total_order_quantity],
+                            ['Open orders', productRow.order_summary.open_order_count],
+                            ['Open qty', productRow.order_summary.open_order_quantity],
+                            ['No barcode', productRow.order_summary.open_no_barcode_order_count],
+                            ['Shipped no barcode', productRow.order_summary.shipped_without_barcode_count],
+                          ].map(([label, value]) => (
+                            <div key={String(label)} className="rounded-lg bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 px-3 py-2">
+                              <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</p>
+                              <p className="text-lg font-bold text-gray-900 dark:text-white">{String(value)}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {productRow.stores.map((store) => (
+                          <div key={`${productRow.product.id}-${store.store_id}`} className={`rounded-xl border p-4 ${store.available_quantity > 0 ? 'border-green-200 dark:border-green-900 bg-green-50/50 dark:bg-green-900/10' : 'border-amber-200 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-900/10'}`}>
+                            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <StoreIcon className="h-4 w-4 text-gray-500" />
+                                  <h4 className="font-bold text-gray-900 dark:text-white">{store.store_name}</h4>
+                                  <span className="text-xs px-2 py-1 rounded-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300">
+                                    {store.store_type || 'store'}
+                                  </span>
+                                  {store.no_barcode_order_count > 0 && (
+                                    <span className="text-xs px-2 py-1 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300">
+                                      {store.no_barcode_order_count} no-barcode orders
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">{store.store_address || 'No address'}</p>
+                              </div>
+                              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 min-w-full lg:min-w-[620px]">
+                                {[
+                                  ['Physical', store.physical_quantity],
+                                  ['Sellable BC', store.sellable_barcode_quantity],
+                                  ['Held no BC', store.unbarcoded_assigned_quantity],
+                                  ['Available', store.available_quantity],
+                                  ['Open qty', store.open_order_quantity],
+                                  ['Shipped no BC', store.shipped_without_barcode_count],
+                                ].map(([label, value]) => (
+                                  <div key={String(label)} className="rounded-lg bg-white/70 dark:bg-black/20 border border-white dark:border-gray-700 px-2 py-2 text-center">
+                                    <p className="text-[10px] uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</p>
+                                    <p className="text-lg font-bold text-gray-900 dark:text-white">{String(value)}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {store.no_barcode_orders.length > 0 && (
+                              <div className="mt-4 overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+                                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700 text-sm">
+                                  <thead className="bg-gray-50 dark:bg-gray-800">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Order</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Status</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Qty</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Inventory deducted?</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Customer</th>
+                                      <th className="px-3 py-2 text-left font-semibold text-gray-600 dark:text-gray-300">Created</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                                    {store.no_barcode_orders.map((order) => (
+                                      <tr key={`${order.order_id}-${order.order_item_id}`} className="hover:bg-gray-50 dark:hover:bg-gray-800/60">
+                                        <td className="px-3 py-2 font-semibold text-gray-900 dark:text-white">
+                                          <Link href={`/orders?search=${encodeURIComponent(order.order_number)}`} className="hover:underline">
+                                            {order.order_number}
+                                          </Link>
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <span className={`text-xs px-2 py-1 rounded-full ${statusClass(order.status)}`}>{order.status}</span>
+                                        </td>
+                                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{order.quantity}</td>
+                                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">{order.is_inventory_deducted ? 'Yes' : 'No'}</td>
+                                        <td className="px-3 py-2 text-gray-700 dark:text-gray-300">
+                                          {order.customer_name || '—'} {order.customer_phone ? `(${order.customer_phone})` : ''}
+                                        </td>
+                                        <td className="px-3 py-2 text-gray-500 dark:text-gray-400">
+                                          {order.created_at ? new Date(order.created_at).toLocaleString() : '—'}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {diagnostic && (
                 <>

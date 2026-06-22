@@ -194,6 +194,89 @@ export interface AssignmentBlockerResponse {
   };
 }
 
+
+export interface ProductAssignmentDiagnosticStore {
+  store_id: number;
+  store_name: string;
+  store_address?: string;
+  store_code?: string | null;
+  store_type?: string;
+  is_warehouse?: boolean;
+  is_online?: boolean;
+  physical_quantity: number;
+  batch_physical_quantity: number;
+  sellable_barcode_quantity: number;
+  stock_source?: string | null;
+  assigned_quantity: number;
+  unbarcoded_assigned_quantity: number;
+  assigned_quantity_subtracted: number;
+  free_physical_quantity: number;
+  available_quantity: number;
+  can_fulfill_one: boolean;
+  open_order_count: number;
+  open_order_quantity: number;
+  no_barcode_order_count: number;
+  no_barcode_quantity: number;
+  shipped_without_barcode_count: number;
+  shipped_without_barcode_quantity: number;
+  assigned_without_barcode_count: number;
+  assigned_without_barcode_quantity: number;
+  barcoded_open_order_count: number;
+  barcoded_open_quantity: number;
+  no_barcode_orders: AssignmentBlockingOrder[];
+}
+
+export interface ProductAssignmentDiagnosticProduct {
+  product: {
+    id: number;
+    sku?: string | null;
+    name: string;
+    base_name?: string | null;
+    variation_suffix?: string | null;
+    selling_price?: string | number | null;
+    stock_quantity?: string | number | null;
+    online_stock_quantity?: string | number | null;
+    offline_stock_quantity?: string | number | null;
+    reserved_stock_quantity?: string | number | null;
+    is_archived?: boolean;
+    created_at?: string;
+    updated_at?: string;
+  };
+  reserved_product: {
+    total_inventory: number;
+    reserved_inventory: number;
+    available_inventory: number;
+    updated_at?: string | null;
+  };
+  order_summary: {
+    total_order_count: number;
+    total_order_line_count: number;
+    total_order_quantity: number;
+    open_order_count: number;
+    open_order_quantity: number;
+    open_no_barcode_order_count: number;
+    open_no_barcode_quantity: number;
+    shipped_without_barcode_count: number;
+    shipped_without_barcode_quantity: number;
+    assigned_without_barcode_count: number;
+    assigned_without_barcode_quantity: number;
+  };
+  stores: ProductAssignmentDiagnosticStore[];
+}
+
+export interface ProductAssignmentDiagnosticsResponse {
+  search: string;
+  released_statuses: string[];
+  products: ProductAssignmentDiagnosticProduct[];
+  summary: {
+    product_matches: number;
+    stores_checked: number;
+    open_no_barcode_orders: number;
+    open_no_barcode_quantity: number;
+    shipped_without_barcode_orders: number;
+  };
+}
+
 export interface AssignStorePayload {
   store_id: number;
   notes?: string;
@@ -356,6 +439,37 @@ class OrderManagementService {
           error.response?.data?.error ||
           error?.message ||
           'Failed to load assignment blocker diagnostics'
+      );
+    }
+  }
+
+  /**
+   * Product-level assignment diagnostics.
+   * Search by product ID, SKU, or product name and show reserved rows plus
+   * open orders without barcode scan/lock.
+   */
+  async getProductAssignmentDiagnostics(product: string | number, storeId?: number | null): Promise<ProductAssignmentDiagnosticsResponse> {
+    const productValue = String(product || '').trim();
+    if (!productValue) {
+      throw new Error('Please enter a product ID, SKU, or product name');
+    }
+
+    try {
+      const response = await axiosInstance.get('/order-management/assignment-blockers/product', {
+        params: {
+          product: productValue,
+          ...(storeId ? { store_id: storeId } : {}),
+        },
+      });
+
+      return response.data?.data;
+    } catch (error: any) {
+      console.error('❌ Failed to load product assignment diagnostics:', error?.response?.data || error);
+      throw new Error(
+        error.response?.data?.message ||
+          error.response?.data?.error ||
+          error?.message ||
+          'Failed to load product assignment diagnostics'
       );
     }
   }
