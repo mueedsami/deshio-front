@@ -106,6 +106,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'Price Adjustment', href: '/inventory/batch-price-update' },
         { label: 'Barcode Relabeling', href: '/inventory/barcode-relabel' },
         { label: 'Barcode Rescue', href: '/inventory/revive-barcodes' },
+        { label: 'Assignment Blockers', href: '/inventory/assignment-blockers' },
         { label: 'Free Reserved Products', href: '/inventory/free-reserve-products' },
         { label: 'Delete Bulk Batch', href: '/inventory/deleteBulkBatch' },
         { label: 'Deleted Batch Report', href: '/inventory/deleted-batch-report' },
