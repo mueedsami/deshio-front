@@ -19,11 +19,139 @@ interface Toast {
   type: 'success' | 'error';
 }
 
+interface PaginationMeta {
+  current_page: number;
+  last_page: number;
+  per_page: number;
+  total: number;
+  from: number | null;
+  to: number | null;
+}
+
+const defaultPagination: PaginationMeta = {
+  current_page: 1,
+  last_page: 1,
+  per_page: 20,
+  total: 0,
+  from: null,
+  to: null,
+};
+
 function parseAmount(value: unknown): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   const normalized = String(value ?? '').replace(/[^\d.-]/g, '');
   const amount = Number(normalized);
   return Number.isFinite(amount) ? amount : 0;
+}
+
+function buildVisiblePages(current: number, last: number): Array<number | 'ellipsis'> {
+  if (last <= 7) return Array.from({ length: last }, (_, index) => index + 1);
+
+  const pages: Array<number | 'ellipsis'> = [1];
+  const start = Math.max(2, current - 1);
+  const end = Math.min(last - 1, current + 1);
+
+  if (start > 2) pages.push('ellipsis');
+  for (let page = start; page <= end; page += 1) pages.push(page);
+  if (end < last - 1) pages.push('ellipsis');
+  pages.push(last);
+
+  return pages;
+}
+
+function DispatchPagination({
+  pagination,
+  loading,
+  perPage,
+  onPageChange,
+  onPerPageChange,
+}: {
+  pagination: PaginationMeta;
+  loading: boolean;
+  perPage: number;
+  onPageChange: (page: number) => void;
+  onPerPageChange: (perPage: number) => void;
+}) {
+  const current = pagination.current_page || 1;
+  const last = Math.max(1, pagination.last_page || 1);
+  const total = pagination.total || 0;
+  const pages = buildVisiblePages(current, last);
+
+  return (
+    <div className="mt-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="text-sm text-gray-600 dark:text-gray-400">
+          {total > 0 ? (
+            <>
+              Showing <span className="font-semibold text-gray-900 dark:text-white">{pagination.from || 1}</span>
+              {' '}to <span className="font-semibold text-gray-900 dark:text-white">{pagination.to || 0}</span>
+              {' '}of <span className="font-semibold text-gray-900 dark:text-white">{total}</span> dispatches
+            </>
+          ) : (
+            'No dispatches to show'
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+            Per page
+            <select
+              value={perPage}
+              onChange={(event) => onPerPageChange(Number(event.target.value))}
+              disabled={loading}
+              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+            >
+              {[10, 20, 50, 100].map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => onPageChange(current - 1)}
+              disabled={loading || current <= 1}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Previous
+            </button>
+
+            {pages.map((page, index) => (
+              page === 'ellipsis' ? (
+                <span key={`ellipsis-${index}`} className="px-2 text-gray-400">…</span>
+              ) : (
+                <button
+                  key={page}
+                  type="button"
+                  onClick={() => onPageChange(page)}
+                  disabled={loading || page === current}
+                  className={`min-w-[38px] px-3 py-2 text-sm rounded-lg border transition-colors ${
+                    page === current
+                      ? 'border-blue-600 bg-blue-600 text-white'
+                      : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700'
+                  } disabled:cursor-default`}
+                >
+                  {page}
+                </button>
+              )
+            ))}
+
+            <button
+              type="button"
+              onClick={() => onPageChange(current + 1)}
+              disabled={loading || current >= last}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function DispatchManagementPage() {
@@ -46,6 +174,9 @@ export default function DispatchManagementPage() {
   const [filterDestStore, setFilterDestStore] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [loading, setLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [perPage, setPerPage] = useState(20);
+  const [pagination, setPagination] = useState<PaginationMeta>(defaultPagination);
 
   const showToast = (message: string, type: 'success' | 'error') => {
     const id = Date.now();
@@ -61,13 +192,12 @@ export default function DispatchManagementPage() {
 
   useEffect(() => {
     fetchStores();
-    fetchDispatches();
     fetchStatistics();
   }, []);
 
   useEffect(() => {
     fetchDispatches();
-  }, [filterStatus, filterSourceStore, filterDestStore]);
+  }, [filterStatus, filterSourceStore, filterDestStore, searchTerm, currentPage, perPage]);
 
   const fetchStores = async () => {
     try {
@@ -83,15 +213,36 @@ export default function DispatchManagementPage() {
   const fetchDispatches = async () => {
     try {
       setLoading(true);
-      const filters: any = {};
+      const filters: any = {
+        page: currentPage,
+        per_page: perPage,
+      };
       
       if (filterStatus) filters.status = filterStatus;
       if (filterSourceStore) filters.source_store_id = parseInt(filterSourceStore);
       if (filterDestStore) filters.destination_store_id = parseInt(filterDestStore);
-      if (searchTerm) filters.search = searchTerm;
+      if (searchTerm.trim()) filters.search = searchTerm.trim();
       
       const response = await dispatchService.getDispatches(filters);
-      setDispatches(response.data.data || []);
+      const candidates = [response?.data?.data, response?.data, response];
+      const paginatedPayload = candidates.find((candidate) => (
+        candidate &&
+        !Array.isArray(candidate) &&
+        (Array.isArray(candidate.data) || candidate.current_page !== undefined || candidate.total !== undefined)
+      ));
+      const arrayPayload = candidates.find((candidate) => Array.isArray(candidate));
+      const payload = paginatedPayload || { data: arrayPayload || [] };
+      const rows = Array.isArray(payload.data) ? payload.data : [];
+
+      setDispatches(rows);
+      setPagination({
+        current_page: Number(payload.current_page ?? currentPage),
+        last_page: Number(payload.last_page ?? 1),
+        per_page: Number(payload.per_page ?? perPage),
+        total: Number(payload.total ?? rows.length),
+        from: payload.from ?? (rows.length ? 1 : null),
+        to: payload.to ?? rows.length,
+      });
     } catch (error) {
       console.error('Error fetching dispatches:', error);
       showToast('Failed to load dispatches', 'error');
@@ -108,6 +259,23 @@ export default function DispatchManagementPage() {
       console.error('Error fetching statistics:', error);
       showToast('Failed to load statistics', 'error');
     }
+  };
+
+  const resetToFirstPage = () => {
+    setCurrentPage(1);
+  };
+
+  const handlePageChange = (page: number) => {
+    const lastPage = Math.max(1, pagination.last_page || 1);
+    const safePage = Math.min(Math.max(1, page), lastPage);
+    if (safePage !== currentPage) {
+      setCurrentPage(safePage);
+    }
+  };
+
+  const handlePerPageChange = (value: number) => {
+    setPerPage(value);
+    setCurrentPage(1);
   };
 
   const handleCreateDispatch = async (data: any) => {
@@ -134,6 +302,7 @@ export default function DispatchManagementPage() {
 
       showToast('Dispatch created successfully', 'success');
       setShowCreateModal(false);
+      setCurrentPage(1);
       fetchDispatches();
       fetchStatistics();
     } catch (error: any) {
@@ -372,13 +541,25 @@ export default function DispatchManagementPage() {
             {/* Filters */}
             <DispatchFilters
               searchTerm={searchTerm}
-              setSearchTerm={setSearchTerm}
+              setSearchTerm={(value) => {
+                setSearchTerm(value);
+                resetToFirstPage();
+              }}
               filterStatus={filterStatus}
-              setFilterStatus={setFilterStatus}
+              setFilterStatus={(value) => {
+                setFilterStatus(value);
+                resetToFirstPage();
+              }}
               filterSourceStore={filterSourceStore}
-              setFilterSourceStore={setFilterSourceStore}
+              setFilterSourceStore={(value) => {
+                setFilterSourceStore(value);
+                resetToFirstPage();
+              }}
               filterDestStore={filterDestStore}
-              setFilterDestStore={setFilterDestStore}
+              setFilterDestStore={(value) => {
+                setFilterDestStore(value);
+                resetToFirstPage();
+              }}
               stores={stores}
             />
 
@@ -393,6 +574,14 @@ export default function DispatchManagementPage() {
               onCancel={handleCancel}
               onScanBarcodes={handleScanBarcodes}
               currentStoreId={store?.id}
+            />
+
+            <DispatchPagination
+              pagination={pagination}
+              loading={loading}
+              perPage={perPage}
+              onPageChange={handlePageChange}
+              onPerPageChange={handlePerPageChange}
             />
           </main>
         </div>
