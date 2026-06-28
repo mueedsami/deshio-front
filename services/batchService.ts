@@ -149,6 +149,60 @@ export interface BulkBatchPriceUpdateData {
 }
 
 
+
+export interface DeletedBatchReportBarcode {
+  deleted_record_id: number;
+  product_barcode_id: number;
+  barcode: string | null;
+  current_status: string | null;
+  is_active: boolean;
+  is_defective: boolean;
+  deleted_at: string | null;
+}
+
+export interface DeletedBatchReportRow {
+  product: { id: number | null; name: string; sku?: string | null };
+  deleted_batch: { id: number | null; batch_number?: string | null };
+  store: { id: number | null; name?: string | null };
+  purchase_order: { id: number | null; number?: string | null };
+  deleted_stock: number;
+  barcodes_logged: number;
+  barcodes_returned: number;
+  first_deleted_at: string | null;
+  last_deleted_at: string | null;
+  barcodes: DeletedBatchReportBarcode[];
+}
+
+export interface DeletedBatchReportSummary {
+  total_report_groups: number;
+  total_products: number;
+  total_deleted_batches: number;
+  total_deleted_barcodes: number;
+  stock_rule?: string;
+}
+
+export interface DeletedBatchReportFilters {
+  search?: string;
+  product_id?: number | string;
+  store_id?: number | string;
+  date_from?: string;
+  date_to?: string;
+  page?: number;
+  per_page?: number;
+  barcode_limit?: number;
+}
+
+export interface DeletedBatchReportResponse {
+  current_page: number;
+  data: DeletedBatchReportRow[];
+  from: number | null;
+  last_page: number;
+  per_page: number;
+  to: number | null;
+  total: number;
+  summary: DeletedBatchReportSummary;
+}
+
 export interface BulkDeleteBatchPreviewRequest {
   product_id: number;
   store_id: number;
@@ -391,6 +445,15 @@ class BatchService {
     const response = await axios.get('/batches/statistics', {
       params: { store_id: storeId }
     });
+    return response.data;
+  }
+
+
+  /**
+   * Deleted batch report: products, deleted stock counts and preserved old barcodes.
+   */
+  async getDeletedBatchReport(filters?: DeletedBatchReportFilters): Promise<ApiResponse<DeletedBatchReportResponse>> {
+    const response = await axios.get('/batches/deleted-report', { params: filters });
     return response.data;
   }
 

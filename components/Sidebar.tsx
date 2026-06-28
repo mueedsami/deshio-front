@@ -110,6 +110,7 @@ export default function Sidebar({ isOpen, setIsOpen }: SidebarProps) {
         { label: 'Delete Bulk Batch', href: '/inventory/deleteBulkBatch' },
         { label: 'Deleted Batch Report', href: '/inventory/deleted-batch-report' },
         { label: 'Dispatches', href: '/inventory/outlet-stock' },
+        { label: 'Dispatch RTN Repair', href: '/inventory/dispatch-rtn-repair' },
         { label: 'Reports', href: '/inventory/reports' },
         { label: 'Project Report', href: '/inventory/project-report' },
       ],
