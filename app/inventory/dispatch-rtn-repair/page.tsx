@@ -23,11 +23,12 @@ import dispatchRtnRepairService, {
   type DispatchRtnRepairSummaryResponse,
   type DispatchRtnBatchRow,
   type FullyReceivedDispatchRow,
+  type DispatchRtnProductDetail,
 } from '@/services/dispatchRtnRepairService';
 
 type ToastState = { id: number; message: string; type: 'success' | 'error' | 'warning' | 'info' };
 
-type RunMode = 'dry-current' | 'apply-current' | 'dry-products' | 'apply-products' | null;
+type RunMode = 'dry-current' | 'apply-current' | 'dry-products' | 'apply-products' | 'dry-product' | 'apply-product' | null;
 
 const formatDateTime = (value?: string | null): string => {
   if (!value) return '—';
@@ -118,6 +119,7 @@ export default function DispatchRtnRepairPage() {
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [runMode, setRunMode] = useState<RunMode>(null);
   const [commandOutput, setCommandOutput] = useState('No command run yet.');
+  const [runningProductId, setRunningProductId] = useState<number | null>(null);
 
   const addToast = useCallback((message: string, type: ToastState['type'] = 'info') => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -147,6 +149,9 @@ export default function DispatchRtnRepairPage() {
 
   const affectedProductIds = useMemo(() => {
     const ids = new Set<number>();
+    (summary?.product_details || []).forEach((row) => {
+      if (row.product_id) ids.add(Number(row.product_id));
+    });
     (summary?.rtn_batches || []).forEach((row) => {
       if (row.product_id) ids.add(Number(row.product_id));
     });
@@ -228,6 +233,34 @@ export default function DispatchRtnRepairPage() {
       );
       await loadSummary();
     } finally {
+      setRunMode(null);
+    }
+  };
+
+
+
+  const runOneProduct = async (id: number, apply: boolean) => {
+    const mode: RunMode = apply ? 'apply-product' : 'dry-product';
+    setRunMode(mode);
+    setRunningProductId(id);
+    try {
+      const data = await dispatchRtnRepairService.runRepair({ apply, product_id: id });
+      setCommandOutput([
+        `========== PRODUCT ${id} ==========`,
+        data.command || `php artisan inventory:repair-dispatch-rtn --product_id=${id}${apply ? ' --apply' : ''}`,
+        `Executed at: ${data.executed_at || '—'}`,
+        `Applied: ${data.applied ? 'yes' : 'no'}`,
+        '',
+        data.output || 'No command output returned.',
+      ].join('\n'));
+      addToast(data.message || (apply ? `Product ${id} repaired.` : `Dry run finished for product ${id}.`), data.success ? 'success' : 'error');
+      await loadSummary();
+    } catch (error: any) {
+      const message = error?.response?.data?.message || error?.message || `Repair failed for product ${id}.`;
+      setCommandOutput((prev) => `${prev}\n\n========== PRODUCT ${id} ERROR ==========\n${message}`);
+      addToast(message, 'error');
+    } finally {
+      setRunningProductId(null);
       setRunMode(null);
     }
   };
@@ -356,6 +389,16 @@ export default function DispatchRtnRepairPage() {
                 <StatCard label="Ready dispatches" value={summaryCounts?.fully_received_in_transit_dispatches_shown ?? '—'} helper="received but not finalized" tone={(summaryCounts?.fully_received_in_transit_dispatches_shown || 0) > 0 ? 'warning' : 'success'} />
               </section>
 
+              <DataPanel title="Product-wise verification and individual repair" subtitle="Review every affected product before applying anything. Each card shows all batches, all barcodes, detected issues, and its own Dry run/Fix buttons.">
+                <ProductDetailsPanel
+                  details={summary?.product_details || []}
+                  isBusy={isBusy}
+                  runningProductId={runningProductId}
+                  runMode={runMode}
+                  onRunProduct={runOneProduct}
+                />
+              </DataPanel>
+
               <section className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 p-4 lg:p-5 shadow-sm">
                 <div className="flex flex-col xl:flex-row xl:items-end gap-4">
                   <div className="flex-1">
@@ -465,6 +508,286 @@ export default function DispatchRtnRepairPage() {
           </main>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+function SeverityBadge({ severity }: { severity?: string }) {
+  const sev = severity || 'medium';
+  const cls = sev === 'high'
+    ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300'
+    : sev === 'low'
+      ? 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+      : 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300';
+  return <span className={`rounded-full px-2 py-1 text-[11px] font-bold uppercase ${cls}`}>{sev}</span>;
+}
+
+function TypeBadge({ label }: { label?: string }) {
+  const value = label || 'normal';
+  const cls = value === 'RTN'
+    ? 'bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300'
+    : value === 'dispatch-chain'
+      ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300'
+      : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300';
+  return <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${cls}`}>{value}</span>;
+}
+
+function ProductDetailsPanel({
+  details,
+  isBusy,
+  runningProductId,
+  runMode,
+  onRunProduct,
+}: {
+  details: DispatchRtnProductDetail[];
+  isBusy: boolean;
+  runningProductId: number | null;
+  runMode: RunMode;
+  onRunProduct: (productId: number, apply: boolean) => void;
+}) {
+  if (!details.length) {
+    return <EmptyRows label="Load summary to see full product-wise batch/barcode details." />;
+  }
+
+  return (
+    <div className="divide-y divide-gray-200 dark:divide-gray-800">
+      {details.map((detail) => (
+        <ProductDetailCard
+          key={detail.product_id}
+          detail={detail}
+          isBusy={isBusy}
+          runningProductId={runningProductId}
+          runMode={runMode}
+          onRunProduct={onRunProduct}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProductDetailCard({
+  detail,
+  isBusy,
+  runningProductId,
+  runMode,
+  onRunProduct,
+}: {
+  detail: DispatchRtnProductDetail;
+  isBusy: boolean;
+  runningProductId: number | null;
+  runMode: RunMode;
+  onRunProduct: (productId: number, apply: boolean) => void;
+}) {
+  const isRunningThis = runningProductId === detail.product_id;
+  const issueTone = detail.issue_count > 0
+    ? 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900/70'
+    : 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900/70';
+
+  return (
+    <details className="group" open={detail.issue_count > 0}>
+      <summary className={`cursor-pointer list-none p-4 lg:p-5 border-l-4 ${issueTone}`}>
+        <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold text-gray-500 dark:text-gray-400">Product ID {detail.product_id}</span>
+              {detail.issue_count > 0 ? (
+                <span className="rounded-full bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 px-2 py-1 text-xs font-bold">{detail.issue_count} issue(s)</span>
+              ) : (
+                <span className="rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 px-2 py-1 text-xs font-bold">clean</span>
+              )}
+              {detail.is_archived && <span className="rounded-full bg-gray-200 dark:bg-gray-800 px-2 py-1 text-xs font-bold text-gray-700 dark:text-gray-300">archived</span>}
+            </div>
+            <h3 className="mt-1 text-base lg:text-lg font-bold text-gray-900 dark:text-white truncate">
+              {detail.name || 'Unnamed product'}
+            </h3>
+            <div className="mt-1 flex flex-wrap gap-2 text-xs text-gray-600 dark:text-gray-400">
+              <span>SKU: <b>{detail.sku || '—'}</b></span>
+              {detail.brand && <span>Brand: <b>{detail.brand}</b></span>}
+              <span>Batches: <b>{detail.batch_count}</b></span>
+              <span>Barcodes: <b>{detail.barcode_count}</b></span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={(event) => {
+                event.preventDefault();
+                onRunProduct(detail.product_id, false);
+              }}
+              className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-blue-300 dark:border-blue-800 text-sm font-bold text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 disabled:opacity-60"
+            >
+              {isRunningThis && runMode === 'dry-product' ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageSearch className="w-4 h-4" />}
+              Dry run this product
+            </button>
+            <button
+              type="button"
+              disabled={isBusy || !detail.can_fix_individually}
+              onClick={(event) => {
+                event.preventDefault();
+                if (window.confirm(`Apply repair only for product ${detail.product_id}?`)) {
+                  onRunProduct(detail.product_id, true);
+                }
+              }}
+              className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-sm font-bold"
+            >
+              {isRunningThis && runMode === 'apply-product' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              Fix this product
+            </button>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-gray-600 dark:text-gray-400">{detail.recommended_action}</p>
+      </summary>
+
+      <div className="p-4 lg:p-5 space-y-5 bg-white dark:bg-gray-900">
+        <div>
+          <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-2">Detected issues</h4>
+          <IssueList issues={detail.issues} />
+        </div>
+
+        <div>
+          <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-2">Batch truth vs barcode truth</h4>
+          <ProductBatchDetailTable rows={detail.batches} />
+        </div>
+
+        <div>
+          <h4 className="text-sm font-bold text-gray-900 dark:text-white mb-2">All product barcodes</h4>
+          <ProductBarcodeDetailTable rows={detail.barcodes} />
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function IssueList({ issues }: { issues: DispatchRtnProductDetail['issues'] }) {
+  if (!issues.length) {
+    return <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/20 px-4 py-3 text-sm font-semibold text-emerald-700 dark:text-emerald-300">No issue detected for this product in the current summary.</div>;
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+      {issues.map((issue, index) => (
+        <div key={`${issue.type}-${issue.batch_id || 'b'}-${issue.barcode_id || 'c'}-${index}`} className="rounded-xl border border-gray-200 dark:border-gray-800 p-3">
+          <div className="flex items-center gap-2">
+            <SeverityBadge severity={issue.severity} />
+            <span className="text-sm font-bold text-gray-900 dark:text-white">{issue.type}</span>
+          </div>
+          <p className="mt-2 text-xs text-gray-600 dark:text-gray-400 leading-relaxed">{issue.message}</p>
+          <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-500 font-mono">
+            {issue.batch_id ? `batch ${issue.batch_id}` : ''}{issue.batch_id && issue.barcode_id ? ' | ' : ''}{issue.barcode_id ? `barcode ${issue.barcode_id}` : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ProductBatchDetailTable({ rows }: { rows: DispatchRtnProductDetail['batches'] }) {
+  if (!rows.length) return <EmptyRows label="No batches found for this product." />;
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-800">
+      <table className="min-w-full text-sm">
+        <thead className="bg-gray-50 dark:bg-gray-800/80 text-xs uppercase text-gray-500 dark:text-gray-400">
+          <tr>
+            <th className="px-3 py-3 text-left">Batch</th>
+            <th className="px-3 py-3 text-left">Type</th>
+            <th className="px-3 py-3 text-left">Store</th>
+            <th className="px-3 py-3 text-right">Qty</th>
+            <th className="px-3 py-3 text-right">Should be</th>
+            <th className="px-3 py-3 text-right">Linked barcodes</th>
+            <th className="px-3 py-3 text-left">barcode_id</th>
+            <th className="px-3 py-3 text-left">Issue</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+          {rows.map((row) => {
+            const hasIssue = row.quantity_mismatch || row.availability_mismatch || row.active_mismatch || row.barcode_pointer_mismatch;
+            return (
+              <tr key={row.batch_id} className={hasIssue ? 'bg-amber-50/60 dark:bg-amber-950/10 text-gray-800 dark:text-gray-100' : 'text-gray-700 dark:text-gray-200'}>
+                <td className="px-3 py-3 align-top">
+                  <div className="font-mono text-xs font-semibold max-w-[360px] break-all">{row.batch_number}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-500">ID: {row.batch_id}</div>
+                </td>
+                <td className="px-3 py-3 align-top"><TypeBadge label={row.type} /></td>
+                <td className="px-3 py-3 align-top text-xs">{row.store_name || `Store ${row.store_id}`}<br /><span className="text-gray-500">ID: {row.store_id}</span></td>
+                <td className="px-3 py-3 align-top text-right font-bold">{row.quantity}</td>
+                <td className="px-3 py-3 align-top text-right font-bold">{row.computed_quantity}</td>
+                <td className="px-3 py-3 align-top text-right text-xs">total {row.linked_barcode_count}<br />sellable here {row.sellable_barcode_count_here}</td>
+                <td className="px-3 py-3 align-top text-xs font-mono">
+                  {row.barcode_id ?? 'null'} → {row.computed_barcode_id ?? 'null'}
+                </td>
+                <td className="px-3 py-3 align-top text-xs max-w-[320px]">
+                  {hasIssue ? (
+                    <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                      {[row.quantity_mismatch ? 'qty' : null, row.availability_mismatch ? 'availability' : null, row.active_mismatch ? 'active' : null, row.barcode_pointer_mismatch ? 'barcode_id' : null].filter(Boolean).join(', ')}
+                      {row.stale_pointer_reason ? ` — ${row.stale_pointer_reason}` : ''}
+                    </span>
+                  ) : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ProductBarcodeDetailTable({ rows }: { rows: DispatchRtnProductDetail['barcodes'] }) {
+  if (!rows.length) return <EmptyRows label="No barcode rows found for this product." />;
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-800">
+      <table className="min-w-full text-sm">
+        <thead className="bg-gray-50 dark:bg-gray-800/80 text-xs uppercase text-gray-500 dark:text-gray-400">
+          <tr>
+            <th className="px-3 py-3 text-left">Barcode</th>
+            <th className="px-3 py-3 text-left">Current store/status</th>
+            <th className="px-3 py-3 text-left">Current batch</th>
+            <th className="px-3 py-3 text-left">Flags</th>
+            <th className="px-3 py-3 text-left">Suggested target</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
+          {rows.map((row) => {
+            const hasIssue = row.inside_rtn_batch || row.store_batch_mismatch || !row.sellable;
+            return (
+              <tr key={row.barcode_id} className={hasIssue ? 'bg-amber-50/60 dark:bg-amber-950/10 text-gray-800 dark:text-gray-100' : 'text-gray-700 dark:text-gray-200'}>
+                <td className="px-3 py-3 align-top">
+                  <div className="font-mono text-xs font-bold">{row.barcode}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-500">ID: {row.barcode_id}</div>
+                </td>
+                <td className="px-3 py-3 align-top text-xs">
+                  {row.current_store_name || (row.current_store_id ? `Store ${row.current_store_id}` : '—')}<br />
+                  <span className="font-semibold">{row.current_status || '—'}</span>
+                </td>
+                <td className="px-3 py-3 align-top">
+                  <div className="font-mono text-xs max-w-[360px] break-all">{row.batch_number || '—'}</div>
+                  <div className="text-[11px] text-gray-500 dark:text-gray-500">batch store: {row.batch_store_id ?? '—'} | batch id: {row.batch_id ?? '—'}</div>
+                </td>
+                <td className="px-3 py-3 align-top text-xs space-y-1">
+                  <div>sellable: <b>{yesNo(row.sellable)}</b></div>
+                  <div>inside RTN: <b>{yesNo(row.inside_rtn_batch)}</b></div>
+                  <div>store mismatch: <b>{yesNo(row.store_batch_mismatch)}</b></div>
+                  {row.is_defective && <div className="text-red-600 dark:text-red-300 font-bold">defective</div>}
+                  {row.is_replacement && <div className="text-purple-600 dark:text-purple-300 font-bold">replacement</div>}
+                </td>
+                <td className="px-3 py-3 align-top text-xs">
+                  {row.suggested_target_batch_number ? (
+                    <>
+                      <div className="font-mono max-w-[320px] break-all">{row.suggested_target_batch_number}</div>
+                      <div className="text-gray-500 dark:text-gray-500">ID: {row.suggested_target_batch_id}</div>
+                    </>
+                  ) : '—'}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

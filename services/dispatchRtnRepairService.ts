@@ -21,6 +21,8 @@ export interface DispatchRtnRepairSummaryCounts {
   batch_quantity_mismatch_count_shown: number;
   batch_barcode_pointer_mismatch_count_shown?: number;
   fully_received_in_transit_dispatches_shown: number;
+  product_detail_count?: number;
+  individual_fix_available_count?: number;
 }
 
 export interface DispatchRtnBatchRow {
@@ -76,6 +78,78 @@ export interface FullyReceivedDispatchRow {
   updated_at?: string | null;
 }
 
+
+export interface DispatchRtnProductIssueRow {
+  type: string;
+  severity: 'low' | 'medium' | 'high' | string;
+  batch_id?: number | null;
+  barcode_id?: number | null;
+  message: string;
+}
+
+export interface DispatchRtnProductBatchDetail {
+  batch_id: number;
+  batch_number: string;
+  store_id: number;
+  store_name?: string | null;
+  quantity: number;
+  availability: boolean;
+  is_active: boolean;
+  barcode_id?: number | null;
+  cost_price?: number;
+  sell_price?: number;
+  type: 'RTN' | 'dispatch-chain' | 'normal' | string;
+  linked_barcode_count: number;
+  sellable_barcode_count_here: number;
+  computed_quantity: number;
+  computed_availability: boolean;
+  computed_is_active: boolean;
+  computed_barcode_id?: number | null;
+  quantity_mismatch: boolean;
+  availability_mismatch: boolean;
+  active_mismatch: boolean;
+  barcode_pointer_mismatch: boolean;
+  stale_pointer_reason?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DispatchRtnProductBarcodeDetail {
+  barcode_id: number;
+  barcode: string;
+  batch_id?: number | null;
+  batch_number?: string | null;
+  batch_store_id?: number | null;
+  current_store_id?: number | null;
+  current_store_name?: string | null;
+  current_status?: string | null;
+  is_active: boolean;
+  is_defective: boolean;
+  is_replacement: boolean;
+  sellable: boolean;
+  inside_rtn_batch: boolean;
+  store_batch_mismatch: boolean;
+  suggested_target_batch_id?: number | null;
+  suggested_target_batch_number?: string | null;
+  updated_at?: string | null;
+}
+
+export interface DispatchRtnProductDetail {
+  product_id: number;
+  sku?: string | null;
+  name?: string | null;
+  brand?: string | null;
+  is_archived?: boolean;
+  batch_count: number;
+  barcode_count: number;
+  issue_count: number;
+  can_fix_individually: boolean;
+  recommended_action?: string;
+  issues: DispatchRtnProductIssueRow[];
+  batches: DispatchRtnProductBatchDetail[];
+  barcodes: DispatchRtnProductBarcodeDetail[];
+}
+
 export interface DispatchRtnRepairSummaryResponse {
   success: boolean;
   message: string;
@@ -90,6 +164,7 @@ export interface DispatchRtnRepairSummaryResponse {
   barcodes_still_inside_rtn_batches: DispatchRtnBarcodeRow[];
   batch_quantity_mismatches: DispatchRtnMismatchRow[];
   fully_received_in_transit_dispatches: FullyReceivedDispatchRow[];
+  product_details?: DispatchRtnProductDetail[];
 }
 
 export interface DispatchRtnRepairRunResponse {
