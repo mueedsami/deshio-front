@@ -193,8 +193,8 @@ function posReceiptBody(order: any) {
       return `<tr>
         <td class="left">${escapeHtml(name)}</td>
         <td class="center">${escapeHtml(String(it.qty))}</td>
-        <td class="right">${escapeHtml(money(displayUnitValue))}</td>
-        <td class="right">${escapeHtml(money(displayAmount))}</td>
+        <td class="right"><strong class="amount-value">${escapeHtml(money(displayUnitValue))}</strong></td>
+        <td class="right"><strong class="amount-value">${escapeHtml(money(displayAmount))}</strong></td>
       </tr>`;
     })
     .join('');
@@ -232,12 +232,12 @@ function posReceiptBody(order: any) {
           <tbody>
             ${paymentRows
               .map(
-                (p) => `<tr><td>${escapeHtml(p.label)}</td><td class="right">${escapeHtml(money(p.amount))}</td></tr>`
+                (p) => `<tr><td>${escapeHtml(p.label)}</td><td class="right"><strong class="amount-value">${escapeHtml(money(p.amount))}</strong></td></tr>`
               )
               .join('')}
             ${paymentMap.OTHERS
               .map(
-                (p) => `<tr><td>${escapeHtml(p.name)}</td><td class="right">${escapeHtml(money(p.amount))}</td></tr>`
+                (p) => `<tr><td>${escapeHtml(p.name)}</td><td class="right"><strong class="amount-value">${escapeHtml(money(p.amount))}</strong></td></tr>`
               )
               .join('')}
           </tbody>
@@ -292,14 +292,14 @@ function posReceiptBody(order: any) {
 
     <table class="totals">
       <tbody>
-        <tr><td>Subtotal</td><td class="right">${escapeHtml(money(subtotal))}</td></tr>
+        <tr><td>Subtotal</td><td class="right"><strong class="amount-value">${escapeHtml(money(subtotal))}</strong></td></tr>
         <tr><td>VAT</td><td class="right">Inclusive</td></tr>
-        <tr><td>Discount</td><td class="right">-${escapeHtml(money(discount))}</td></tr>
-        ${shipping > 0 ? `<tr><td>Shipping</td><td class="right">${escapeHtml(money(shipping))}</td></tr>` : ''}
-        <tr class="strong"><td>Net Amount</td><td class="right">${escapeHtml(money(netAmount))}</td></tr>
-        <tr><td>Paid Amount</td><td class="right">${escapeHtml(money(paid))}</td></tr>
-        <tr><td>Change Amount</td><td class="right">${escapeHtml(money(change))}</td></tr>
-        ${due > 0 ? `<tr><td>Due Amount</td><td class="right">${escapeHtml(money(due))}</td></tr>` : ''}
+        <tr><td>Discount</td><td class="right"><strong class="amount-value">-${escapeHtml(money(discount))}</strong></td></tr>
+        ${shipping > 0 ? `<tr><td>Shipping</td><td class="right"><strong class="amount-value">${escapeHtml(money(shipping))}</strong></td></tr>` : ''}
+        <tr class="strong"><td>Net Amount</td><td class="right"><strong class="amount-value">${escapeHtml(money(netAmount))}</strong></td></tr>
+        <tr><td>Paid Amount</td><td class="right"><strong class="amount-value">${escapeHtml(money(paid))}</strong></td></tr>
+        <tr><td>Change Amount</td><td class="right"><strong class="amount-value">${escapeHtml(money(change))}</strong></td></tr>
+        ${due > 0 ? `<tr><td>Due Amount</td><td class="right"><strong class="amount-value">${escapeHtml(money(due))}</strong></td></tr>` : ''}
       </tbody>
     </table>
 
@@ -395,6 +395,7 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     .left { text-align:left; }
     .center { text-align:center; }
     .right { text-align:right; }
+    .amount-value { font-weight: 800; }
 
     .totals td {
       padding: 3px 0;
