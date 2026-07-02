@@ -330,13 +330,17 @@ function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
     html, body { margin:0; padding:0; background:#fff; }
 
     body {
-      font-family: Calibri, Arial, Helvetica, sans-serif;
+      font-family: "Calibri", "Segoe UI", Arial, Helvetica, sans-serif;
       color:#111;
       font-size: 13px;
       font-weight: 700;
       line-height: 1.4;
       -webkit-print-color-adjust: exact;
       print-color-adjust: exact;
+    }
+
+    * {
+      font-family: "Calibri", "Segoe UI", Arial, Helvetica, sans-serif !important;
     }
 
     .wrap { padding: 2mm 1mm; }
