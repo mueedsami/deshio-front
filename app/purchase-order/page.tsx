@@ -18,17 +18,13 @@ import { productService, Product } from '@/services/productService';
 import categoryService, { CategoryTree } from '@/services/categoryService';
 import AccessControl from '@/components/AccessControl';
 import { useAuth } from '@/contexts/AuthContext';
+import { buildSinglePurchaseOrderPrintHtml, openPurchaseOrderPrintWindow } from '@/lib/purchaseOrderReportHtml';
 // --- Image helpers (same approach as Orders page) ---
 const getApiBaseUrl = () => {
   const raw = process.env.NEXT_PUBLIC_API_URL || '';
   return raw.replace(/\/api\/?$/, '').replace(/\/$/, '');
 };
 
-// For PDF endpoints we need the API base WITH /api
-const getApiUrlBaseWithApi = () => {
-  const raw = process.env.NEXT_PUBLIC_API_URL || '';
-  return raw.replace(/\/$/, '');
-};
 const toPublicImageUrl = (imagePath?: string | null) => {
   if (!imagePath) return null;
   const p = String(imagePath);
@@ -223,13 +219,23 @@ export default function PurchaseOrdersPage() {
   }, [selectedPO]);
 
   // ─────────────────────────────────────────────────────────
-  // PDF quick access / print layout (restored from old PO page)
+  // Frontend PO report / print layout
+  // Do not open backend PDF URLs. We fetch the same PO detail API used by the page,
+  // then generate a browser print report so the displayed/report data stays exact.
   // ─────────────────────────────────────────────────────────
-  const openPoPdf = (poId: number, inline: boolean = true) => {
-    const api = getApiUrlBaseWithApi();
-    if (!api || !poId) return;
-    const url = `${api}/purchase-orders/${poId}/pdf${inline ? '?inline=true' : ''}`;
-    window.open(url, '_blank', 'noopener,noreferrer');
+  const openPoReport = async (poId: number) => {
+    if (!poId) return;
+    setLoading(true);
+    try {
+      const res = await purchaseOrderService.getById(poId);
+      const fullPO: PurchaseOrder = (res as any)?.data?.data ?? (res as any)?.data;
+      if (!fullPO) throw new Error('Purchase order details not found');
+      openPurchaseOrderPrintWindow(buildSinglePurchaseOrderPrintHtml(fullPO));
+    } catch (error: any) {
+      showAlert('error', error?.response?.data?.message || error?.message || 'Failed to open purchase order report');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ✅ Per-batch / per-barcode printing UI helpers (inside PO details modal)
@@ -1013,10 +1019,10 @@ export default function PurchaseOrdersPage() {
               <Link
                 href="/purchase-order/reports"
                 className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-black text-white hover:bg-gray-900 text-sm"
-                title="Generate PO summary PDF report"
+                title="Open frontend PO reports"
               >
                 <FileText className="w-4 h-4" />
-                PO Reports (PDF)
+                PO Reports
               </Link>
             </div>
           </div>
@@ -1149,12 +1155,12 @@ export default function PurchaseOrdersPage() {
                           View
                         </button>
                         <button
-                          onClick={() => openPoPdf(po.id, true)}
+                          onClick={() => openPoReport(po.id)}
                           className="flex items-center gap-1 px-3 py-2 text-sm bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-900 dark:text-gray-100 rounded-lg transition-colors"
-                          title="Open PO PDF / print layout"
+                          title="Open frontend PO report / print layout"
                         >
                           <FileText className="w-4 h-4" />
-                          PDF
+                          Report
                         </button>
                         {po.status === 'draft' && (
                           <button

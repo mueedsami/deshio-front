@@ -22,6 +22,7 @@ import productService from '@/services/productService';
 import Toast from '@/components/Toast';
 import ImageLightboxModal from '@/components/ImageLightboxModal';
 import OpenOrderLockRescueWidget, { readOpenOrderLockError } from '@/components/barcode/OpenOrderLockRescueWidget';
+import MobileCameraBarcodeScanner from '@/components/barcode/MobileCameraBarcodeScanner';
 
 interface ScannedItemTracking {
   required: number;
@@ -1090,6 +1091,16 @@ if (!matchingItem) {
                         </div>
                       )}
                     </div>
+
+                    <MobileCameraBarcodeScanner
+                      enabled={isScanning}
+                      disabled={isProcessing || !orderDetails}
+                      scannerId="social-commerce-packing-camera-scanner"
+                      onScan={(barcode) => handleBarcodeScan(barcode)}
+                      buttonLabel="Scan with Mobile Camera"
+                      activeLabel="Social commerce packing camera active"
+                      helperText="Use this on mobile/tablet for packing scans. Keep manual/scanner input above for USB barcode scanners."
+                    />
                   </div>
 
                   {/* Quick Actions */}

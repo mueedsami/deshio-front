@@ -5,7 +5,14 @@ export interface AssignedOrder {
   order_number: string;
   order_type: string;
   status: string;
+  
+  // Financial fields with tax support (as per backend API)
+  subtotal: string | number;
+  tax_amount: string | number;
+  discount_amount: string | number;
+  shipping_amount: string | number;
   total_amount: string | number;
+  
   created_at: string;
   customer: {
     id: number;
@@ -29,7 +36,10 @@ export interface OrderItem {
   product_name: string;
   product_sku: string;
   quantity: number;
-  unit_price: string | number;
+  unit_price: string | number;        // Inclusive price
+  tax_amount: string | number;        // Tax for this item
+  tax_percentage?: string | number;   // Tax rate
+  total_amount: string | number;      // Item subtotal
   product_barcode_id: number | null;
   scan_status: 'scanned' | 'pending';
   available_barcodes_count: number;
@@ -115,7 +125,7 @@ class StoreFulfillmentService {
     };
   }> {
     try {
-      console.log('📦 Fetching assigned orders for store...');
+      console.log('📦 Fetching assigned orders for store...', params);
       
       const response = await axiosInstance.get('/store/fulfillment/orders/assigned', {
         params: params || { status: 'assigned_to_store,picking', per_page: 15 }
@@ -127,11 +137,49 @@ class StoreFulfillmentService {
     } catch (error: any) {
       console.error('❌ Failed to fetch assigned orders:', error);
       
-      if (error.response?.status === 400) {
-        throw new Error(error.response.data.message || 'Employee is not assigned to a store');
+      // Detailed error handling
+      if (error.response) {
+        const status = error.response.status;
+        const message = error.response.data?.message;
+        
+        switch (status) {
+          case 500:
+            console.error('Backend 500 error details:', error.response.data);
+            throw new Error(
+              'Server error occurred. This usually means:\n' +
+              '1. Employee is not assigned to a store\n' +
+              '2. Database connection issue\n' +
+              '3. Backend route configuration problem\n\n' +
+              'Please check backend logs for details.'
+            );
+          
+          case 400:
+            throw new Error(message || 'Employee is not assigned to a store. Please contact your administrator.');
+          
+          case 401:
+            throw new Error('Authentication failed. Please log in again.');
+          
+          case 403:
+            throw new Error('You do not have permission to access store fulfillment.');
+          
+          case 404:
+            throw new Error('Store fulfillment endpoint not found. Please check backend configuration.');
+          
+          default:
+            throw new Error(message || `Error ${status}: Failed to fetch assigned orders`);
+        }
+      } else if (error.request) {
+        // Network error - no response received
+        throw new Error(
+          'Network error. Please check:\n' +
+          '1. Backend server is running (http://127.0.0.1:8000)\n' +
+          '2. Your internet connection\n' +
+          '3. CORS configuration'
+        );
+      } else {
+        // Something else happened
+        throw new Error(error.message || 'Failed to fetch assigned orders');
       }
-      
-      throw new Error(error.response?.data?.message || 'Failed to fetch assigned orders');
     }
   }
 
@@ -149,6 +197,15 @@ class StoreFulfillmentService {
       return response.data.data;
     } catch (error: any) {
       console.error('❌ Failed to fetch order details:', error);
+      
+      if (error.response?.status === 404) {
+        throw new Error('Order not found or not assigned to your store.');
+      }
+      
+      if (error.response?.status === 403) {
+        throw new Error('You do not have permission to view this order.');
+      }
+      
       throw new Error(error.response?.data?.message || 'Failed to fetch order details');
     }
   }
@@ -173,6 +230,11 @@ class StoreFulfillmentService {
       
       // Handle specific error cases
       if (error.response?.status === 422) {
+        const validationErrors = error.response.data.errors;
+        if (validationErrors) {
+          const errorMessages = Object.values(validationErrors).flat();
+          throw new Error(errorMessages.join(', '));
+        }
         throw new Error(error.response.data.message || 'Validation failed');
       }
       
@@ -207,12 +269,37 @@ class StoreFulfillmentService {
       console.error('❌ Failed to mark as ready for shipment:', error);
       
       if (error.response?.status === 400) {
-        throw new Error(error.response.data.message || 'Cannot mark as ready for shipment');
+        throw new Error(error.response.data.message || 'Cannot mark as ready for shipment. Please ensure all items are scanned.');
       }
       
       throw new Error(error.response?.data?.message || 'Failed to mark order as ready for shipment');
     }
   }
+
+  /**
+   * Confirm/re-confirm an order after all barcodes are scanned.
+   */
+  async confirmScannedOrder(orderId: number): Promise<any> {
+    try {
+      console.log('✅ Confirming scanned order:', orderId);
+
+      const response = await axiosInstance.post(
+        `/store/fulfillment/orders/${orderId}/confirm-scanned`
+      );
+
+      console.log('✅ Scanned order confirmed:', response.data.data);
+      return response.data.data.order;
+    } catch (error: any) {
+      console.error('❌ Failed to confirm scanned order:', error);
+
+      if (error.response?.status === 422) {
+        throw new Error(error.response.data.message || 'All product barcodes must be scanned before confirming.');
+      }
+
+      throw new Error(error.response?.data?.message || 'Failed to confirm scanned order');
+    }
+  }
+
 }
 
 export default new StoreFulfillmentService();

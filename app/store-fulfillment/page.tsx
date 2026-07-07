@@ -22,6 +22,7 @@ import Sidebar from '@/components/Sidebar';
 import storeFulfillmentService, { AssignedOrder, OrderItem } from '@/services/storeFulfillmentService';
 import Toast from '@/components/Toast';
 import ActivityLogPanel from '@/components/activity/ActivityLogPanel';
+import MobileCameraBarcodeScanner from '@/components/barcode/MobileCameraBarcodeScanner';
 
 interface ScanHistoryEntry {
   barcode: string;
@@ -301,54 +302,52 @@ export default function StoreFulfillmentPage() {
     }
   };
 
-  const handleMarkReadyForShipment = async (force: boolean = false) => {
+  const handleConfirmScannedOrder = async () => {
     if (!orderDetails) return;
 
     const fulfilledCount = orderDetails.fulfillment_status.fulfilled_items;
     const totalCount = orderDetails.fulfillment_status.total_items;
-    const isPartial = fulfilledCount < totalCount;
-    
-    // If partial scan, require explicit confirmation
-    if (isPartial && !force) {
-      if (typeof window !== 'undefined') {
-        const pendingCount = totalCount - fulfilledCount;
-        const confirmed = window.confirm(
-          `⚠️ Partial Fulfillment Warning\n\n` +
-          `${pendingCount} item(s) have not been scanned.\n\n` +
-          `Marking as 'Ready for Shipment' will automatically deduct these items from their assigned batches to maintain stock integrity.\n\n` +
-          `Do you want to proceed?`
-        );
-        if (!confirmed) return;
-      }
+    const isComplete = fulfilledCount === totalCount && totalCount > 0;
+
+    if (!isComplete) {
+      displayToast(`Scan all items first (${fulfilledCount}/${totalCount} scanned)`, 'warning');
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      const confirmed = window.confirm(
+        `Confirm this order again?\n\n` +
+        `All ${totalCount} product item(s) are scanned. The order will move back to Confirmed stage and editing will lock again.`
+      );
+      if (!confirmed) return;
     }
 
     setIsProcessing(true);
 
     try {
-      await storeFulfillmentService.markReadyForShipment(orderDetails.order.id);
-      
-      displayToast(
-        isPartial 
-          ? '✅ Order marked as ready for shipment (Fail-safe deduction applied)' 
-          : '✅ Order marked as ready for shipment!', 
-        'success'
-      );
-      
-      // Go back to order list after 2 seconds
+      await storeFulfillmentService.confirmScannedOrder(orderDetails.order.id);
+
+      displayToast('✅ Order confirmed again. Editing is now locked.', 'success');
+
       setTimeout(() => {
         setSelectedOrderId(null);
         setOrderDetails(null);
         setScanHistory([]);
         setSelectedItemId(null);
         fetchAssignedOrders();
-      }, 2000);
-      
+      }, 1500);
     } catch (error: any) {
-      console.error('❌ Mark ready for shipment error:', error);
-      displayToast(error.message || 'Failed to mark as ready for shipment', 'error');
+      console.error('❌ Confirm scanned order error:', error);
+      displayToast(error.message || 'Failed to confirm scanned order', 'error');
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  // Kept as a wrapper so older button references do not accidentally trigger
+  // partial auto-deduction. Confirming now requires all barcodes scanned.
+  const handleMarkReadyForShipment = async () => {
+    await handleConfirmScannedOrder();
   };
 
   const filteredOrders = assignedOrders.filter(order => 
@@ -695,7 +694,7 @@ export default function StoreFulfillmentPage() {
                   </div>
                   {progress.is_complete && (
                     <p className="text-sm text-green-600 dark:text-green-400 mt-2 font-medium">
-                      ✅ All items scanned! Ready to mark for shipment.
+                      ✅ All items scanned! Ready to confirm order again.
                     </p>
                   )}
                 </div>
@@ -770,13 +769,11 @@ export default function StoreFulfillmentPage() {
                   </div>
 
                   <button
-                    onClick={() => handleMarkReadyForShipment(false)}
-                    disabled={isProcessing || !order?.items?.length}
+                    onClick={() => handleConfirmScannedOrder()}
+                    disabled={isProcessing || !order?.items?.length || !progress?.can_ship}
                     className={`w-full mt-6 px-6 py-4 rounded-lg font-semibold text-white transition-all flex items-center justify-center gap-2 ${
-                      order?.items?.length && !isProcessing
-                        ? progress?.can_ship
-                          ? 'bg-green-600 hover:bg-green-700 shadow-lg'
-                          : 'bg-orange-500 hover:bg-orange-600 shadow-md'
+                      order?.items?.length && !isProcessing && progress?.can_ship
+                        ? 'bg-green-600 hover:bg-green-700 shadow-lg'
                         : 'bg-gray-400 cursor-not-allowed'
                     }`}
                   >
@@ -788,12 +785,12 @@ export default function StoreFulfillmentPage() {
                     ) : progress?.can_ship ? (
                       <>
                         <CheckCircle className="h-5 w-5" />
-                        Mark Ready for Shipment
+                        Confirm Scanned Order
                       </>
                     ) : (
                       <>
                         <AlertTriangle className="h-5 w-5" />
-                        Mark Ready (Auto-Deduct {progress?.pending_items} pending)
+                        Scan all items to confirm ({progress?.pending_items} pending)
                       </>
                     )}
                   </button>
@@ -868,6 +865,16 @@ export default function StoreFulfillmentPage() {
                         </div>
                       )}
                     </div>
+
+                    <MobileCameraBarcodeScanner
+                      enabled={isScanning && Boolean(selectedItemId)}
+                      disabled={isProcessing || !orderDetails || !selectedItemId}
+                      scannerId="store-fulfillment-camera-scanner"
+                      onScan={(barcode) => handleBarcodeScan(barcode)}
+                      buttonLabel="Scan with Mobile Camera"
+                      activeLabel="Store fulfillment camera active"
+                      helperText="Use this on mobile/tablet for packing scans. Select the item first, then scan with the camera."
+                    />
                   </div>
 
                   {/* Scan History */}

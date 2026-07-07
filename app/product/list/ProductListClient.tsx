@@ -449,6 +449,35 @@ export default function ProductPage() {
     return `${baseUrl}/storage/${imagePath}`;
   };
 
+
+  const toNumber = (value: any): number => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
+  const buildStockFields = (item: any) => {
+    const stockQuantity = toNumber(item?.stock_quantity);
+    const onlineStockQuantity = toNumber(item?.online_stock_quantity);
+    const offlineStockQuantity = toNumber(item?.offline_stock_quantity);
+    const reservedStockQuantity = toNumber(item?.reserved_stock_quantity);
+    const dispatchInTransitQuantity = toNumber(item?.dispatch_in_transit_quantity);
+    const dispatchPendingQuantity = toNumber(item?.dispatch_pending_quantity);
+    const dispatchMovingQuantity = toNumber(
+      item?.dispatch_moving_quantity ?? dispatchInTransitQuantity + dispatchPendingQuantity
+    );
+
+    return {
+      stockQuantity,
+      onlineStockQuantity,
+      offlineStockQuantity,
+      reservedStockQuantity,
+      dispatchInTransitQuantity,
+      dispatchPendingQuantity,
+      dispatchMovingQuantity,
+      totalWithTransitQuantity: stockQuantity + dispatchMovingQuantity,
+    };
+  };
+
   // Group products into ProductGroup[] cards.
   // When the backend returns the grouped shape (group_by_sku=true), each product
   // already carries `has_variants` / `variants[]` — we map directly without re-grouping.
@@ -478,10 +507,7 @@ export default function ProductPage() {
             size: getColorAndSize(product).size,
             variation_suffix: (product as any).variation_suffix,
             image: primaryImageUrl,
-            stockQuantity: Number(product.stock_quantity) || 0,
-            onlineStockQuantity: Number(product.online_stock_quantity) || 0,
-            offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
-            reservedStockQuantity: Number(product.reserved_stock_quantity) || 0,
+            ...buildStockFields(product),
           },
           ...serverVariants.map((v: any) => {
             const vImg = v.images?.[0];
@@ -499,10 +525,7 @@ export default function ProductPage() {
               size: vColorSize.size,
               variation_suffix: v.variation_suffix,
               image: vImgUrl,
-              stockQuantity: Number(v.stock_quantity) || 0,
-              onlineStockQuantity: Number(v.online_stock_quantity) || 0,
-              offlineStockQuantity: Number(v.offline_stock_quantity) || 0,
-              reservedStockQuantity: Number(v.reserved_stock_quantity) || 0,
+              ...buildStockFields(v),
             };
           }),
         ];
@@ -522,6 +545,10 @@ export default function ProductPage() {
           onlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0),
           offlineStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0),
           reservedStockQuantity: allVariants.reduce((sum, v) => sum + (Number(v.reservedStockQuantity) || 0), 0),
+          dispatchInTransitQuantity: allVariants.reduce((sum, v) => sum + (Number(v.dispatchInTransitQuantity) || 0), 0),
+          dispatchPendingQuantity: allVariants.reduce((sum, v) => sum + (Number(v.dispatchPendingQuantity) || 0), 0),
+          dispatchMovingQuantity: allVariants.reduce((sum, v) => sum + (Number(v.dispatchMovingQuantity) || 0), 0),
+          totalWithTransitQuantity: allVariants.reduce((sum, v) => sum + (Number(v.totalWithTransitQuantity) || 0), 0),
         };
       });
     }
@@ -571,10 +598,7 @@ export default function ProductPage() {
         size,
         variation_suffix: (product as any).variation_suffix,
         image: variantImageUrl,
-        stockQuantity: Number(product.stock_quantity) || 0,
-        onlineStockQuantity: Number(product.online_stock_quantity) || 0,
-        offlineStockQuantity: Number(product.offline_stock_quantity) || 0,
-        reservedStockQuantity: Number(product.reserved_stock_quantity) || 0,
+        ...buildStockFields(product),
       });
     });
 
@@ -586,6 +610,10 @@ export default function ProductPage() {
       group.onlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.onlineStockQuantity) || 0), 0);
       group.offlineStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.offlineStockQuantity) || 0), 0);
       group.reservedStockQuantity = group.variants.reduce((sum, v) => sum + (Number(v.reservedStockQuantity) || 0), 0);
+      group.dispatchInTransitQuantity = group.variants.reduce((sum, v) => sum + (Number(v.dispatchInTransitQuantity) || 0), 0);
+      group.dispatchPendingQuantity = group.variants.reduce((sum, v) => sum + (Number(v.dispatchPendingQuantity) || 0), 0);
+      group.dispatchMovingQuantity = group.variants.reduce((sum, v) => sum + (Number(v.dispatchMovingQuantity) || 0), 0);
+      group.totalWithTransitQuantity = group.variants.reduce((sum, v) => sum + (Number(v.totalWithTransitQuantity) || 0), 0);
       if (!group.primaryImage) {
         group.primaryImage = group.variants.find(v => v.image)?.image || null;
       }
@@ -1282,6 +1310,10 @@ export default function ProductPage() {
                         onlineStockQuantity: group.onlineStockQuantity,
                         offlineStockQuantity: group.offlineStockQuantity,
                         reservedStockQuantity: group.reservedStockQuantity,
+                        dispatchInTransitQuantity: group.dispatchInTransitQuantity,
+                        dispatchPendingQuantity: group.dispatchPendingQuantity,
+                        dispatchMovingQuantity: group.dispatchMovingQuantity,
+                        totalWithTransitQuantity: group.totalWithTransitQuantity,
                       }}
                       onDelete={canDeleteProducts ? handleDelete : undefined}
                       onEdit={canEditProducts ? handleEdit : undefined}

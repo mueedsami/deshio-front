@@ -275,6 +275,31 @@ class StoreFulfillmentService {
       throw new Error(error.response?.data?.message || 'Failed to mark order as ready for shipment');
     }
   }
+
+  /**
+   * Confirm/re-confirm an order after all barcodes are scanned.
+   */
+  async confirmScannedOrder(orderId: number): Promise<any> {
+    try {
+      console.log('✅ Confirming scanned order:', orderId);
+
+      const response = await axiosInstance.post(
+        `/store/fulfillment/orders/${orderId}/confirm-scanned`
+      );
+
+      console.log('✅ Scanned order confirmed:', response.data.data);
+      return response.data.data.order;
+    } catch (error: any) {
+      console.error('❌ Failed to confirm scanned order:', error);
+
+      if (error.response?.status === 422) {
+        throw new Error(error.response.data.message || 'All product barcodes must be scanned before confirming.');
+      }
+
+      throw new Error(error.response?.data?.message || 'Failed to confirm scanned order');
+    }
+  }
+
 }
 
 export default new StoreFulfillmentService();

@@ -34,6 +34,40 @@ function compactAddress(lines: string[]) {
   return lines.filter(Boolean).join('<br/>');
 }
 
+function firstText(...values: any[]) {
+  for (const v of values) {
+    if (typeof v === 'string' || typeof v === 'number') {
+      const text = String(v).trim();
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+function invoiceDate(order: any, normalizedDateTime: string) {
+  return firstText(
+    normalizedDateTime,
+    order?.order_date,
+    order?.orderDateRaw,
+    order?.created_at,
+    order?.createdAt,
+    order?.date
+  );
+}
+
+function servedByName(order: any, normalizedSalesBy: string) {
+  return firstText(
+    normalizedSalesBy,
+    order?.created_by?.name,
+    order?.createdBy?.name,
+    order?.moderator?.name,
+    order?.created_by_name,
+    order?.createdByName,
+    order?.salesman?.name,
+    order?.salesBy
+  );
+}
+
 function wrapHtml(title: string, inner: string, opts?: { embed?: boolean }) {
   return `<!doctype html>
 <html>
@@ -187,6 +221,8 @@ function render(order: any) {
   const paid = Number(r.totals?.paid ?? 0);
   const due = Number(r.totals?.due ?? Math.max(0, grand - paid));
   const status = paymentStatus(grand, paid, due);
+  const orderDate = invoiceDate(order, r.dateTime || '');
+  const servedBy = servedByName(order, r.salesBy || '');
 
   const customerAddress = compactAddress(r.customerAddressLines || []);
   const noteText = escapeHtml(r.notes || '').replace(/\n/g, '<br/>');
@@ -241,6 +277,8 @@ function render(order: any) {
           <div class="sectionTitle">Invoice Details</div>
           <div class="metaRow"><span class="metaLabel">Invoice No</span><span class="metaValue">${escapeHtml(invNo)}</span></div>
           <div class="metaRow"><span class="metaLabel">Order No</span><span class="metaValue">${escapeHtml(orderNo)}</span></div>
+          ${orderDate ? `<div class="metaRow"><span class="metaLabel">Order Date</span><span class="metaValue">${escapeHtml(orderDate)}</span></div>` : ''}
+          ${servedBy ? `<div class="metaRow"><span class="metaLabel">Served By</span><span class="metaValue">${escapeHtml(servedBy)}</span></div>` : ''}
           <div class="metaRow"><span class="metaLabel">Status</span><span class="metaValue">${escapeHtml(status)}</span></div>
           ${disc > 0 ? `<div class="metaRow"><span class="metaLabel">Discount</span><span class="metaValue">-৳${escapeHtml(money(disc))}</span></div>` : ''}
           <div class="metaRow"><span class="metaLabel">Paid Amount</span><span class="metaValue">৳${escapeHtml(money(paid))}</span></div>

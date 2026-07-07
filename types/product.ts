@@ -17,6 +17,10 @@ export interface ProductVariant {
   onlineStockQuantity?: number | null;
   offlineStockQuantity?: number | null;
   reservedStockQuantity?: number | null;
+  dispatchInTransitQuantity?: number | null;
+  dispatchPendingQuantity?: number | null;
+  dispatchMovingQuantity?: number | null;
+  totalWithTransitQuantity?: number | null;
 }
 
 export interface ProductGroup {
@@ -37,6 +41,10 @@ export interface ProductGroup {
   onlineStockQuantity?: number | null;
   offlineStockQuantity?: number | null;
   reservedStockQuantity?: number | null;
+  dispatchInTransitQuantity?: number | null;
+  dispatchPendingQuantity?: number | null;
+  dispatchMovingQuantity?: number | null;
+  totalWithTransitQuantity?: number | null;
 }
 
 

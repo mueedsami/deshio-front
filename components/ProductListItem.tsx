@@ -111,6 +111,11 @@ export default function ProductListItem({
 
   const hasMultipleVariants = productGroup.hasVariations;
   const firstVariant = productGroup.variants[0];
+  const availableStock = Number(productGroup.stockQuantity || 0);
+  const inTransitStock = Number(productGroup.dispatchInTransitQuantity || 0);
+  const pendingDispatchStock = Number(productGroup.dispatchPendingQuantity || 0);
+  const movingStock = Number(productGroup.dispatchMovingQuantity || 0);
+  const totalWithTransit = Number(productGroup.totalWithTransitQuantity ?? (availableStock + movingStock));
 
   return (
     <>
@@ -154,24 +159,48 @@ export default function ProductListItem({
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600 dark:text-gray-400 mb-2">
                 <span
                   className={`inline-flex items-center px-2.5 py-1 rounded-md font-medium ${
-                    productGroup.inStock === false || productGroup.stockQuantity === 0
-                      ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
-                      : productGroup.sellingPrice != null
+                    availableStock <= 0 && movingStock > 0
+                      ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                      : productGroup.inStock === false || availableStock === 0
+                        ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                        : productGroup.sellingPrice != null
                         ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
                         : 'bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300'
                   }`}
                 >
-                  {productGroup.inStock === false || productGroup.stockQuantity === 0
-                    ? 'Not in stock'
-                    : productGroup.sellingPrice != null
-                      ? `৳${Number(productGroup.sellingPrice).toFixed(2)}`
-                      : 'Checking stock...'}
+                  {availableStock <= 0 && movingStock > 0
+                    ? 'In dispatch'
+                    : productGroup.inStock === false || availableStock === 0
+                      ? 'Not in stock'
+                      : productGroup.sellingPrice != null
+                        ? `৳${Number(productGroup.sellingPrice).toFixed(2)}`
+                        : 'Checking stock...'}
                 </span>
-                {(productGroup.stockQuantity ?? 0) > 0 && (
-                  <div className="flex items-center gap-1.5 ml-1">
+                {(availableStock > 0 || movingStock > 0) && (
+                  <div className="flex items-center gap-1.5 ml-1 flex-wrap">
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-                      Stock: {productGroup.stockQuantity}
+                      Available: {availableStock}
                     </span>
+                    {movingStock > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-purple-50 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
+                        In Dispatch: {movingStock}
+                      </span>
+                    )}
+                    {inTransitStock > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400">
+                        In Transit: {inTransitStock}
+                      </span>
+                    )}
+                    {pendingDispatchStock > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                        Scan Hold: {pendingDispatchStock}
+                      </span>
+                    )}
+                    {movingStock > 0 && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300">
+                        Available + Dispatch: {totalWithTransit}
+                      </span>
+                    )}
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold bg-green-50 dark:bg-green-900/30 text-green-700 dark:text-green-400">
                       Online: {productGroup.onlineStockQuantity || 0}
                     </span>
@@ -351,7 +380,19 @@ export default function ProductListItem({
                         {variant.variation_suffix || variant.size || 'One Size'}
                       </span>
                       <div className="flex items-center gap-2 ml-3">
-                        <span className="text-[11px] font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Stock: {variant.stockQuantity || 0}</span>
+                        <span className="text-[11px] font-medium text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">Available: {variant.stockQuantity || 0}</span>
+                        {(variant.dispatchMovingQuantity || 0) > 0 && (
+                          <span className="text-[11px] font-medium text-purple-700 dark:text-purple-400 bg-purple-50 dark:bg-purple-900/20 px-1.5 py-0.5 rounded">In Dispatch: {variant.dispatchMovingQuantity || 0}</span>
+                        )}
+                        {(variant.dispatchInTransitQuantity || 0) > 0 && (
+                          <span className="text-[11px] font-medium text-indigo-700 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-900/20 px-1.5 py-0.5 rounded">In Transit: {variant.dispatchInTransitQuantity || 0}</span>
+                        )}
+                        {(variant.dispatchPendingQuantity || 0) > 0 && (
+                          <span className="text-[11px] font-medium text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-slate-800 px-1.5 py-0.5 rounded">Scan Hold: {variant.dispatchPendingQuantity || 0}</span>
+                        )}
+                        {(variant.dispatchMovingQuantity || 0) > 0 && (
+                          <span className="text-[11px] font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded">Total: {variant.totalWithTransitQuantity || ((variant.stockQuantity || 0) + (variant.dispatchMovingQuantity || 0))}</span>
+                        )}
                         <span className="text-[11px] font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-1.5 py-0.5 rounded">Online: {variant.onlineStockQuantity || 0}</span>
                         <span className="text-[11px] font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded">Offline: {variant.offlineStockQuantity || 0}</span>
                         <span className="text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-1.5 py-0.5 rounded">Reserved: {variant.reservedStockQuantity || 0}</span>

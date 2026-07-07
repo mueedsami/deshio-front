@@ -646,10 +646,10 @@ export default function OrdersDashboard() {
   // ✅ Single action loading (per-order)
   const [singleActionLoading, setSingleActionLoading] = useState<{
     orderId: number;
-    action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment';
+    action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed';
   } | null>(null);
 
-  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment') =>
+  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed') =>
     singleActionLoading?.orderId === orderId && singleActionLoading?.action === action;
 
   useEffect(() => {
@@ -1752,6 +1752,12 @@ export default function OrdersDashboard() {
 
   const handleEditOrder = async (order: Order) => {
     setActiveMenu(null);
+
+    if (order.status === 'confirmed') {
+      alert('Confirmed orders are locked. Use "Reopen for Edit" first, then edit and confirm again after barcode scan is complete.');
+      return;
+    }
+
     setIsLoadingDetails(true);
 
     try {
@@ -2986,6 +2992,28 @@ export default function OrdersDashboard() {
     } catch (error: any) {
       console.error('Revert assignment error:', error);
       alert(`Failed to revert assignment: ${error.message || 'Unknown error'}`);
+    } finally {
+      setSingleActionLoading(null);
+    }
+  };
+
+  const handleReopenConfirmedForEdit = async (orderId: number) => {
+    const confirmed = window.confirm(
+      'Reopen this confirmed order for editing?\n\n' +
+      'This will move it back to Assigned to Store, preserve scanned barcodes/store assignment, and lock confirmation until all product barcodes are scanned again/verified.'
+    );
+    if (!confirmed) return;
+
+    setSingleActionLoading({ orderId, action: 'reopen-confirmed' });
+    setActiveMenu(null);
+
+    try {
+      await orderManagementService.reopenConfirmedForEdit(orderId);
+      alert('✅ Order reopened for edit. Scanned barcodes were preserved. Edit it, then confirm again from Store Fulfillment.');
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Reopen confirmed order error:', error);
+      alert(`Failed to reopen confirmed order: ${error.message || 'Unknown error'}`);
     } finally {
       setSingleActionLoading(null);
     }
@@ -4715,17 +4743,39 @@ export default function OrdersDashboard() {
             <span>View Details</span>
           </button>
 
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              const order = filteredOrders.find((o) => o.id === activeMenu);
-              if (order) handleEditOrder(order);
-            }}
-            className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
-          >
-            <Edit className="h-5 w-5 flex-shrink-0" />
-            <span>Edit Order</span>
-          </button>
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order) return null;
+
+            if (order.status === 'confirmed') {
+              return (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleReopenConfirmedForEdit(order.id);
+                  }}
+                  disabled={isSingleLoading(order.id, 'reopen-confirmed')}
+                  className="w-full px-4 py-3 text-left text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+                >
+                  <RotateCcw className="h-5 w-5 flex-shrink-0" />
+                  <span>{isSingleLoading(order.id, 'reopen-confirmed') ? 'Reopening...' : 'Reopen for Edit'}</span>
+                </button>
+              );
+            }
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleEditOrder(order);
+                }}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-black dark:text-white hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+              >
+                <Edit className="h-5 w-5 flex-shrink-0" />
+                <span>Edit Order</span>
+              </button>
+            );
+          })()}
 
           {viewMode === 'online' && (() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
