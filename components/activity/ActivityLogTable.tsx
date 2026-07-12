@@ -25,6 +25,96 @@ function Chip({ children }: { children: React.ReactNode }) {
   );
 }
 
+function humanizeCategory(category: string) {
+  const map: Record<string, string> = {
+    orders: 'Orders',
+    'product-dispatches': 'Store transfers',
+    'purchase-orders': 'Purchase orders',
+    'store-assignments': 'Store assignments',
+    products: 'Products',
+  };
+  return map[category] || category.replace(/[-_]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function humanizeAction(action?: string, actionLabel?: string) {
+  if (actionLabel) return actionLabel;
+  const map: Record<string, string> = {
+    created: 'Created',
+    updated: 'Updated',
+    deleted: 'Deleted',
+    invoice_printed: 'Invoice printed',
+    receipt_printed: 'Receipt printed',
+    pathao_sent: 'Sent to Pathao',
+  };
+  return map[String(action || '')] || String(action || 'Activity').replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function humanizeField(field: string) {
+  const map: Record<string, string> = {
+    order_number: 'Order number',
+    customer_id: 'Customer',
+    store_id: 'Store',
+    order_type: 'Order type',
+    is_preorder: 'Preorder',
+    status: 'Order status',
+    fulfillment_status: 'Packing status',
+    payment_status: 'Payment status',
+    subtotal: 'Subtotal',
+    tax_amount: 'Tax',
+    discount_amount: 'Order discount',
+    shipping_amount: 'Delivery charge',
+    total_amount: 'Total amount',
+    paid_amount: 'Paid amount',
+    outstanding_amount: 'Due amount',
+    shipping_address: 'Delivery address',
+    order_date: 'Order date',
+    confirmed_at: 'Confirmed at',
+    fulfilled_at: 'Packed at',
+    delivered_at: 'Delivered at',
+    intended_courier: 'Selected courier',
+    metadata: 'Extra details',
+    invoice_printed: 'Invoice printed',
+    invoice_print_count: 'Invoice print count',
+    last_invoice_printed_at: 'Last invoice print time',
+    current_status: 'Barcode status',
+    product_barcode_id: 'Barcode',
+    batch_id: 'Batch',
+    product_id: 'Product',
+    unit_price: 'Unit price',
+    quantity: 'Quantity',
+  };
+  return map[field] || field.replace(/[_-]/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function humanizeValue(value: any) {
+  if (value === null || typeof value === 'undefined' || value === '') return 'empty';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  if (typeof value === 'object') {
+    const preferred = ['name', 'phone', 'address', 'city', 'area', 'order_number', 'status'];
+    const parts = preferred
+      .filter((key) => value[key] !== undefined && value[key] !== null && value[key] !== '')
+      .map((key) => `${humanizeField(key)}: ${humanizeValue(value[key])}`);
+    return parts.length ? parts.slice(0, 3).join(', ') : `${Object.keys(value).length} detail${Object.keys(value).length === 1 ? '' : 's'}`;
+  }
+  const str = String(value);
+  const map: Record<string, string> = {
+    social_commerce: 'Social commerce',
+    ecommerce: 'E-commerce',
+    counter: 'In-person sale',
+    pending_assignment: 'Pending store assignment',
+    assigned_to_store: 'Assigned to store',
+    pending_fulfillment: 'Waiting for packing',
+    ready_for_shipment: 'Ready for shipment',
+    service_only: 'Service-only order',
+    partially_paid: 'Partially paid',
+    pathao: 'Pathao',
+    browser_preview: 'Browser print preview',
+    qz_tray: 'Direct printer',
+  };
+  return map[str] || str;
+}
+
 export default function ActivityLogTable({ entries, isLoading, onCopy }: ActivityLogTableProps) {
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
 
@@ -73,9 +163,10 @@ export default function ActivityLogTable({ entries, isLoading, onCopy }: Activit
               const whoEmail = entry.who?.email;
               const whenText = entry.when?.formatted || entry.when?.timestamp || '';
               const human = entry.when?.human;
-              const action = entry.what?.action || '';
+              const action = humanizeAction(entry.what?.action, entry.what?.action_label);
               const description = entry.what?.description || '';
-              const subjectType = entry.subject?.type || entry.category;
+              const subjectType = entry.subject?.type || humanizeCategory(entry.category);
+              const humanChanges = Array.isArray(entry.what?.human_changes) ? entry.what.human_changes : [];
               const subjectId = entry.subject?.id;
 
               return (
@@ -101,7 +192,7 @@ export default function ActivityLogTable({ entries, isLoading, onCopy }: Activit
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Chip>{entry.category}</Chip>
+                        <Chip>{humanizeCategory(entry.category)}</Chip>
                         {action && <Chip>{action}</Chip>}
                       </div>
                       {description && <div className="mt-2 text-sm text-gray-700 dark:text-gray-200">{description}</div>}
@@ -114,11 +205,13 @@ export default function ActivityLogTable({ entries, isLoading, onCopy }: Activit
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="text-xs text-gray-600 dark:text-gray-300">
-                        {Array.isArray(entry.what?.fields_changed) && entry.what.fields_changed.length > 0
-                          ? `${entry.what.fields_changed.length} field(s)`
-                          : Object.keys(entry.what?.changes || {}).length
-                            ? `${Object.keys(entry.what?.changes || {}).length} change(s)`
-                            : '—'}
+                        {humanChanges.length > 0
+                          ? `${humanChanges.length} business detail(s)`
+                          : Array.isArray(entry.what?.fields_changed) && entry.what.fields_changed.length > 0
+                            ? `${entry.what.fields_changed.length} field(s)`
+                            : Object.keys(entry.what?.changes || {}).length
+                              ? `${Object.keys(entry.what?.changes || {}).length} change(s)`
+                              : '—'}
                       </div>
                     </td>
                   </tr>
@@ -142,33 +235,46 @@ export default function ActivityLogTable({ entries, isLoading, onCopy }: Activit
                             )}
                           </div>
 
-                          {entry.what?.changes && Object.keys(entry.what.changes).length > 0 && (
+                          {(humanChanges.length > 0 || (entry.what?.changes && Object.keys(entry.what.changes).length > 0)) && (
                             <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
                               <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                Changes (from → to)
+                                Business-readable details
                               </div>
                               <div className="space-y-2">
-                                {Object.entries(entry.what.changes).map(([field, change]) => (
-                                  <div key={field} className="text-sm text-gray-800 dark:text-gray-200">
-                                    <span className="font-semibold">{field}</span>:&nbsp;
-                                    <span className="font-mono text-xs">{prettyJson((change as any)?.from)}</span>
-                                    <span className="mx-2 text-gray-400">→</span>
-                                    <span className="font-mono text-xs">{prettyJson((change as any)?.to)}</span>
-                                  </div>
-                                ))}
+                                {humanChanges.length > 0
+                                  ? humanChanges.map((change: any, idx: number) => (
+                                      <div key={`${change.raw_field || change.field || 'change'}-${idx}`} className="text-sm text-gray-800 dark:text-gray-200">
+                                        {change.sentence || (
+                                          <>
+                                            <span className="font-semibold">{change.field || 'Detail'}</span>:&nbsp;
+                                            <span>{humanizeValue(change.from)}</span>
+                                            <span className="mx-2 text-gray-400">→</span>
+                                            <span>{humanizeValue(change.to)}</span>
+                                          </>
+                                        )}
+                                      </div>
+                                    ))
+                                  : Object.entries(entry.what.changes || {}).map(([field, change]) => (
+                                      <div key={field} className="text-sm text-gray-800 dark:text-gray-200">
+                                        <span className="font-semibold">{humanizeField(field)}</span>:&nbsp;
+                                        <span>{humanizeValue((change as any)?.from)}</span>
+                                        <span className="mx-2 text-gray-400">→</span>
+                                        <span>{humanizeValue((change as any)?.to)}</span>
+                                      </div>
+                                    ))}
                               </div>
                             </div>
                           )}
 
                           {entry.subject?.data && (
-                            <div className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
-                              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                                Subject snapshot
-                              </div>
-                              <pre className="max-h-64 overflow-auto rounded-md bg-gray-50 p-3 text-xs text-gray-800 dark:bg-gray-950 dark:text-gray-100">
+                            <details className="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900">
+                              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400">
+                                Technical snapshot
+                              </summary>
+                              <pre className="mt-3 max-h-64 overflow-auto rounded-md bg-gray-50 p-3 text-xs text-gray-800 dark:bg-gray-950 dark:text-gray-100">
                                 {prettyJson(entry.subject.data)}
                               </pre>
-                            </div>
+                            </details>
                           )}
                         </div>
                       </td>

@@ -10,6 +10,8 @@ import Toast from '@/components/Toast';
 
 const SC_EDIT_CONTEXT_KEY = 'socialCommerceEditContextV1';
 const SC_DRAFT_STORAGE_KEY = 'socialCommerceDraftV1';
+const PREORDER_EDIT_CONTEXT_KEY = 'preOrderEditContextV2';
+const PREORDER_DRAFT_STORAGE_KEY = 'preOrderDraftV2';
 
 interface PaymentMethod {
   id: number;
@@ -54,6 +56,18 @@ const parseNumber = (v: any): number => {
   const cleaned = String(v).replace(/[^0-9.-]/g, '');
   const n = parseFloat(cleaned);
   return Number.isFinite(n) ? n : 0;
+};
+
+
+const getFlowConfig = (orderData?: any) => {
+  const isPreorder = Boolean(orderData?.is_preorder);
+  return {
+    isPreorder,
+    draftKey: isPreorder ? PREORDER_DRAFT_STORAGE_KEY : SC_DRAFT_STORAGE_KEY,
+    editContextKey: isPreorder ? PREORDER_EDIT_CONTEXT_KEY : SC_EDIT_CONTEXT_KEY,
+    cartPath: isPreorder ? '/pre-order' : '/social-commerce',
+    sourceLabel: isPreorder ? 'Preorder' : 'Social Commerce',
+  };
 };
 
 const calculateItemAmount = (item: any): number => {
@@ -164,9 +178,10 @@ export default function AmountDetailsPage() {
       };
       sessionStorage.setItem('pendingOrder', JSON.stringify(updatedPendingOrder));
 
-      const existingDraft = JSON.parse(sessionStorage.getItem(SC_DRAFT_STORAGE_KEY) || '{}');
+      const flow = getFlowConfig(orderData);
+      const existingDraft = JSON.parse(sessionStorage.getItem(flow.draftKey) || '{}');
       sessionStorage.setItem(
-        SC_DRAFT_STORAGE_KEY,
+        flow.draftKey,
         JSON.stringify({
           ...existingDraft,
           shippingAmountState: parseNumber(transportCost),
@@ -179,7 +194,7 @@ export default function AmountDetailsPage() {
       // Even if storage is malformed, returning to the cart page is still the safest action.
     }
 
-    window.location.href = '/social-commerce';
+    window.location.href = getFlowConfig(orderData).cartPath;
   };
 
   useEffect(() => {
@@ -194,7 +209,8 @@ export default function AmountDetailsPage() {
     // Keep social-commerce edit mode sticky across page transitions/drafts.
     // If this id is missing, the old code fell back to POST /orders and created a duplicate order.
     try {
-      const editCtx = JSON.parse(sessionStorage.getItem(SC_EDIT_CONTEXT_KEY) || '{}');
+      const flow = getFlowConfig(parsedOrder);
+      const editCtx = JSON.parse(sessionStorage.getItem(flow.editContextKey) || '{}');
       const contextEditOrderId = Number(editCtx.editOrderId || 0) || null;
       if (!parsedOrder.editOrderId && contextEditOrderId) {
         parsedOrder.editOrderId = contextEditOrderId;
@@ -204,7 +220,7 @@ export default function AmountDetailsPage() {
       }
       if (parsedOrder.editOrderId) {
         sessionStorage.setItem(
-          SC_EDIT_CONTEXT_KEY,
+          flow.editContextKey,
           JSON.stringify({
             editOrderId: Number(parsedOrder.editOrderId),
             editOrderNumber: parsedOrder.editOrderNumber || editCtx.editOrderNumber || null,
@@ -389,6 +405,15 @@ export default function AmountDetailsPage() {
         quantity: Math.max(1, Number(item.quantity) || 1),
       }));
   }, [orderData]);
+
+  const serviceItemsForStoreAssignment = useMemo(() => {
+    return (orderData?.services || [])
+      .filter((service: any) => Number(service?.service_id || service?.id || 0) > 0 || String(service?.service_name || service?.name || '').trim() !== '');
+  }, [orderData]);
+
+  const isServiceOnlyOrder = useMemo(() => {
+    return productItemsForStoreAssignment.length === 0 && serviceItemsForStoreAssignment.length > 0;
+  }, [productItemsForStoreAssignment.length, serviceItemsForStoreAssignment.length]);
 
   const selectedStoreAvailability = useMemo(() => {
     if (!selectedStoreId) return null;
@@ -635,10 +660,17 @@ export default function AmountDetailsPage() {
         // 1) Create order (sanitize payload)
         const requestedAssignmentMode = orderData.store_assignment_mode === 'manual' ? 'manual' : 'auto';
         const requestedStoreId = Number(orderData.store_id || selectedStoreId || 0) || null;
-        const manualStoreAssignmentPayload = !isEditingExistingOrder
+        const canUseManualStoreAssignment = !isEditingExistingOrder
           && requestedAssignmentMode === 'manual'
           && requestedStoreId
-          && selectedStoreAvailability?.can_fulfill_entire_order
+          && (
+            selectedStoreAvailability?.can_fulfill_entire_order
+            // Service-only social-commerce orders have no product stock to reserve,
+            // but Pathao still needs a pickup store. Keep the selected store on the
+            // order so service-only orders can be sent to Pathao later.
+            || isServiceOnlyOrder
+          );
+        const manualStoreAssignmentPayload = canUseManualStoreAssignment
           ? {
               store_id: Number(requestedStoreId),
               store_assignment_mode: 'manual',
@@ -649,6 +681,10 @@ export default function AmountDetailsPage() {
 
         const orderPayload: any = {
           order_type: orderData.order_type || 'social_commerce',
+          ...(orderData.is_preorder ? { is_preorder: true } : {}),
+          ...(String(orderData.preorder_notes || '').trim()
+            ? { preorder_notes: String(orderData.preorder_notes).trim() }
+            : {}),
           ...manualStoreAssignmentPayload,
           ...(orderData.salesman_id ? { salesman_id: Number(orderData.salesman_id) } : {}),
           customer: {
@@ -724,7 +760,7 @@ export default function AmountDetailsPage() {
             await defectIntegrationService.markDefectiveAsSold(defectItem.defectId, {
               order_id: createdOrder.id,
               selling_price: defectItem.price,
-              sale_notes: `Sold via Social Commerce - Order #${createdOrder.order_number}`,
+              sale_notes: `Sold via ${getFlowConfig(orderData).sourceLabel} - Order #${createdOrder.order_number}`,
               sold_at: new Date().toISOString(),
             });
           } catch (e) {
@@ -740,7 +776,7 @@ export default function AmountDetailsPage() {
           amount: remainingBeforeNewPayment,
           payment_type: 'full',
           auto_complete: true,
-          notes: paymentNotes || `Social Commerce full payment via ${selectedMethod?.name}`,
+          notes: paymentNotes || `${getFlowConfig(orderData).sourceLabel} full payment via ${selectedMethod?.name}`,
           payment_data: {},
         };
 
@@ -884,9 +920,13 @@ export default function AmountDetailsPage() {
               : `Order ${createdOrder.order_number} ${actionWord}. Cash on delivery ৳${codAmount.toFixed(2)}.`;
 
       displayToast(msg, 'success');
+      const flow = getFlowConfig(orderData);
       sessionStorage.removeItem('pendingOrder');
-      sessionStorage.removeItem('socialCommerceDraftV1');
-      if (isEditMode) sessionStorage.removeItem(SC_EDIT_CONTEXT_KEY);
+      sessionStorage.removeItem(flow.draftKey);
+      // Clean up legacy/static keys too so stale drafts cannot rehydrate the next order.
+      sessionStorage.removeItem(SC_DRAFT_STORAGE_KEY);
+      sessionStorage.removeItem(PREORDER_DRAFT_STORAGE_KEY);
+      if (isEditMode) sessionStorage.removeItem(flow.editContextKey);
 
       setTimeout(() => {
         window.location.href = '/orders';

@@ -11,6 +11,9 @@ interface ExchangeProductModalProps {
 }
 
 export default function ExchangeProductModal({ order, onClose, onExchange }: ExchangeProductModalProps) {
+  const normalizedOriginalOrderType = String(order?.order_type || order?.orderType || '').toLowerCase();
+  const originalOrderIsOnline = ['social_commerce', 'ecommerce'].includes(normalizedOriginalOrderType);
+
   const [removedItems, setRemovedItems] = useState<any[]>([]);
   const [replacementItems, setReplacementItems] = useState<any[]>([]);
   
@@ -20,7 +23,8 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   const [error, setError] = useState<string | null>(null);
   const [allowPartialRefunds, setAllowPartialRefunds] = useState(false);
   const [scanningMode, setScanningMode] = useState<'return' | 'replacement'>('return');
-  const [isOnlineExchange, setIsOnlineExchange] = useState(false);
+  const [isOnlineExchange, setIsOnlineExchange] = useState(originalOrderIsOnline);
+  const [deferReturnReceipt, setDeferReturnReceipt] = useState(false);
 
   const returnInputRef = useRef<HTMLInputElement>(null);
   const replacementInputRef = useRef<HTMLInputElement>(null);
@@ -52,7 +56,8 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     productReturnService.getPartialRefundSetting()
       .then((res: any) => setAllowPartialRefunds(Boolean(res?.data?.enabled)))
       .catch(() => setAllowPartialRefunds(false));
-    if (returnInputRef.current) returnInputRef.current.focus();
+    if (!deferReturnReceipt && returnInputRef.current) returnInputRef.current.focus();
+    if (deferReturnReceipt && replacementInputRef.current) replacementInputRef.current.focus();
   }, []);
 
   const fetchStores = async () => {
@@ -260,6 +265,36 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     return true;
   };
 
+  const addPendingReturnItem = (orderItem: any) => {
+    const currentSelected = removedItems
+      .filter(item => sameId(item.order_item_id, orderItem.id))
+      .reduce((sum, item) => sum + Number(item.quantity || 1), 0);
+    const maxQty = Math.max(1, Number(orderItem.quantity || 1));
+
+    if (currentSelected >= maxQty) {
+      setError('All units of this item are already selected for pending return');
+      return false;
+    }
+
+    const pendingItem = buildReturnItem(orderItem, {
+      code: 'Pending courier return — scan later',
+      id: undefined,
+    });
+
+    setError(null);
+    setRemovedItems(prev => [...prev, {
+      ...pendingItem,
+      barcode: 'Pending courier return — scan later',
+      product_barcode_id: undefined,
+      barcode_id: undefined,
+      return_receipt_pending: true,
+    }]);
+    window.setTimeout(() => replacementInputRef.current?.focus(), 0);
+    return true;
+  };
+
+  const selectablePendingReturnItems = (order.items || []).filter((item: any) => !String(item?.item_type || item?.type || '').toLowerCase().includes('service'));
+
   const selectableReturnBarcodes = (order.items || []).flatMap((item: any) => {
     const barcodes = collectItemBarcodes(item);
     if (barcodes.length === 0) {
@@ -376,6 +411,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
   };
 
   useEffect(() => {
+    if (deferReturnReceipt) return;
     const code = barcodeInput.trim();
     if (code.length < 6) return;
 
@@ -447,7 +483,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
     }
 
     if (removedItems.length === 0) {
-      setError('Please scan at least one item to return');
+      setError(deferReturnReceipt ? 'Please select at least one original product that will come back later' : 'Please scan at least one item to return');
       return;
     }
 
@@ -485,7 +521,9 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
           total: totalPaid
         },
         isOnlineExchange,
-        order_type: isOnlineExchange ? 'social_commerce' : 'counter',
+        defer_return_receipt: deferReturnReceipt,
+        pending_return_receipt: deferReturnReceipt,
+        order_type: isOnlineExchange ? 'social_commerce' : (originalOrderIsOnline ? normalizedOriginalOrderType : 'counter'),
         intended_courier: isOnlineExchange ? 'pathao' : undefined,
         shipping_address: order.shipping_address || order.customer?.shipping_address || undefined
       });
@@ -563,6 +601,18 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                     <span className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 mt-1">Creates the replacement as an online exchange order with Pathao intent instead of normal counter exchange.</span>
                   </span>
                 </label>
+                <label className="mt-3 flex items-start gap-3 p-3 rounded-xl bg-white dark:bg-gray-800 border border-amber-100 dark:border-amber-900/40 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deferReturnReceipt}
+                    onChange={(e) => setDeferReturnReceipt(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <span>
+                    <span className="block text-xs font-black uppercase tracking-widest text-gray-900 dark:text-white">Receive original item later</span>
+                    <span className="block text-[10px] font-bold text-gray-500 dark:text-gray-400 mt-1">Use this for courier exchange: send replacement now, then scan the old item after Pathao/courier brings it back.</span>
+                  </span>
+                </label>
               </div>
 
               {/* Return Section */}
@@ -580,54 +630,86 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                   </span>
                 </div>
 
-                <form onSubmit={handleReturnScan} className="relative mb-6">
-                  <div className="absolute left-4 top-1/2 -translate-y-1/2 text-red-400">
-                    <Barcode className="w-5 h-5" />
-                  </div>
-                  <input
-                    ref={returnInputRef}
-                    type="text"
-                    placeholder="SCAN BARCODE TO RETURN..."
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    onFocus={() => setScanningMode('return')}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleReturnScan();
-                      }
-                    }}
-                    className="w-full pl-12 pr-4 py-4 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-red-500 outline-none transition-all text-sm font-bold placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
-                  />
-                  {scanningMode === 'return' && (
-                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-                      <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Active</span>
-                    </div>
-                  )}
-                </form>
+                {!deferReturnReceipt ? (
+                  <>
+                    <form onSubmit={handleReturnScan} className="relative mb-6">
+                      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-red-400">
+                        <Barcode className="w-5 h-5" />
+                      </div>
+                      <input
+                        ref={returnInputRef}
+                        type="text"
+                        placeholder="SCAN BARCODE TO RETURN..."
+                        value={barcodeInput}
+                        onChange={(e) => setBarcodeInput(e.target.value)}
+                        onFocus={() => setScanningMode('return')}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleReturnScan();
+                          }
+                        }}
+                        className="w-full pl-12 pr-4 py-4 bg-white dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-2xl focus:border-red-500 outline-none transition-all text-sm font-bold placeholder:text-gray-300 dark:placeholder:text-gray-600 uppercase tracking-widest"
+                      />
+                      {scanningMode === 'return' && (
+                        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                          <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                          <span className="text-[10px] font-black text-red-500 uppercase tracking-widest">Active</span>
+                        </div>
+                      )}
+                    </form>
 
-                {selectableReturnBarcodes.length > 0 && (
-                  <div className="mb-5 p-3 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800">
-                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Selectable sold barcodes from this order</p>
-                    <div className="flex flex-wrap gap-2">
-                      {selectableReturnBarcodes.map(({ orderItem, matchedBarcode }: any, idx: number) => {
-                        const selected = removedItems.some(item =>
-                          normalizeBarcode(item.barcode) === normalizeBarcode(matchedBarcode.code) || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
-                        );
+                    {selectableReturnBarcodes.length > 0 && (
+                      <div className="mb-5 p-3 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">Selectable sold barcodes from this order</p>
+                        <div className="flex flex-wrap gap-2">
+                          {selectableReturnBarcodes.map(({ orderItem, matchedBarcode }: any, idx: number) => {
+                            const selected = removedItems.some(item =>
+                              normalizeBarcode(item.barcode) === normalizeBarcode(matchedBarcode.code) || (matchedBarcode.id && sameId(item.product_barcode_id || item.barcode_id, matchedBarcode.id))
+                            );
+                            return (
+                              <button
+                                key={`${matchedBarcode.code}-${idx}`}
+                                type="button"
+                                disabled={selected}
+                                onClick={() => addReturnItem(orderItem, matchedBarcode)}
+                                className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${selected
+                                  ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
+                                  : 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-300 border-red-100 dark:border-red-900/50 hover:bg-red-100 dark:hover:bg-red-900/20'
+                                }`}
+                                title={orderItem.product_name || orderItem.product?.name || orderItem.name}
+                              >
+                                {matchedBarcode.code}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="mb-5 p-4 rounded-2xl bg-amber-50 dark:bg-amber-900/10 border border-amber-200 dark:border-amber-900/50">
+                    <p className="text-[10px] font-black text-amber-700 dark:text-amber-300 uppercase tracking-widest mb-3">Select original product now — barcode will be scanned when it returns</p>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {selectablePendingReturnItems.map((orderItem: any) => {
+                        const selectedQty = removedItems
+                          .filter(item => sameId(item.order_item_id, orderItem.id))
+                          .reduce((sum, item) => sum + Number(item.quantity || 1), 0);
+                        const maxQty = Math.max(1, Number(orderItem.quantity || 1));
+                        const exhausted = selectedQty >= maxQty;
                         return (
                           <button
-                            key={`${matchedBarcode.code}-${idx}`}
+                            key={orderItem.id}
                             type="button"
-                            disabled={selected}
-                            onClick={() => addReturnItem(orderItem, matchedBarcode)}
-                            className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase tracking-widest transition-all ${selected
+                            disabled={exhausted}
+                            onClick={() => addPendingReturnItem(orderItem)}
+                            className={`w-full px-3 py-3 rounded-xl border text-left transition-all ${exhausted
                               ? 'bg-gray-100 dark:bg-gray-800 text-gray-400 border-gray-200 dark:border-gray-700 cursor-not-allowed'
-                              : 'bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-300 border-red-100 dark:border-red-900/50 hover:bg-red-100 dark:hover:bg-red-900/20'
+                              : 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white border-amber-100 dark:border-amber-900/50 hover:bg-amber-100 dark:hover:bg-amber-900/20'
                             }`}
-                            title={orderItem.product_name || orderItem.product?.name || orderItem.name}
                           >
-                            {matchedBarcode.code}
+                            <span className="block text-xs font-black uppercase tracking-widest">{orderItem.product_name || orderItem.product?.name || orderItem.name}</span>
+                            <span className="block text-[10px] font-bold text-gray-500 mt-1">Selected {selectedQty}/{maxQty} • sold at ৳{Number(getItemSoldAtUnitPrice(orderItem) || 0).toLocaleString()}</span>
                           </button>
                         );
                       })}
@@ -672,7 +754,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                   {removedItems.length === 0 && (
                     <div className="text-center py-12 border-4 border-dotted border-gray-100 dark:border-gray-800 rounded-3xl">
                       <Barcode className="w-12 h-12 text-gray-200 dark:text-gray-800 mx-auto mb-4" />
-                      <p className="text-xs font-black text-gray-300 dark:text-gray-700 uppercase tracking-widest">Scan item barcode to begin return</p>
+                      <p className="text-xs font-black text-gray-300 dark:text-gray-700 uppercase tracking-widest">{deferReturnReceipt ? 'Select original product to mark return pending' : 'Scan item barcode to begin return'}</p>
                     </div>
                   )}
                 </div>
@@ -864,7 +946,7 @@ export default function ExchangeProductModal({ order, onClose, onExchange }: Exc
                     ) : (
                       <>
                         <ArrowRightLeft className="w-6 h-6" />
-                        SUBMIT EXCHANGE
+                        {deferReturnReceipt ? 'INITIATE EXCHANGE' : 'SUBMIT EXCHANGE'}
                       </>
                     )}
                   </button>

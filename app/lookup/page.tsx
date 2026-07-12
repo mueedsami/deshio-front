@@ -8,6 +8,7 @@ import CustomerTagManager from '@/components/customers/CustomerTagManager';
 
 import customerService, { Customer, CustomerOrder } from '@/services/customerService';
 import orderService from '@/services/orderService';
+import orderManagementService from '@/services/orderManagementService';
 import batchService, { Batch } from '@/services/batchService';
 import barcodeTrackingService from '@/services/barcodeTrackingService';
 import lookupService from '@/services/lookupService';
@@ -17,6 +18,7 @@ import storeService, { Store } from '@/services/storeService';
 import ReturnExchangeFromOrder from '@/components/lookup/ReturnExchangeFromOrder';
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import ReceivePendingExchangeReturnModal from '@/components/sales/ReceivePendingExchangeReturnModal';
 import OpenOrderLockRescueWidget, { readOpenOrderLockError } from '@/components/barcode/OpenOrderLockRescueWidget';
 import productReturnService, { type CreateReturnRequest } from '@/services/productReturnService';
 import refundService, { type CreateRefundRequest } from '@/services/refundService';
@@ -477,6 +479,11 @@ export default function LookupPage() {
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
   const [selectedOrderForAction, setSelectedOrderForAction] = useState<any | null>(null);
+  const [pendingExchangeReturnToReceive, setPendingExchangeReturnToReceive] = useState<any | null>(null);
+  const [serviceStoreModalOrder, setServiceStoreModalOrder] = useState<any | null>(null);
+  const [serviceStoreId, setServiceStoreId] = useState<string>('');
+  const [serviceStoreNotes, setServiceStoreNotes] = useState<string>('');
+  const [isAssigningServiceStore, setIsAssigningServiceStore] = useState(false);
 
   const [printStatus, setPrintStatus] = useState<{ loading: boolean; error: string | null; success: boolean }>({
     loading: false,
@@ -2058,6 +2065,12 @@ export default function LookupPage() {
             nagad: exchangeData.paymentRefund?.nagad || 0,
           }
         },
+        defer_return_receipt: Boolean(exchangeData.defer_return_receipt || exchangeData.pending_return_receipt),
+        pending_return_receipt: Boolean(exchangeData.defer_return_receipt || exchangeData.pending_return_receipt),
+        isOnlineExchange: Boolean(exchangeData.isOnlineExchange),
+        order_type: exchangeData.order_type,
+        intended_courier: exchangeData.intended_courier,
+        shipping_address: exchangeData.shipping_address,
         notes: `Exchange transaction via Lookup Page - Original Order: ${selectedOrderForAction.order_number}`,
       };
 
@@ -2083,6 +2096,67 @@ export default function LookupPage() {
       console.error('❌ Consolidated exchange processing failed:', error);
       const errorMessage = error.response?.data?.message || error.message || 'Failed to process exchange';
       alert(`Error: ${errorMessage}`);
+    }
+  };
+
+  const isServiceOnlyOrder = (order: any) => {
+    if (!order) return false;
+    const status = String(order.status || '').toLowerCase();
+    const productItems = Array.isArray(order.items) ? order.items : [];
+    const serviceItems = Array.isArray(order.services)
+      ? order.services
+      : Array.isArray(order.service_items)
+        ? order.service_items
+        : [];
+    return status === 'service_only' || (productItems.length === 0 && serviceItems.length > 0);
+  };
+
+  const openServiceOnlyStoreModal = (order: any) => {
+    setServiceStoreModalOrder(order);
+    const existingStoreId = order?.store?.id ?? order?.store_id ?? order?.storeId ?? '';
+    setServiceStoreId(existingStoreId ? String(existingStoreId) : '');
+    setServiceStoreNotes('');
+  };
+
+  const closeServiceOnlyStoreModal = () => {
+    if (isAssigningServiceStore) return;
+    setServiceStoreModalOrder(null);
+    setServiceStoreId('');
+    setServiceStoreNotes('');
+  };
+
+  const refreshCurrentLookup = () => {
+    if (activeTab === 'order' && orderNumber) {
+      handleSearchOrder();
+    } else if (activeTab === 'customer' && phoneNumber) {
+      handleSearchCustomer();
+    }
+  };
+
+  const saveServiceOnlyPickupStore = async () => {
+    if (!serviceStoreModalOrder) return;
+    const selectedStoreId = Number(serviceStoreId);
+    if (!selectedStoreId) {
+      alert('Please select a pickup store first.');
+      return;
+    }
+
+    setIsAssigningServiceStore(true);
+    try {
+      await orderManagementService.assignServiceOnlyPickupStore(serviceStoreModalOrder.id, {
+        store_id: selectedStoreId,
+        notes: serviceStoreNotes || undefined,
+      });
+      alert('✅ Pickup store assigned. You can now send this service-only order to Pathao.');
+      setServiceStoreModalOrder(null);
+      setServiceStoreId('');
+      setServiceStoreNotes('');
+      refreshCurrentLookup();
+    } catch (error: any) {
+      console.error('Assign service-only pickup store error:', error);
+      alert(`Failed to assign pickup store: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsAssigningServiceStore(false);
     }
   };
 
@@ -2916,6 +2990,8 @@ export default function LookupPage() {
                           order={singleOrder}
                           onInitiateReturn={handleReturnInitiate}
                           onInitiateExchange={handleExchangeInitiate}
+                          onReceivePendingExchangeReturn={setPendingExchangeReturnToReceive}
+                          onAssignServiceOnlyStore={isServiceOnlyOrder(singleOrder) ? openServiceOnlyStoreModal : undefined}
                         />
                       </div>
                     </div>
@@ -3814,6 +3890,92 @@ export default function LookupPage() {
                 </div>
               </div>
             )}
+
+            {serviceStoreModalOrder && (
+              <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+                <div className="absolute inset-0 bg-black/60" onClick={closeServiceOnlyStoreModal} />
+                <div className="relative w-full max-w-md bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-xl shadow-2xl overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-bold text-black dark:text-white">Assign Service Pickup Store</p>
+                      <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                        {serviceStoreModalOrder.order_number || serviceStoreModalOrder.orderNumber} • service-only Pathao pickup
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isAssigningServiceStore}
+                      onClick={closeServiceOnlyStoreModal}
+                      className="text-xs px-2 py-1 rounded bg-gray-100 dark:bg-gray-900 text-gray-700 dark:text-gray-300 hover:opacity-90 disabled:opacity-50"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="p-5 space-y-3">
+                    <div className="rounded-lg border border-blue-100 dark:border-blue-900/40 bg-blue-50/60 dark:bg-blue-900/10 px-3 py-2">
+                      <p className="text-[11px] text-blue-800 dark:text-blue-300 leading-relaxed">
+                        This only assigns the pickup store for a service-only order. Product orders still use the normal assignment, packing and Pathao flow.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Pickup Store</label>
+                      <select
+                        value={serviceStoreId}
+                        onChange={(e) => setServiceStoreId(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                      >
+                        <option value="">Select pickup store</option>
+                        {stores.map((s: any) => {
+                          const pathaoId = s.pathao_store_id || s.pathao_key;
+                          return (
+                            <option key={s.id} value={s.id}>
+                              {s.name}{pathaoId ? ` • Pathao ${pathaoId}` : ' • no Pathao ID'}
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {serviceStoreId && !(() => {
+                        const s: any = stores.find((x: any) => String(x.id) === String(serviceStoreId));
+                        return !!(s?.pathao_store_id || s?.pathao_key);
+                      })() && (
+                        <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                          This store has no Pathao Store ID configured. Assigning is allowed, but Pathao will reject until Store settings are completed.
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-700 dark:text-gray-300 mb-1">Notes optional</label>
+                      <textarea
+                        value={serviceStoreNotes}
+                        onChange={(e) => setServiceStoreNotes(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                        placeholder="Example: assigned before Pathao dispatch"
+                      />
+                    </div>
+                  </div>
+                  <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-800 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={closeServiceOnlyStoreModal}
+                      disabled={isAssigningServiceStore}
+                      className="px-3 py-2 text-xs font-semibold border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveServiceOnlyPickupStore}
+                      disabled={isAssigningServiceStore || !serviceStoreId}
+                      className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50"
+                    >
+                      {isAssigningServiceStore ? 'Assigning...' : 'Assign Store'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Return/Exchange Modals */}
             {showReturnModal && selectedOrderForAction && (
               <ReturnProductModal
@@ -3827,6 +3989,21 @@ export default function LookupPage() {
                 order={selectedOrderForAction}
                 onClose={() => setShowExchangeModal(false)}
                 onExchange={handleExchangeSubmit}
+              />
+            )}
+
+            {pendingExchangeReturnToReceive && (
+              <ReceivePendingExchangeReturnModal
+                ret={pendingExchangeReturnToReceive}
+                onClose={() => setPendingExchangeReturnToReceive(null)}
+                onDone={() => {
+                  setPendingExchangeReturnToReceive(null);
+                  if (activeTab === 'order' && orderNumber) {
+                    handleSearchOrder();
+                  } else if (activeTab === 'customer' && phoneNumber) {
+                    handleSearchCustomer();
+                  }
+                }}
               />
             )}
           </main>

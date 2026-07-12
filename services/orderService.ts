@@ -150,6 +150,10 @@ export interface Order {
   shipping_address?: any;
   requested_product_id?: number;
   requested_product_reserved_quantity?: number;
+  invoice_printed?: boolean;
+  invoice_print_count?: number;
+  last_invoice_printed_at?: string | null;
+  last_invoice_printed_by?: number | null;
 }
 
 export interface AvailableCourier {
@@ -685,6 +689,45 @@ const orderService = {
         valid: false,
         message: error.response?.data?.message || 'Invalid barcode'
       };
+    }
+  },
+
+  /** Record that a social-commerce invoice was printed/opened. */
+  async logInvoicePrint(
+    orderId: number,
+    payload?: {
+      print_mode?: 'browser_preview' | 'qz_tray' | string;
+      printer_name?: string | null;
+      source_page?: string;
+      batch_id?: string | null;
+      notes?: string;
+    }
+  ): Promise<{
+    order_id: number;
+    order_number: string;
+    invoice_printed: boolean;
+    invoice_print_count: number;
+    last_invoice_printed_at: string;
+    last_invoice_printed_by?: number | null;
+  }> {
+    try {
+      const response = await axiosInstance.post(`/order-management/orders/${orderId}/log-invoice-print`, {
+        print_mode: payload?.print_mode || 'browser_preview',
+        printer_name: payload?.printer_name || null,
+        source_page: payload?.source_page || 'orders',
+        batch_id: payload?.batch_id || null,
+        notes: payload?.notes || null,
+      });
+      const result = response.data;
+
+      if (!result.success) {
+        throw new Error(result.message || 'Failed to record invoice print');
+      }
+
+      return result.data;
+    } catch (error: any) {
+      console.error('Log invoice print error:', error);
+      throw new Error(error.response?.data?.message || error.message || 'Failed to record invoice print');
     }
   },
 

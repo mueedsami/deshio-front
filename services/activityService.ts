@@ -28,12 +28,15 @@ export interface BusinessHistoryWhat {
   description: string;
   fields_changed?: string[];
   changes?: BusinessHistoryChanges;
+  action_label?: string;
+  human_changes?: Array<{ field?: string; from?: any; to?: any; sentence?: string; raw_field?: string }>;
   [key: string]: any;
 }
 
 export interface BusinessHistorySubject {
   id: number;
   type: string;
+  raw_type?: string;
   data?: any;
 }
 
@@ -112,7 +115,8 @@ function normalizeEntry(category: Exclude<BusinessHistoryCategory, 'all'>, e: an
     Number(e?.subject?.id ?? e?.subject_id ?? e?.subjectId ?? 0);
 
   const subjectType =
-    String(e?.subject?.type ?? e?.subject_type ?? e?.subjectType ?? '');
+    String(e?.subject?.type ?? e?.subject_label ?? e?.subject_type ?? e?.subjectType ?? '');
+  const rawSubjectType = String(e?.subject?.raw_type ?? e?.subject_type ?? e?.subjectType ?? '');
 
   // Build a consistent "subject.data"
   const subjectData =
@@ -139,16 +143,19 @@ function normalizeEntry(category: Exclude<BusinessHistoryCategory, 'all'>, e: an
 
     what: {
       // Backend has what.action but not what.description -> fallback to root description
-      action: String(whatObj?.action ?? ''),
-      description: String(whatObj?.description ?? rootDescription ?? ''),
+      action: String(whatObj?.action ?? e?.event ?? ''),
+      action_label: String(whatObj?.action_label ?? e?.human?.action ?? ''),
+      description: String(whatObj?.description ?? e?.human_description ?? e?.human?.description ?? rootDescription ?? ''),
       fields_changed: Array.isArray(whatObj?.fields_changed) ? whatObj.fields_changed : [],
       changes: whatObj?.changes && typeof whatObj.changes === 'object' ? whatObj.changes : {},
+      human_changes: Array.isArray(whatObj?.human_changes) ? whatObj.human_changes : (Array.isArray(e?.human?.changes) ? e.human.changes : []),
       ...(typeof whatObj === 'object' ? whatObj : {}),
     },
 
     subject: {
       id: subjectId,
       type: subjectType,
+      raw_type: rawSubjectType,
       data: subjectData,
     },
   };

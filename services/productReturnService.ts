@@ -42,7 +42,12 @@ export interface ProductReturn {
   refunds?: any[];
   exchange_credit_applied_amount?: number;
   remaining_refund_amount?: number;
+  exchange_linked_order_id?: number | null;
+  pending_exchange_return_receipt?: boolean;
+  pending_exchange_received_qty?: number;
+  pending_exchange_required_qty?: number;
 }
+
 
 export type ReturnStatus = 
   | 'pending'
@@ -187,6 +192,11 @@ class ProductReturnService {
 
   async updatePartialRefundSetting(enabled: boolean) {
     const response = await axiosInstance.put(`${this.basePath}/settings/partial-refund`, { enabled });
+    return response.data;
+  }
+
+  async receivePendingExchangeReturn(id: number, data: { barcodes: string[]; quality_check_passed?: boolean; quality_check_notes?: string }) {
+    const response = await axiosInstance.post(`/exchange/${id}/receive-return`, data);
     return response.data;
   }
 

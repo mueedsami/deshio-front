@@ -6,8 +6,8 @@ import Link from 'next/link';
 import { AlertCircle, Eye, Loader2, RefreshCw, Search, Plus, X } from 'lucide-react';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
-import { type Order as BackendOrder } from '@/services/orderService';
-import axiosInstance from '@/lib/axios';
+import type { Order as BackendOrder } from '@/services/orderService';
+import axios from '@/lib/axios';
 
 type AlertType = 'success' | 'error';
 
@@ -94,46 +94,6 @@ const formatDateTime = (v?: string | null) => {
   return d.toLocaleString();
 };
 
-const mapPreorderFromApi = (raw: any): BackendOrder => ({
-  ...raw,
-  id: raw.id ?? raw.order_id,
-  order_number: raw.order_number,
-  order_type: raw.order_type || 'preorder',
-  order_type_label: raw.order_type_label || 'Preorder',
-  status: raw.status,
-  payment_status: raw.payment_status,
-  payment_method: raw.payment_method,
-  customer: raw.customer || null,
-  store: raw.store || null,
-  is_preorder: true,
-  total_amount: raw.total_amount,
-  shipping_amount: raw.shipping_amount ?? '0',
-  subtotal: raw.subtotal ?? raw.total_amount ?? '0',
-  tax_amount: raw.tax_amount ?? '0',
-  discount_amount: raw.discount_amount ?? '0',
-  paid_amount: raw.paid_amount ?? '0',
-  outstanding_amount: raw.outstanding_amount ?? raw.total_amount ?? '0',
-  is_installment: Boolean(raw.is_installment),
-  created_at: raw.created_at,
-  order_date: raw.order_date,
-  notes: raw.notes ?? raw.preorder_notes ?? '',
-  preorder_notes: raw.preorder_notes ?? raw.notes ?? '',
-  items: Array.isArray(raw.items)
-    ? raw.items.map((it: any) => ({
-        ...it,
-        id: it.id ?? `${it.product_id}-${it.product_sku || it.sku || 'item'}`,
-        product_id: it.product_id,
-        product_name: it.product_name || it.name || 'Item',
-        name: it.product_name || it.name || 'Item',
-        product_sku: it.product_sku || it.sku || '-',
-        sku: it.product_sku || it.sku || '-',
-        quantity: it.quantity ?? it.quantity_ordered ?? 0,
-        quantity_ordered: it.quantity_ordered ?? it.quantity ?? 0,
-      }))
-    : [],
-} as BackendOrder);
-
-
 export default function PreordersPage() {
   const { darkMode, setDarkMode } = useTheme();
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -154,24 +114,30 @@ export default function PreordersPage() {
     setLoading(true);
     setError(null);
     try {
-      // Use the dedicated preorder endpoint. The old page fetched the general
-      // orders list and then filtered the first page client-side, so preorder
-      // rows could disappear whenever recent normal orders filled that page.
-      const res = await axiosInstance.get('/pre-orders', {
-        params: {
-          per_page: 500,
-          page: 1,
-          search: query || undefined,
-          status: status || undefined,
-          payment_status: paymentStatus || undefined,
-        },
-      });
+      // Use the dedicated preorder endpoint. The previous implementation fetched only
+      // the newest 200 generic orders and filtered them in the browser, which caused
+      // valid preorders to disappear as normal order volume increased.
+      const perPage = 500;
+      let page = 1;
+      let lastPage = 1;
+      const allOrders: BackendOrder[] = [];
 
-      const rawOrders = res?.data?.data?.orders || res?.data?.orders || [];
-      const data = Array.isArray(rawOrders) ? rawOrders.map(mapPreorderFromApi) : [];
-      setOrders(data);
+      do {
+        const response = await axios.get('/pre-orders', {
+          params: { per_page: perPage, page },
+        });
+        const payload = response?.data?.data;
+        const data = Array.isArray(payload?.orders) ? payload.orders : [];
+        allOrders.push(...(data as BackendOrder[]));
+
+        const pagination = payload?.pagination || {};
+        lastPage = Number(pagination.last_page || page) || page;
+        page += 1;
+      } while (page <= lastPage && page <= 50);
+
+      setOrders(allOrders);
     } catch (e: any) {
-      const msg = e?.response?.data?.message || e?.message || 'Failed to load preorders';
+      const msg = e?.message || 'Failed to load preorders';
       setError(msg);
       setAlert({ type: 'error', message: msg });
     } finally {
@@ -446,13 +412,8 @@ export default function PreordersPage() {
                       <div>
                         <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{it.product_name || it.name || 'Item'}</div>
                         <div className="text-xs text-gray-600 dark:text-gray-300">SKU: {it.product_sku || it.sku || '-'}</div>
-                        {'available_stock' in it ? (
-                          <div className="text-xs text-gray-600 dark:text-gray-300">
-                            Stock now: {it.available_stock ?? 0} {it.has_sufficient_stock ? '• Ready' : '• Awaiting stock'}
-                          </div>
-                        ) : null}
                       </div>
-                      <div className="text-sm text-gray-800 dark:text-gray-100">Qty: {it.quantity ?? it.quantity_ordered}</div>
+                      <div className="text-sm text-gray-800 dark:text-gray-100">Qty: {it.quantity}</div>
                     </div>
                   ))}
                 </div>

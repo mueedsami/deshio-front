@@ -19,6 +19,8 @@ import employeeService from '@/services/employeeService';
 // Helpers
 // -----------------------------
 
+const PATHAO_ADDRESS_LIMIT = 220;
+
 interface DefectItem {
   id: string;
   barcode: string;
@@ -2199,6 +2201,30 @@ export default function SocialCommercePage() {
 
   const subtotal = cart.reduce((sum, item) => sum + item.amount, 0);
 
+  const getPathaoRecipientAddressPreview = () => {
+    if (isInternational) return '';
+
+    const cityObj = usePathaoAutoLocation
+      ? undefined
+      : pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+    const zoneObj = usePathaoAutoLocation
+      ? undefined
+      : pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+    const areaObj = usePathaoAutoLocation
+      ? undefined
+      : pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+
+    const parts = usePathaoAutoLocation
+      ? [streetAddress, 'Dhaka', postalCode, 'Bangladesh']
+      : [streetAddress, areaObj?.area_name, zoneObj?.zone_name, cityObj?.city_name || 'Dhaka', postalCode, 'Bangladesh'];
+
+    return parts.map((part) => String(part || '').trim()).filter(Boolean).join(', ');
+  };
+
+  const pathaoRecipientAddressPreview = getPathaoRecipientAddressPreview();
+  const pathaoRecipientAddressLength = pathaoRecipientAddressPreview.length;
+  const isPathaoAddressTooLong = !isInternational && pathaoRecipientAddressLength > PATHAO_ADDRESS_LIMIT;
+
   const handleConfirmOrder = async () => {
     const rawPhone = userPhone ? userPhone.trim() : '';
     let cleanPhone = rawPhone;
@@ -2280,6 +2306,11 @@ export default function SocialCommercePage() {
       // Domestic
       if (!streetAddress) {
         alert('Please enter a full address (e.g., House/Road/Sector, Uttara, Dhaka)');
+        return;
+      }
+
+      if (isPathaoAddressTooLong) {
+        alert(`Pathao accepts maximum ${PATHAO_ADDRESS_LIMIT} characters for recipient address. Current address is ${pathaoRecipientAddressLength} characters. Please shorten it before continuing.`);
         return;
       }
 
@@ -2401,13 +2432,19 @@ export default function SocialCommercePage() {
         }
       }
 
+      const cartProductItems = cart.filter((item) => !item.isService);
+      const cartServiceItems = cart.filter((item) => item.isService);
+      const isServiceOnlyCart = cartProductItems.length === 0 && cartServiceItems.length > 0;
+      const shouldKeepSelectedStoreForServiceOnly = !effectiveEditOrderId && isServiceOnlyCart && !!selectedStore;
+      const effectiveStoreAssignmentMode = shouldKeepSelectedStoreForServiceOnly ? 'manual' : storeAssignmentMode;
+
       const orderData = {
         order_type: 'social_commerce',
         ...(!effectiveEditOrderId
           ? {
-              store_assignment_mode: storeAssignmentMode,
-              ...(storeAssignmentMode === 'manual' && selectedStore ? { store_id: Number(selectedStore) } : {}),
-              ...(storeAssignmentMode === 'manual' && selectedStoreName ? { selected_store_name: selectedStoreName } : {}),
+              store_assignment_mode: effectiveStoreAssignmentMode,
+              ...((effectiveStoreAssignmentMode === 'manual' || shouldKeepSelectedStoreForServiceOnly) && selectedStore ? { store_id: Number(selectedStore) } : {}),
+              ...((effectiveStoreAssignmentMode === 'manual' || shouldKeepSelectedStoreForServiceOnly) && selectedStoreName ? { selected_store_name: selectedStoreName } : {}),
             }
           : {}),
         ...(effectiveEditOrderId ? { editOrderId: effectiveEditOrderId } : {}),
@@ -2422,8 +2459,7 @@ export default function SocialCommercePage() {
         },
         shipping_address,
         // ✅ Separate products and services
-        items: cart
-          .filter((item) => !item.isService)
+        items: cartProductItems
           .map((item) => ({
             ...(item.id ? { id: item.id } : {}),
             product_id: item.product_id,
@@ -2440,8 +2476,7 @@ export default function SocialCommercePage() {
               : {}),
           })),
         // ✅ NEW: Add services array
-        services: cart
-          .filter((item) => item.isService)
+        services: cartServiceItems
           .map((item) => ({
             service_id: item.serviceId,
             service_name: item.productName,
@@ -2860,17 +2895,29 @@ export default function SocialCommercePage() {
                             className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
                           />
                         ) : (
-                          <textarea
-                            placeholder={
-                              usePathaoAutoLocation
-                                ? 'House 71, Road 15, Sector 11, Uttara, Dhaka'
-                                : 'House 12, Road 5, etc.'
-                            }
-                            value={streetAddress}
-                            onChange={(e) => setStreetAddress(e.target.value)}
-                            rows={usePathaoAutoLocation ? 3 : 2}
-                            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400"
-                          />
+                          <>
+                            <textarea
+                              placeholder={
+                                usePathaoAutoLocation
+                                  ? 'House 71, Road 15, Sector 11, Uttara, Dhaka'
+                                  : 'House 12, Road 5, etc.'
+                              }
+                              value={streetAddress}
+                              onChange={(e) => setStreetAddress(e.target.value)}
+                              rows={usePathaoAutoLocation ? 3 : 2}
+                              className={`w-full px-3 py-2 text-sm border rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 ${isPathaoAddressTooLong ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600'}`}
+                            />
+                            <div className="mt-1 flex items-start justify-between gap-2 text-[11px]">
+                              <span className={isPathaoAddressTooLong ? 'font-semibold text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'}>
+                                Pathao address: {pathaoRecipientAddressLength}/{PATHAO_ADDRESS_LIMIT} characters
+                              </span>
+                              {isPathaoAddressTooLong && (
+                                <span className="max-w-[260px] text-right font-medium text-red-600 dark:text-red-400">
+                                  Warning: Pathao will reject addresses longer than 220 characters. Please shorten it.
+                                </span>
+                              )}
+                            </div>
+                          </>
                         )}
                       </div>
 

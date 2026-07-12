@@ -32,6 +32,7 @@ import {
   RotateCcw,
   FileSpreadsheet,
   AlertCircle,
+  Barcode,
 } from 'lucide-react';
 
 import orderService, { type Order as BackendOrder } from '@/services/orderService';
@@ -50,6 +51,7 @@ import storeService, { type Store } from '@/services/storeService';
 
 import ReturnProductModal from '@/components/sales/ReturnProductModal';
 import ExchangeProductModal from '@/components/sales/ExchangeProductModal';
+import ReceivePendingExchangeReturnModal from '@/components/sales/ReceivePendingExchangeReturnModal';
 import ActivityLogPanel from '@/components/activity/ActivityLogPanel';
 import productReturnService, { type CreateReturnRequest } from '@/services/productReturnService';
 import refundService, { type CreateRefundRequest } from '@/services/refundService';
@@ -120,6 +122,11 @@ interface Order {
 
   // Intended courier marker
   intendedCourier?: string | null;
+  invoicePrinted?: boolean;
+  invoicePrintCount?: number;
+  lastInvoicePrintedAt?: string | null;
+  hasActiveReturn?: boolean;
+  activeReturn?: any;
 
   // Installments / EMI
   isInstallment?: boolean;
@@ -189,13 +196,15 @@ type ExchangeModalOrderItem = {
 type ExchangeModalOrder = {
   id: number;
   order_number: string;
-  customer?: { id: number; name: string; phone: string };
+  order_type?: string;
+  customer?: { id: number; name: string; phone: string; shipping_address?: any };
   store: { id: number; name: string };
   items: ExchangeModalOrderItem[];
   subtotal_amount: string;
   tax_amount: string;
   total_amount: string;
   paid_amount: string;
+  shipping_address?: any;
 };
 
 const toReturnModalOrder = (o: BackendOrder): ReturnModalOrder => ({
@@ -224,7 +233,8 @@ const toReturnModalOrder = (o: BackendOrder): ReturnModalOrder => ({
 const toExchangeModalOrder = (o: BackendOrder): ExchangeModalOrder => ({
   id: o.id,
   order_number: o.order_number,
-  customer: o.customer ? { id: o.customer.id, name: o.customer.name, phone: o.customer.phone } : undefined,
+  order_type: (o as any).order_type,
+  customer: o.customer ? { id: o.customer.id, name: o.customer.name, phone: o.customer.phone, shipping_address: (o as any).shipping_address } : undefined,
   store: { id: o.store?.id ?? 0, name: o.store?.name ?? '' },
   items: (o.items ?? []).map((it) => ({
     id: it.id,
@@ -246,6 +256,7 @@ const toExchangeModalOrder = (o: BackendOrder): ExchangeModalOrder => ({
   tax_amount: o.tax_amount ?? '0',
   total_amount: o.total_amount ?? '0',
   paid_amount: o.paid_amount ?? '0',
+  shipping_address: (o as any).shipping_address ?? null,
 });
 
 const normalize = (v: any) => String(v ?? '').trim().toLowerCase();
@@ -370,6 +381,14 @@ export default function OrdersDashboard() {
   const [courierModalOrder, setCourierModalOrder] = useState<Order | null>(null);
   const [courierModalValue, setCourierModalValue] = useState<string>('');
   const [isSavingCourier, setIsSavingCourier] = useState(false);
+
+  // Service-only orders do not go through barcode packing, but Pathao still
+  // needs a pickup store. This modal only assigns that store; it does not touch
+  // the existing product-order Pathao/packing workflow.
+  const [serviceStoreModalOrder, setServiceStoreModalOrder] = useState<Order | null>(null);
+  const [serviceStoreId, setServiceStoreId] = useState<string>('');
+  const [serviceStoreNotes, setServiceStoreNotes] = useState<string>('');
+  const [isAssigningServiceStore, setIsAssigningServiceStore] = useState(false);
 
   // ✅ Pagination states
   const [page, setPage] = useState(1);
@@ -496,6 +515,7 @@ export default function OrdersDashboard() {
   const [showMoreFilters, setShowMoreFilters] = useState(false);
 
   // 🔁 Return / Exchange
+  const [pendingExchangeReturnToReceive, setPendingExchangeReturnToReceive] = useState<any | null>(null);
   const [selectedOrderForAction, setSelectedOrderForAction] = useState<BackendOrder | null>(null);
   const [showReturnModal, setShowReturnModal] = useState(false);
   const [showExchangeModal, setShowExchangeModal] = useState(false);
@@ -646,10 +666,10 @@ export default function OrdersDashboard() {
   // ✅ Single action loading (per-order)
   const [singleActionLoading, setSingleActionLoading] = useState<{
     orderId: number;
-    action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed';
+    action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed' | 'assign-service-store';
   } | null>(null);
 
-  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed') =>
+  const isSingleLoading = (orderId: number, action: 'print' | 'pathao' | 'revert' | 'deliver' | 'pending-assignment' | 'reopen-confirmed' | 'assign-service-store') =>
     singleActionLoading?.orderId === orderId && singleActionLoading?.action === action;
 
   useEffect(() => {
@@ -693,6 +713,7 @@ export default function OrdersDashboard() {
 
   const parseMoney = (val: any) => Number(String(val ?? '0').replace(/[^0-9.-]/g, ''));
   const cleanText = (val: any) => (val == null ? '' : String(val)).trim();
+  const PATHAO_ADDRESS_LIMIT = 220;
 
   const normalizeShippingObject = (shipping: any): any => {
     if (!shipping || typeof shipping !== 'object') return shipping;
@@ -757,6 +778,22 @@ export default function OrdersDashboard() {
     if (typeof s.full_address === 'string') return s.full_address;
 
     return '';
+  };
+
+  const formatPathaoRecipientAddress = (shipping: any): string => {
+    if (!shipping) return '';
+    if (typeof shipping === 'string') return shipping.trim();
+    const s: any = normalizeShippingObject(shipping) || {};
+    const parts = [
+      s.address_line1 || s.address_line_1 || s.street || (typeof s.address === 'string' ? s.address : ''),
+      s.address_line2 || s.address_line_2,
+      s.landmark,
+      s.area || s.thana || s.upazila,
+      s.city || s.district,
+      s.postal_code || s.postalCode || s.zip,
+      s.country,
+    ];
+    return parts.map((part) => String(part || '').trim()).filter(Boolean).join(', ');
   };
 
 
@@ -1091,6 +1128,11 @@ export default function OrdersDashboard() {
       paymentStatusLabel: statusLabel(pStatusRaw || 'pending'),
 
       intendedCourier: order.intended_courier ?? order.intendedCourier ?? null,
+      invoicePrinted: Boolean(order.invoice_printed || order.invoicePrinted),
+      invoicePrintCount: Number(order.invoice_print_count ?? order.invoicePrintCount ?? 0) || 0,
+      lastInvoicePrintedAt: order.last_invoice_printed_at ?? order.lastInvoicePrintedAt ?? null,
+      hasActiveReturn: Boolean(order.has_active_return || order.hasActiveReturn || order.active_return || order.activeReturn),
+      activeReturn: order.active_return ?? order.activeReturn ?? null,
 
       isInstallment: !!(
         order.is_installment === true ||
@@ -1837,7 +1879,7 @@ export default function OrdersDashboard() {
 
   const canReturnOrExchange = (statusRaw: any) => {
     const s = normalize(statusRaw);
-    return s === 'delivered' || s === 'completed';
+    return !['pending', 'pending_assignment', 'assigned_to_store', 'cancelled', 'canceled'].includes(s);
   };
 
   const openReturnModal = async (order: Order) => {
@@ -1847,7 +1889,7 @@ export default function OrdersDashboard() {
 
       if (!canReturnOrExchange(fullOrder.status)) {
         alert(
-          `Return is available only for delivered/completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
+          `Return is available only after the order has been confirmed/shipped/delivered.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
         );
         return;
       }
@@ -1867,7 +1909,7 @@ export default function OrdersDashboard() {
 
       if (!canReturnOrExchange(fullOrder.status)) {
         alert(
-          `Exchange is available only for delivered/completed orders.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
+          `Exchange is available only after the order has been confirmed/shipped/delivered.\n\nOrder: ${fullOrder.order_number}\nCurrent status: ${fullOrder.status}`
         );
         return;
       }
@@ -1964,12 +2006,25 @@ export default function OrdersDashboard() {
   };
 
   const handleExchangeSubmit = async (exchangeData: {
-    removedProducts: Array<{ order_item_id: number; quantity: number; product_barcode_id?: number }>;
+    removedProducts: Array<{
+      order_item_id: number;
+      product_id?: number;
+      product_batch_id?: number;
+      quantity: number;
+      unit_price?: number;
+      manual_sold_at_price?: number;
+      sold_at_unit_price?: number;
+      total_price?: number;
+      product_barcode_id?: number;
+      barcode_id?: number;
+    }>;
     replacementProducts: Array<{
       product_id: number;
       batch_id: number;
       quantity: number;
       unit_price: number;
+      total_price?: number;
+      discount_amount?: number;
       barcode?: string;
       barcode_id?: number;
     }>;
@@ -1982,105 +2037,86 @@ export default function OrdersDashboard() {
       total: number;
     };
     exchangeAtStoreId: number;
+    defer_return_receipt?: boolean;
+    pending_return_receipt?: boolean;
+    isOnlineExchange?: boolean;
+    order_type?: string;
+    intended_courier?: string;
+    shipping_address?: any;
   }) => {
     try {
       if (!selectedOrderForAction) return;
 
-      const returnRequest: CreateReturnRequest = {
+      const originalItems = Array.isArray((selectedOrderForAction as any).items) ? (selectedOrderForAction as any).items : [];
+      const payload = {
         order_id: selectedOrderForAction.id,
-        return_reason: 'other',
-        return_type: 'customer_return',
-        received_at_store_id: exchangeData.exchangeAtStoreId,
-        items: exchangeData.removedProducts.map((item) => ({
-          order_item_id: item.order_item_id,
-          quantity: item.quantity,
-          product_barcode_id: item.product_barcode_id,
-        })),
-        customer_notes: `Exchange transaction - Original Order: ${selectedOrderForAction.order_number}`,
-      };
-
-      const returnResponse = await productReturnService.create(returnRequest);
-      const returnId = returnResponse.data.id;
-      const returnNumber = returnResponse.data.return_number;
-
-      await productReturnService.update(returnId, {
-        quality_check_passed: true,
-        quality_check_notes: 'Exchange - Auto-approved via Orders dashboard',
-      });
-      await productReturnService.approve(returnId, { internal_notes: 'Exchange - Auto-approved via Orders dashboard' });
-      await productReturnService.process(returnId, { restore_inventory: true });
-      await productReturnService.complete(returnId);
-
-      const refundRequest: CreateRefundRequest = {
-        return_id: returnId,
-        refund_type: 'full',
-        refund_method: 'cash',
-        internal_notes: `Full refund for exchange - Original Order: ${selectedOrderForAction.order_number}`,
-      };
-
-      const refundResponse = await refundService.create(refundRequest);
-      const refundId = refundResponse.data.id;
-
-      await refundService.process(refundId);
-      await refundService.complete(refundId, { transaction_reference: `EXCHANGE-REFUND-${Date.now()}` });
-
-      const newOrderTotal = exchangeData.replacementProducts.reduce((sum, p) => sum + p.unit_price * p.quantity, 0);
-
-
-      // ✅ Avoid hardcoding payment_method_id (IDs can differ per environment)
-      let paymentMethodId = 1;
-      try {
-        const pmRes = await axios.get('/payment-methods/all');
-        const methods: any[] =
-          (pmRes as any)?.data?.data?.payment_methods ||
-          (pmRes as any)?.data?.data ||
-          (pmRes as any)?.data ||
-          [];
-
-        const normalized = (v: any) => String(v ?? '').toLowerCase().trim();
-        const cash =
-          methods.find((m) => normalized(m?.type) === 'cash') ||
-          methods.find((m) => normalized(m?.name).includes('cash')) ||
-          methods.find((m) => normalized(m?.name).includes('ক্যাশ')) ||
-          methods[0];
-
-        paymentMethodId = Number(cash?.id) || 1;
-      } catch (e) {
-        console.warn('Failed to load payment methods, falling back to id=1', e);
-      }
-
-      const newOrderData = {
-        order_type: selectedOrderForAction.order_type as 'social_commerce' | 'ecommerce',
-        store_id: exchangeData.exchangeAtStoreId,
-        customer_id: selectedOrderForAction.customer?.id,
-        items: exchangeData.replacementProducts.map((p) => ({
+        exchangeAtStoreId: exchangeData.exchangeAtStoreId,
+        customer_id: (selectedOrderForAction as any).customer?.id,
+        removedProducts: exchangeData.removedProducts.map((item: any) => {
+          const originalItem = originalItems.find((i: any) => Number(i.id) === Number(item.order_item_id));
+          const unitPrice = Number(item.manual_sold_at_price ?? item.unit_price ?? item.sold_at_unit_price ?? originalItem?.sold_at_unit_price ?? originalItem?.unit_price ?? 0);
+          const quantity = Number(item.quantity || 1);
+          return {
+            order_item_id: item.order_item_id,
+            product_id: item.product_id ?? originalItem?.product_id,
+            product_batch_id: item.product_batch_id || originalItem?.product_batch_id || originalItem?.batch_id,
+            quantity,
+            unit_price: unitPrice,
+            total_price: Number(item.total_price ?? unitPrice * quantity),
+            product_barcode_id: item.product_barcode_id || item.barcode_id,
+            barcode_id: item.product_barcode_id || item.barcode_id,
+            return_reason: 'other',
+            quality_check_passed: !Boolean(exchangeData.defer_return_receipt || exchangeData.pending_return_receipt),
+          };
+        }),
+        replacementProducts: exchangeData.replacementProducts.map((p: any) => ({
           product_id: p.product_id,
           batch_id: p.batch_id,
           quantity: p.quantity,
           unit_price: p.unit_price,
+          total_price: p.total_price,
+          discount_amount: p.discount_amount || 0,
           barcode: p.barcode,
+          barcode_id: p.barcode_id,
         })),
-        payment: {
-          payment_method_id: paymentMethodId,
-          amount: newOrderTotal,
-          payment_type: 'full' as const,
+        paymentRefund: {
+          type: exchangeData.paymentRefund?.type === 'payment' ? 'surplus' : (exchangeData.paymentRefund?.type === 'refund' ? 'refund' : 'even'),
+          amount: exchangeData.paymentRefund?.total || 0,
+          method: exchangeData.paymentRefund?.card > 0 ? 'card' :
+            (exchangeData.paymentRefund?.bkash > 0 ? 'bkash' :
+              (exchangeData.paymentRefund?.nagad > 0 ? 'nagad' : 'cash')),
+          details: {
+            cash: exchangeData.paymentRefund?.cash || 0,
+            card: exchangeData.paymentRefund?.card || 0,
+            bkash: exchangeData.paymentRefund?.bkash || 0,
+            nagad: exchangeData.paymentRefund?.nagad || 0,
+          },
         },
-        notes: `Exchange from order #${selectedOrderForAction.order_number} | Return: #${returnNumber}`,
+        defer_return_receipt: Boolean(exchangeData.defer_return_receipt || exchangeData.pending_return_receipt),
+        pending_return_receipt: Boolean(exchangeData.defer_return_receipt || exchangeData.pending_return_receipt),
+        isOnlineExchange: Boolean(exchangeData.isOnlineExchange),
+        order_type: exchangeData.order_type,
+        intended_courier: exchangeData.intended_courier,
+        shipping_address: exchangeData.shipping_address,
+        notes: `Exchange transaction via Orders dashboard - Original Order: ${(selectedOrderForAction as any).order_number}`,
       };
 
-      const newOrder = await orderService.create(newOrderData);
-      await orderService.complete(newOrder.id);
-
+      const response = await axios.post('/exchange/process', payload);
+      const data = (response as any).data?.data || (response as any).data || {};
       await loadOrders();
 
-      let msg = `✅ Exchange processed successfully!\n\n📦 Return: #${returnNumber}\n🛒 New Order: #${newOrder.order_number}`;
-      if (exchangeData.paymentRefund.type === 'payment') {
-        msg += `\n\n💳 Customer paid additional: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
-      } else if (exchangeData.paymentRefund.type === 'refund') {
-        msg += `\n\n💵 Give customer back: ৳${exchangeData.paymentRefund.total.toLocaleString()}`;
-      } else {
-        msg += `\n\n📊 Even exchange (no difference)`;
-      }
+      const pending = Boolean(payload.defer_return_receipt);
+      let msg = pending
+        ? `✅ Exchange initiated. Replacement order is ready for delivery and the old item is waiting for return scan.`
+        : `✅ Exchange processed successfully!`;
+      if (data?.return?.return_number) msg += `
+
+📦 Return: #${data.return.return_number}`;
+      if (data?.order?.order_number) msg += `
+🛒 Replacement Order: #${data.order.order_number}`;
+      if (pending) msg += `
+
+When the courier brings back the original product, open this order/lookup and click “Receive Returned Item”.`;
       alert(msg);
 
       setShowExchangeModal(false);
@@ -2167,6 +2203,30 @@ export default function OrdersDashboard() {
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300">
         <Package className="h-3 w-3" />
         Regular
+      </span>
+    );
+  };
+
+
+  const getInvoicePrintedBadge = (order: Order) => {
+    if (!isSocialOrder(order)) return null;
+
+    if (order.invoicePrinted) {
+      return (
+        <span
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300"
+          title={order.lastInvoicePrintedAt ? `Last invoice print: ${new Date(order.lastInvoicePrintedAt).toLocaleString()}` : 'Invoice print recorded'}
+        >
+          <CheckCircle className="h-3 w-3" />
+          Invoice printed{order.invoicePrintCount && order.invoicePrintCount > 1 ? ` ×${order.invoicePrintCount}` : ''}
+        </span>
+      );
+    }
+
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800">
+        <Printer className="h-3 w-3" />
+        Invoice not printed
       </span>
     );
   };
@@ -2358,7 +2418,7 @@ export default function OrdersDashboard() {
       return 'This order was already sent to Pathao, so it was skipped to avoid a duplicate parcel.';
     }
     if (lower.includes('not packed') || lower.includes('not fulfilled') || lower.includes('packed/fulfilled')) {
-      return 'This order is not packed yet. Pack it from the Online Order Packing page first, then retry.';
+      return 'This product order is not packed yet. Pack it from the Online Order Packing page first, then retry. Service-only orders can be sent without packing if they have an assigned pickup store.';
     }
     if (lower.includes('only social-commerce') || lower.includes('e-commerce')) {
       return 'Only social-commerce and e-commerce delivery orders can be sent to Pathao from this bulk action.';
@@ -2409,7 +2469,7 @@ export default function OrdersDashboard() {
       return;
     }
 
-    if (!confirm(`Send ${selectedOrders.size} selected order(s) to Pathao?\n\nOnly packed/fulfilled social-commerce and e-commerce orders will be queued. Backend will enforce Pathao's 20/minute limit by sending at 19 orders/minute, spaced out live.`)) return;
+    if (!confirm(`Send ${selectedOrders.size} selected order(s) to Pathao?\n\nPacked/fulfilled social-commerce/e-commerce orders and service-only orders with an assigned pickup store will be queued. Backend will enforce Pathao's 20/minute limit by sending at 19 orders/minute, spaced out live.`)) return;
 
     const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -2648,6 +2708,54 @@ export default function OrdersDashboard() {
     return t === 'social_commerce' || t === 'social' || lbl.includes('social');
   };
 
+
+  const markInvoicePrintedLocally = (
+    orderId: number,
+    result?: { invoice_print_count?: number; last_invoice_printed_at?: string | null }
+  ) => {
+    setOrders((prev) => prev.map((o) => {
+      if (o.id !== orderId) return o;
+      const nextCount = Number(result?.invoice_print_count ?? (o.invoicePrintCount || 0) + 1) || 1;
+      return {
+        ...o,
+        invoicePrinted: true,
+        invoicePrintCount: nextCount,
+        lastInvoicePrintedAt: result?.last_invoice_printed_at ?? new Date().toISOString(),
+      };
+    }));
+    setSelectedOrder((prev) => {
+      if (!prev || prev.id !== orderId) return prev;
+      const nextCount = Number(result?.invoice_print_count ?? (prev.invoicePrintCount || 0) + 1) || 1;
+      return {
+        ...prev,
+        invoicePrinted: true,
+        invoicePrintCount: nextCount,
+        lastInvoicePrintedAt: result?.last_invoice_printed_at ?? new Date().toISOString(),
+      };
+    });
+  };
+
+  const recordInvoicePrintActivity = async (
+    orderId: number,
+    mode: 'browser_preview' | 'qz_tray',
+    printerName?: string,
+    batchId?: string
+  ) => {
+    try {
+      const result = await orderService.logInvoicePrint(orderId, {
+        print_mode: mode,
+        printer_name: printerName || null,
+        source_page: 'orders',
+        batch_id: batchId || null,
+      });
+      markInvoicePrintedLocally(orderId, result);
+      return true;
+    } catch (error) {
+      console.warn('Invoice print opened, but activity log could not be saved:', error);
+      return false;
+    }
+  };
+
   // ✅ Bulk: Print social commerce invoices (A5)
   const handleBulkPrintInvoices = async () => {
     if (selectedOrders.size === 0) {
@@ -2680,6 +2788,7 @@ export default function OrdersDashboard() {
     setBulkPrintProgress({ show: true, current: 0, total: socialList.length, success: 0, failed: 0 });
 
     try {
+      const invoicePrintBatchId = `invoice-${Date.now()}`;
       const fullOrders: any[] = [];
 
       // fetch full orders one-by-one (keeps backend load safe)
@@ -2701,7 +2810,12 @@ export default function OrdersDashboard() {
       // If QZ is offline, open ONE bulk preview window (Print → Save as PDF).
       if (!status.connected) {
         await printBulkReceipts(fullOrders, undefined, { template: 'social_invoice', title: 'Social Invoices' });
-        alert('Opened invoice preview. Use Print → Save as PDF.');
+        let loggedCount = 0;
+        for (const fullOrder of fullOrders) {
+          const ok = await recordInvoicePrintActivity(Number(fullOrder?.id), 'browser_preview', undefined, invoicePrintBatchId);
+          if (ok) loggedCount++;
+        }
+        alert(`Opened invoice preview. Use Print → Save as PDF.\nActivity log saved for ${loggedCount}/${fullOrders.length} invoice(s).`);
         return;
       }
 
@@ -2715,6 +2829,7 @@ export default function OrdersDashboard() {
 
         try {
           await printReceipt(fullOrder as any, selectedPrinter, { template: 'social_invoice', title: 'Invoice' });
+          await recordInvoicePrintActivity(Number(fullOrder?.id), 'qz_tray', selectedPrinter, invoicePrintBatchId);
           successCount++;
           setBulkPrintProgress((prev) => ({ ...prev, success: successCount }));
         } catch {
@@ -2973,7 +3088,16 @@ export default function OrdersDashboard() {
         title: 'Invoice',
       });
 
-      alert('✅ Invoice ready (printed or opened in preview)!');
+      const logged = await recordInvoicePrintActivity(
+        order.id,
+        status.connected ? 'qz_tray' : 'browser_preview',
+        status.connected ? selectedPrinter : undefined
+      );
+
+      alert(logged
+        ? '✅ Invoice ready and activity log saved!'
+        : '✅ Invoice ready, but activity log could not be saved. Please refresh and check permissions.'
+      );
     } finally {
       setSingleActionLoading(null);
     }
@@ -3033,6 +3157,54 @@ export default function OrdersDashboard() {
       console.error('Move to pending_assignment error:', error);
       alert(`Failed to move order: ${error.message || 'Unknown error'}`);
     } finally {
+      setSingleActionLoading(null);
+    }
+  };
+
+  const isServiceOnlyOrder = (order?: Order | null) => {
+    if (!order) return false;
+    return order.status === 'service_only' || ((order.items?.length || 0) === 0 && (order.services?.length || 0) > 0);
+  };
+
+  const openServiceOnlyStoreModal = (order: Order) => {
+    setServiceStoreModalOrder(order);
+    setServiceStoreId(order.storeId ? String(order.storeId) : '');
+    setServiceStoreNotes('');
+    setActiveMenu(null);
+  };
+
+  const closeServiceOnlyStoreModal = () => {
+    if (isAssigningServiceStore) return;
+    setServiceStoreModalOrder(null);
+    setServiceStoreId('');
+    setServiceStoreNotes('');
+  };
+
+  const saveServiceOnlyPickupStore = async () => {
+    if (!serviceStoreModalOrder) return;
+    const selectedStoreId = Number(serviceStoreId);
+    if (!selectedStoreId) {
+      alert('Please select a pickup store first.');
+      return;
+    }
+
+    setIsAssigningServiceStore(true);
+    setSingleActionLoading({ orderId: serviceStoreModalOrder.id, action: 'assign-service-store' });
+    try {
+      await orderManagementService.assignServiceOnlyPickupStore(serviceStoreModalOrder.id, {
+        store_id: selectedStoreId,
+        notes: serviceStoreNotes || undefined,
+      });
+      alert('✅ Pickup store assigned. You can now send this service-only order to Pathao.');
+      setServiceStoreModalOrder(null);
+      setServiceStoreId('');
+      setServiceStoreNotes('');
+      await loadOrders();
+    } catch (error: any) {
+      console.error('Assign service-only pickup store error:', error);
+      alert(`Failed to assign pickup store: ${error.message || 'Unknown error'}`);
+    } finally {
+      setIsAssigningServiceStore(false);
       setSingleActionLoading(null);
     }
   };
@@ -3464,6 +3636,46 @@ export default function OrdersDashboard() {
     }
   };
 
+  const getEditableSocialPathaoAddressPreview = () => {
+    if (!editableOrder || normalize(editableOrder.orderType) !== 'social_commerce' || scIsInternational) return '';
+
+    const currentShipping: any =
+      editableOrder.shipping_address && typeof editableOrder.shipping_address === 'object'
+        ? { ...(normalizeShippingObject(editableOrder.shipping_address as any) || {}) }
+        : {};
+    const cityObj = pathaoCities.find((c) => String(c.city_id) === String(pathaoCityId));
+    const zoneObj = pathaoZones.find((z) => String(z.zone_id) === String(pathaoZoneId));
+    const areaObj = pathaoAreas.find((a) => String(a.area_id) === String(pathaoAreaId));
+
+    const previewShipping = scUsePathaoAutoLocation
+      ? {
+        ...currentShipping,
+        street: scStreetAddress,
+        address_line1: scStreetAddress,
+        address_line_1: scStreetAddress,
+        city: currentShipping.city || scCity || 'Dhaka',
+        postal_code: scPostalCode || undefined,
+        country: currentShipping.country || 'Bangladesh',
+      }
+      : {
+        ...currentShipping,
+        street: scStreetAddress,
+        address_line1: scStreetAddress,
+        address_line_1: scStreetAddress,
+        area: areaObj?.area_name || currentShipping.area || '',
+        zone: zoneObj?.zone_name || currentShipping.zone || '',
+        city: cityObj?.city_name || currentShipping.city || '',
+        postal_code: scPostalCode || undefined,
+        country: currentShipping.country || 'Bangladesh',
+      };
+
+    return formatPathaoRecipientAddress(previewShipping);
+  };
+
+  const editableSocialPathaoAddressPreview = getEditableSocialPathaoAddressPreview();
+  const editableSocialPathaoAddressLength = editableSocialPathaoAddressPreview.length;
+  const isEditableSocialPathaoAddressTooLong = editableSocialPathaoAddressLength > PATHAO_ADDRESS_LIMIT;
+
   const handleSaveOrder = async () => {
     if (!editableOrder) return;
 
@@ -3607,6 +3819,14 @@ export default function OrdersDashboard() {
         shipping_address.country = normalizedCountry;
       }
 
+      if (orderType === 'social_commerce' && !scIsInternational) {
+        const pathaoAddress = formatPathaoRecipientAddress(shipping_address);
+        if (pathaoAddress.length > PATHAO_ADDRESS_LIMIT) {
+          alert(`Pathao accepts maximum ${PATHAO_ADDRESS_LIMIT} characters for recipient address. Current address is ${pathaoAddress.length} characters. Please shorten it before saving.`);
+          return;
+        }
+      }
+
       const payloadBase: any = {
         customer_name: customerName,
         customer_phone: customerPhone,
@@ -3646,23 +3866,7 @@ export default function OrdersDashboard() {
           ? { ...payloadBase, shipping_address }
           : payloadBase;
 
-      let response: any;
-      try {
-        response = await axios.patch(`/orders/${editableOrder.id}`, payloadWithShipping);
-      } catch (error: any) {
-        // Fallback: if backend rejects shipping_address updates, retry without it
-        const backendData = error?.response?.data;
-        const txt = JSON.stringify(backendData || {}).toLowerCase();
-        const maybeShippingErr = txt.includes('shipping_address') || txt.includes('shipping address');
-
-        if (payloadWithShipping?.shipping_address && maybeShippingErr) {
-          response = await axios.patch(`/orders/${editableOrder.id}`, payloadBase);
-        } else {
-          throw error;
-        }
-      }
-
-
+      const response: any = await axios.patch(`/orders/${editableOrder.id}`, payloadWithShipping);
 
       if (response.data?.success) {
         const updated = transformOrder(response.data.data);
@@ -4361,6 +4565,7 @@ export default function OrdersDashboard() {
                                   {getOrderTypeBadge(order.orderType)}
                                   {getDeliveryBadge(order.orderNumber)}
                                   {viewMode === 'online' && getCourierBadge(order.intendedCourier)}
+                                  {getInvoicePrintedBadge(order)}
                                   {order.isInstallment && (
                                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
                                       EMI
@@ -4472,6 +4677,7 @@ export default function OrdersDashboard() {
                                   )}
                                   {getDeliveryBadge(order.orderNumber)}
                                   {viewMode === 'online' && getCourierBadge(order.intendedCourier)}
+                                  {getInvoicePrintedBadge(order)}
                                 </div>
                                 {pathaoLookupByOrderNumber[order.orderNumber]?.is_sent_via_pathao &&
                                   pathaoLookupByOrderNumber[order.orderNumber]?.pathao_consignment_id && (
@@ -4715,6 +4921,90 @@ export default function OrdersDashboard() {
         </div>
       )}
 
+      {/* Service-only Pickup Store Modal */}
+      {serviceStoreModalOrder && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-xl max-w-md w-full border border-gray-200 dark:border-gray-800">
+            <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-black dark:text-white">Assign Service Pickup Store</h3>
+                <p className="text-[10px] text-gray-500 dark:text-gray-400">
+                  {serviceStoreModalOrder.orderNumber} • service-only Pathao pickup
+                </p>
+              </div>
+              <button
+                onClick={closeServiceOnlyStoreModal}
+                disabled={isAssigningServiceStore}
+                className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
+              >
+                <XCircle className="h-4 w-4 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <div className="rounded-lg border border-blue-100 dark:border-blue-900/40 bg-blue-50/60 dark:bg-blue-900/10 px-3 py-2">
+                <p className="text-[11px] text-blue-800 dark:text-blue-300 leading-relaxed">
+                  This only assigns the pickup store for a service-only order. Product orders will still use the normal store assignment, packing, and Pathao flow.
+                </p>
+              </div>
+
+              <label className="block text-[11px] text-gray-700 dark:text-gray-300">Pickup Store</label>
+              <select
+                value={serviceStoreId}
+                onChange={(e) => setServiceStoreId(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+              >
+                <option value="">Select pickup store</option>
+                {stores.map((s: any) => {
+                  const pathaoId = s.pathao_store_id || s.pathao_key;
+                  return (
+                    <option key={s.id} value={s.id}>
+                      {s.name}{pathaoId ? ` • Pathao ${pathaoId}` : ' • no Pathao ID'}
+                    </option>
+                  );
+                })}
+              </select>
+
+              {serviceStoreId && !(() => {
+                const s: any = stores.find((x: any) => String(x.id) === String(serviceStoreId));
+                return !!(s?.pathao_store_id || s?.pathao_key);
+              })() && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  This store has no Pathao Store ID configured. You can assign it, but Pathao will still reject until Store settings are completed.
+                </p>
+              )}
+
+              <label className="block text-[11px] text-gray-700 dark:text-gray-300">Notes optional</label>
+              <textarea
+                value={serviceStoreNotes}
+                onChange={(e) => setServiceStoreNotes(e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-700 rounded bg-white dark:bg-gray-900 text-black dark:text-white focus:outline-none focus:ring-2 focus:ring-black dark:focus:ring-white"
+                placeholder="Example: assigned before Pathao dispatch"
+              />
+            </div>
+
+            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-800 flex items-center justify-end gap-2">
+              <button
+                onClick={closeServiceOnlyStoreModal}
+                disabled={isAssigningServiceStore}
+                className="px-3 py-2 text-xs font-semibold border border-gray-300 dark:border-gray-700 rounded hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors text-black dark:text-white disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveServiceOnlyPickupStore}
+                disabled={isAssigningServiceStore || !serviceStoreId}
+                className="px-3 py-2 text-xs font-semibold bg-black text-white dark:bg-white dark:text-black rounded hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                <Package className="h-4 w-4" />
+                {isAssigningServiceStore ? 'Assigning...' : 'Assign Store'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Click outside to close menu */}
       {activeMenu !== null && (
         <div
@@ -4821,6 +5111,25 @@ export default function OrdersDashboard() {
             );
           })()}
 
+          {viewMode === 'online' && (() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order || !isServiceOnlyOrder(order)) return null;
+
+            return (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openServiceOnlyStoreModal(order);
+                }}
+                disabled={isSingleLoading(order.id, 'assign-service-store')}
+                className="w-full px-4 py-3 text-left text-sm font-medium text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+              >
+                <Package className="h-5 w-5 flex-shrink-0" />
+                <span>{order.storeId ? 'Change Pickup Store' : 'Assign Pickup Store'}</span>
+              </button>
+            );
+          })()}
+
           {(() => {
             const order = filteredOrders.find((o) => o.id === activeMenu);
             if (!order || !order.isInstallment || (order.amounts?.due ?? 0) <= 0) return null;
@@ -4876,6 +5185,53 @@ export default function OrdersDashboard() {
                 <RotateCcw className="h-5 w-5 flex-shrink-0" />
                 <span>{isSingleLoading(order.id, 'pending-assignment') ? 'Moving...' : 'Move to Pending Assignment'}</span>
               </button>
+            );
+          })()}
+
+          {(() => {
+            const order = filteredOrders.find((o) => o.id === activeMenu);
+            if (!order || !canReturnOrExchange(order.status)) return null;
+            const pendingReturn = order.activeReturn;
+            const isPendingExchangeReturn = Boolean(pendingReturn?.pending_exchange_return_receipt || pendingReturn?.pendingExchangeReturnReceipt);
+
+            return (
+              <>
+                {isPendingExchangeReturn && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingExchangeReturnToReceive(pendingReturn);
+                      setActiveMenu(null);
+                    }}
+                    className="w-full px-4 py-3 text-left text-sm font-medium text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700"
+                  >
+                    <Barcode className="h-5 w-5 flex-shrink-0" />
+                    <span>Receive Returned Item</span>
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openReturnModal(order as any);
+                  }}
+                  disabled={Boolean(order.hasActiveReturn)}
+                  className="w-full px-4 py-3 text-left text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <RotateCcw className="h-5 w-5 flex-shrink-0" />
+                  <span>Initiate Return</span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openExchangeModal(order as any);
+                  }}
+                  disabled={Boolean(order.hasActiveReturn)}
+                  className="w-full px-4 py-3 text-left text-sm font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors flex items-center gap-3 border-b border-gray-100 dark:border-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ArrowLeftRight className="h-5 w-5 flex-shrink-0" />
+                  <span>Request Exchange</span>
+                </button>
+              </>
             );
           })()}
 
@@ -5621,11 +5977,21 @@ export default function OrdersDashboard() {
                               rows={scUsePathaoAutoLocation ? 3 : 2}
                               value={scStreetAddress}
                               onChange={(e) => setScStreetAddress(e.target.value)}
-                              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm"
+                              className={`w-full px-3 py-2 border rounded-lg bg-white dark:bg-gray-800 text-black dark:text-white text-sm ${isEditableSocialPathaoAddressTooLong ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : 'border-gray-300 dark:border-gray-600'}`}
                               placeholder={
                                 scUsePathaoAutoLocation ? 'House 71, Road 15, Sector 11, Uttara, Dhaka' : 'House 12, Road 5, etc.'
                               }
                             />
+                            <div className="mt-1 flex items-start justify-between gap-2 text-[11px]">
+                              <span className={isEditableSocialPathaoAddressTooLong ? 'font-semibold text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'}>
+                                Pathao address: {editableSocialPathaoAddressLength}/{PATHAO_ADDRESS_LIMIT} characters
+                              </span>
+                              {isEditableSocialPathaoAddressTooLong && (
+                                <span className="max-w-[260px] text-right font-medium text-red-600 dark:text-red-400">
+                                  Warning: Pathao will reject addresses longer than 220 characters. Please shorten it.
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       )}
@@ -6241,6 +6607,17 @@ export default function OrdersDashboard() {
             </div>
           </div>
         </div>
+      )}
+
+      {pendingExchangeReturnToReceive && (
+        <ReceivePendingExchangeReturnModal
+          ret={pendingExchangeReturnToReceive}
+          onClose={() => setPendingExchangeReturnToReceive(null)}
+          onDone={() => {
+            setPendingExchangeReturnToReceive(null);
+            loadOrders();
+          }}
+        />
       )}
 
       {/* Return Modal */}
